@@ -76,8 +76,14 @@ class MainActivity : AppCompatActivity() {
                 if (webView.canGoBack()) {
                     webView.goBack()
                 } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+                    webView.evaluateJavascript("window.__hasHistory()") { result ->
+                        if (result == "true") {
+                            webView.evaluateJavascript("window.history.back()") {}
+                        } else {
+                            isEnabled = false
+                            onBackPressedDispatcher.onBackPressed()
+                        }
+                    }
                 }
             }
         })

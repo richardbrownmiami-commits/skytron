@@ -6,6 +6,10 @@ import ErrorBoundary from './components/ErrorBoundary'
 import App from './App'
 import './index.css'
 
+window.__spaHistory = 0
+window.addEventListener('hashchange', () => { window.__spaHistory++ })
+window.__hasHistory = () => window.__spaHistory > 0
+
 window.onerror = (msg, url, line, col, err) => {
   if (msg && msg.includes && msg.includes("Java bridge method")) return true
   console.error('GLOBAL ERROR:', msg, err?.stack)

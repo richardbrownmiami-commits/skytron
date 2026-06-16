@@ -1,17 +1,24 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChat } from '../hooks/useChat'
+import { useBridge } from '../hooks/useBridge'
 import MessageBubble from '../components/Chat/MessageBubble'
 import StreamingMessage from '../components/Chat/StreamingMessage'
 import ChatInput from '../components/Chat/ChatInput'
 
 export default function ChatPage() {
   const { t } = useTranslation()
+  const bridge = useBridge()
   const {
     conversations, activeId, messages, isStreaming, streamingContent,
     error, selectConversation, deleteConversation, createConversation,
     sendMessage, stopStreaming, clearChat,
   } = useChat()
+
+  useEffect(() => {
+    bridge.keepAwake(isStreaming)
+    return () => bridge.keepAwake(false)
+  }, [isStreaming])
 
   const messagesEndRef = useRef(null)
   const [showSidebar, setShowSidebar] = useState(false)

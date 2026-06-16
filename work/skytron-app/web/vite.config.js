@@ -15,6 +15,6 @@ export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss(), fixFileProtocol()],
   build: {
-    target: 'es2015',
+    target: 'es2020',
   },
 })
