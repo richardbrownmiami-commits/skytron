@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.zip
+*.log
+.env
+*.local
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/.idea/
+android/app/src/main/assets/

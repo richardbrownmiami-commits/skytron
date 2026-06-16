@@ -1,0 +1,4 @@
+-keep class com.skytron.app.native.NativeBridge { *; }
+-keep class com.skytron.app.db.** { *; }
+-keep class com.skytron.app.worker.** { *; }
+-keepattributes *Annotation*

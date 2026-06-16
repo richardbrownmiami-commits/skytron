@@ -1,0 +1,44 @@
+# Secrets
+.credentials.json
+credentials.json
+*.credentials
+
+# Chrome profiles / test junk
+work/chrome-profile/
+work/chrome-test/
+work/chrome-test2/
+work/brain-req.json
+
+# Nested git repo (will be handled separately)
+work/skytron-app/.git/
+
+# Node
+node_modules/
+package-lock.json
+package.json
+
+# Other
+extracted/
+saraha-web-*.zip
+
+# Build artifacts (web)
+work/skytron-app/web/dist/
+work/skytron-app/web/node_modules/
+
+# Build artifacts (Android)
+work/skytron-app/app/build/
+work/skytron-app/app/src/main/assets/index.html
+work/skytron-app/.gradle/
+work/skytron-app/local.properties
+*.apk
+*.aab
+*.keystore
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+*.log

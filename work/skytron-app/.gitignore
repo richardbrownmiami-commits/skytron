@@ -1,0 +1,33 @@
+# Android
+*.iml
+.gradle
+/local.properties
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/src/main/assets/
+
+# IDE
+.idea/
+
+# Web (auto-generated)
+web/node_modules/
+web/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+app/build/
+
+# Logs
+*.txt
+
+# Archives
+*.zip
+
+# Credentials
+.credentials.json
