@@ -58,7 +58,6 @@ export default function BrainPage() {
   const phaseColor = PHASE_COLORS[currentPhase] || '#2E86AB'
   const e = emotions?.emotions || {}
   const energy = emotions?.energy || 0
-  const confidence = emotions?.confidence || 0
 
   useEffect(() => {
     const brainUrl = settings?.brainUrl || 'https://saraha-brain.richard-brown-miami.workers.dev'

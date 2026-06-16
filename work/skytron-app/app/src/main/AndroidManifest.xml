@@ -52,10 +52,6 @@
         </provider>
 
         <receiver
-            android:name=".worker.SyncReceiver"
-            android:exported="false" />
-
-        <receiver
             android:name=".worker.BootReceiver"
             android:exported="true">
             <intent-filter>

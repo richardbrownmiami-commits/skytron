@@ -16,7 +16,7 @@ export function useBrain() {
   const fetchAll = useCallback(async () => {
     try {
       const [e, p, a, s] = await Promise.all([
-        fetchBrainStatus(settings.brainUrl, settings.apiKey),
+        fetchBrainStatus(settings.brainUrl),
         fetchBrainPhase(settings.brainUrl),
         fetchBrainActivity(settings.brainUrl),
         fetchBrainStream(settings.brainUrl),

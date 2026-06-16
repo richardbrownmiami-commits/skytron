@@ -406,14 +406,11 @@ You have a brain worker at https://saraha-brain.richard-brown-miami.workers.dev.
     isStreaming,
     streamingContent,
     error,
-    setActiveId,
-    getConversation,
     createConversation,
     selectConversation,
     deleteConversation,
     sendMessage,
     stopStreaming,
     clearChat,
-    setMessages,
   }
 }

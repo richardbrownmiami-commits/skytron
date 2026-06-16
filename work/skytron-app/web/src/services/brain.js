@@ -1,4 +1,4 @@
-export async function fetchBrainStatus(brainUrl, apiKey) {
+export async function fetchBrainStatus(brainUrl) {
   const headers = { 'Content-Type': 'application/json' }
   const res = await fetch(`${brainUrl}/brain/emotions`, { headers }).catch(() => null)
   return res?.ok ? res.json() : null

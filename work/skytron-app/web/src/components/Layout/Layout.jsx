@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import StatusBar from './StatusBar'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'

@@ -29,15 +29,13 @@ function mount() {
   const root = document.getElementById('root')
   if (!root) { console.error('ROOT NOT FOUND'); return }
   try {
-    console.log('APP MOUNTING...')
     ReactDOM.createRoot(root).render(
       <ErrorBoundary>
         <HashRouter>
           <App />
-        </HashRouter>
-      </ErrorBoundary>
+      </HashRouter>
+    </ErrorBoundary>
     )
-    console.log('APP MOUNTED SUCCESSFULLY')
   } catch (e) {
     console.error('RENDER ERROR:', e.message)
   }

@@ -8,9 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.provider.MediaStore
-import android.provider.Settings
 import android.webkit.*
 import androidx.webkit.WebViewAssetLoader
 import android.util.Log
