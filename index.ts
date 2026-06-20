@@ -551,8 +551,8 @@ const toolDefinitions = {
       if (insertPos === -1) return "Could not find insertion point in source";
       let modified = currentContent.slice(0, insertPos) + toolBlock + "\n" + currentContent.slice(insertPos);
 
-      // 5. Add to AVAILABLE TOOLS list in HARDCODED_CORE
-      const promptInsert = "- " + input.name + ": " + input.description + "\n--- GitHub";
+      // 5. Add to AVAILABLE TOOLS list in HARDCODED_CORE (before --- GitHub section)
+      const promptInsert = "- " + input.name + ": " + input.description + "\n";
       const promptPos = modified.lastIndexOf("--- GitHub");
       if (promptPos !== -1) {
         modified = modified.slice(0, promptPos) + promptInsert + modified.slice(promptPos);
