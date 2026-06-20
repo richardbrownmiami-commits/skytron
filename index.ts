@@ -786,7 +786,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         function listTools() { return Object.keys(toolDefinitions).concat([...mcpToolMap.keys()]).join(", "); }
 
         // --- Multi-step function-calling loop ---
-        const MAX_STEPS = 8;
+        const MAX_STEPS = 15;
         let fullHistory = [];
         let finalContent = "";
         let modelName = "";
