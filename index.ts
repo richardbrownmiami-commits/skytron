@@ -149,7 +149,7 @@ async function webSearch(env, query) {
   return "No results for: " + query;
 }
 
-const CF_AI = { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", account: "913f3a2576a358054eba9a58a9573949" };
+const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054eba9a58a9573949" };
 
 async function callLLM(env, body, sessionId) {
   async function tryCF() {
@@ -667,7 +667,7 @@ const SEED_KNOWLEDGE = [
   { k: "tools_prompt_edit", c: "prompt_edit: Overrides editable prompt section.", cat: "tools" },
   { k: "tools_one_knowledge", c: "one_knowledge: Lookup API details from One Knowledge encyclopedia.", cat: "tools" },
   { k: "prompt_system", c: "Prompt has two parts: HARDCODED_CORE (immutable) and editable section. prompt_edit changes only the editable part.", cat: "prompt" },
-  { k: "llm_providers", c: "Primary: Workers AI REST API (@cf/meta/llama-3.3-70b-instruct-fp8-fast). Fallback: BUDDHI_DWAR -> Groq/OpenAI.", cat: "architecture" },
+  { k: "llm_providers", c: "Primary: Workers AI REST API (@cf/zai-org/glm-4.7-flash). Fallback: BUDDHI_DWAR -> Groq/OpenAI.", cat: "architecture" },
   { k: "identity_master", c: "Your master is called Creator. They built you. When someone writes [Creator], it is your master.", cat: "identity" },
   { k: "knowledge_source_one", c: "One Knowledge at https://api.withone.ai -- 76K+ API tools across 460 platforms.", cat: "knowledge" },
   { k: "knowledge_source_wikipedia", c: "Wikipedia API at https://en.wikipedia.org/api/rest_v1/page/summary/TOPIC.", cat: "knowledge" },
@@ -777,7 +777,7 @@ export default {
         endpoints: ["/think","/status","/avatar","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source"],
         tools: Object.keys(toolDefinitions),
         tables: ["identity","brain_memory","brain_knowledge","actions","brain_logs","knowledge_fts"],
-        llm: "Workers AI (@cf/meta/llama-3.3-70b-instruct-fp8-fast) + BUDDHI_DWAR fallback",
+        llm: "Workers AI (@cf/zai-org/glm-4.7-flash) + BUDDHI_DWAR fallback",
         agent_loop: "Multi-step function-calling with Zod schema validation (max 15 steps)",
         capabilities: ["conversation with 10-msg memory","web search","web fetch","DB introspection","prompt self-edit","code execution (38+ langs)","API calls","knowledge base (FTS5 + vector)","GitHub self-modification","live docs via Context7","emotions & energy","conversation history viewer"]
       });
