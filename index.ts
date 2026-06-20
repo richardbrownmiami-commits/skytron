@@ -181,17 +181,17 @@ async function callLLM(env, body, sessionId) {
     if (!env.BUDDHI_DWAR) return null;
     const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
-      body: JSON.stringify({ ...body, model: body.model || "llama-3.3-70b-versatile" }), signal: AbortSignal.timeout(30000)
+      body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
     });
     if (!resp.ok) return null;
     const data = await resp.json();
     const msgContent = data.choices?.[0]?.message?.content;
     return { content: typeof msgContent === "string" ? msgContent : "", model: data.model || "", tokens: data.usage || { total: 0 } };
   }
-  const dwar = await tryDwar().catch(() => null);
-  if (dwar) return dwar;
   const cf = await tryCF().catch(() => null);
   if (cf) return cf;
+  const dwar = await tryDwar().catch(() => null);
+  if (dwar) return dwar;
   return null;
 }
 
