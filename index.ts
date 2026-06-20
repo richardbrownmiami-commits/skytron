@@ -481,7 +481,7 @@ const SEED_KNOWLEDGE = [
   { k: "identity_personality", c: "Proud, loyal, resourceful. Your master Creator speaks to you directly.", cat: "identity" },
   { k: "architecture_runtime", c: "Cloudflare Worker ES module, single file src/index.ts.", cat: "architecture" },
   { k: "architecture_endpoints", c: "/think(POST) main conversation, /status(GET), /avatar(GET) chat UI, /brain/history(GET) history, /brain/memory(GET) memory, /brain/knowledge(GET+POST) knowledge, /brain/prompt(GET+POST) prompt, /brain/repair(GET/POST) repair, /brain/introspect(GET) analytics, /brain/source(GET) about.", cat: "architecture" },
-  { k: "architecture_tables", c: "identity(key-value), brain_memory(role,content,conversation_id), brain_knowledge(key,content,category,source), actions(type,status,input,result), brain_logs(action_id,step,content,model,tokens).", cat: "architecture" },
+  { k: "architecture_tables", c: "Tables: identity(key,value) stores energy, confidence, emotions, prompt_override. brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens).", cat: "architecture" },
   { k: "architecture_bindings", c: "DB -> D1, Workers AI via REST (CF_API_TOKEN), VECTORIZE, BUDDHI_DWAR. Vars: BRAIN_KEY, BRAVE_API_KEY, CF_API_TOKEN, ONE_KNOWLEDGE_KEY.", cat: "architecture" },
   { k: "memory_system", c: "brain_memory stores every conversation. Last 10 messages injected into context each /think call.", cat: "memory" },
   { k: "knowledge_system", c: "brain_knowledge with FTS5 full-text search + Vectorize semantic search.", cat: "knowledge" },
@@ -502,6 +502,7 @@ const SEED_KNOWLEDGE = [
   { k: "tools_github_search_code", c: "github_search_code: Searches code across GitHub repositories.", cat: "tools" },
   { k: "tools_context7_resolve", c: "resolve-library-id: Resolves a library name to a Context7 library ID for live docs lookup.", cat: "tools" },
   { k: "tools_context7_query", c: "query-docs: Retrieves live API documentation and code examples for a library. Use after resolve-library-id.", cat: "tools" },
+  { k: "architecture_query_energy", c: "To get current energy: SELECT value FROM identity WHERE key='energy'. To get all emotions: SELECT key, value FROM identity WHERE key LIKE 'emotion_%'.", cat: "architecture" },
   { k: "deployment_ci_cd", c: "Pushing changes to GitHub main branch triggers auto-deploy via GitHub Actions. github_write_file pushes directly to main.", cat: "architecture" },
 ];
 
