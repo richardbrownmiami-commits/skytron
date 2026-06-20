@@ -767,24 +767,20 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(aid, "step_" + step, content.slice(0, 500), modelName, resp.tokens?.total || 0).run(); } catch {}
 
           const trimmed = content.trim();
-          if (!trimmed.startsWith("{") || !trimmed.includes('"tool"')) {
-            const toolIdx = trimmed.indexOf('{"tool":');
-            if (toolIdx > 0) {
-              const textBefore = trimmed.slice(0, toolIdx).trim();
-              const jsonPart = trimmed.slice(toolIdx);
-              if (jsonPart.includes('"tool"') && jsonPart.includes('"input"')) {
-                const saved = finalContent;
-                const savedTokens = totalTokens;
-                finalContent = "";
-                totalTokens = savedTokens;
+          const isPureToolJson = trimmed.startsWith("{") && trimmed.includes('"tool"');
+          if (!isPureToolJson) {
+            const jsonStart = trimmed.indexOf('{"');
+            if (jsonStart >= 0) {
+              const textBefore = trimmed.slice(0, jsonStart).trim();
+              const after = trimmed.slice(jsonStart);
+              if (after.includes('"tool"') && after.includes('"input"')) {
                 try {
-                  const start = jsonPart.indexOf("{");
-                  let depth = 0, end = start;
-                  for (; end < jsonPart.length; end++) { if (jsonPart[end] === "{") depth++; else if (jsonPart[end] === "}") depth--; if (depth === 0) break; }
+                  let depth = 0, end = 0;
+                  for (; end < after.length; end++) { if (after[end] === "{") depth++; else if (after[end] === "}") depth--; if (depth === 0) break; }
                   if (depth !== 0) { finalContent = textBefore || content; totalTokens += resp.tokens?.total || 0; break; }
-                  const tc = parseLLMJson(jsonPart.slice(start, end + 1));
+                  const tc = parseLLMJson(after.slice(0, end + 1));
                   if (tc.tool && tc.input) {
-                    fullHistory.push({ role: "assistant", content: textBefore ? "[Thought: " + textBefore.slice(0, 300) + "] " + jsonPart : jsonPart });
+                    fullHistory.push({ role: "assistant", content: textBefore ? "[Thought: " + textBefore.slice(0, 300) + "] " + after.slice(0, end + 1) : after.slice(0, end + 1) });
                     const toolResult = await dispatchTool(env, tc.tool, tc.input);
                     if (toolResult === null) {
                       fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + tc.tool + "'. Available: " + listTools() + "]" });
