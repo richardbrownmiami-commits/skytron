@@ -557,6 +557,8 @@ const SEED_KNOWLEDGE = [
   { k: "tools_context7_resolve", c: "resolve-library-id: Resolves a library name to a Context7 library ID for live docs lookup.", cat: "tools" },
   { k: "tools_context7_query", c: "query-docs: Retrieves live API documentation and code examples for a library. Use after resolve-library-id.", cat: "tools" },
   { k: "architecture_query_energy", c: "To get current energy: SELECT value FROM identity WHERE key='energy'. To get all emotions: SELECT key, value FROM identity WHERE key LIKE 'emotion_%'.", cat: "architecture" },
+  { k: "tools_github_create_pr", c: "github_create_pr: Creates a pull request. Params: repo, title, head, base?, body? Returns PR number and URL.", cat: "tools" },
+  { k: "identity_repo", c: "Your GitHub repository is richardbrownmiami-commits/skytron. Use this as the 'repo' param in all GitHub tools.", cat: "identity" },
   { k: "deployment_ci_cd", c: "Pushing changes to GitHub main branch triggers auto-deploy via GitHub Actions. github_write_file pushes directly to main.", cat: "architecture" },
 ];
 
