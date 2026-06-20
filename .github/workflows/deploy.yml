@@ -20,4 +20,3 @@ jobs:
           command: deploy
           secrets: |
             GH_PAT
-            ONE_KNOWLEDGE_KEY
