@@ -19,6 +19,5 @@ jobs:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           command: deploy
           secrets: |
-            CF_API_TOKEN
             GH_PAT
             ONE_KNOWLEDGE_KEY
