@@ -49,7 +49,7 @@ function EnergyGauge({ energy }) {
 export default function BrainPage() {
   const { t } = useTranslation()
   const { settings } = useSettings()
-  const { emotions, phase, activity, stream, loading, error, autoRefresh, setAutoRefresh, refresh } = useBrain()
+  const { emotions, phase, activity, stream, goals, tokenUsage, loading, error, autoRefresh, setAutoRefresh, refresh } = useBrain()
   const [proposals, setProposals] = useState([])
   const [feedback, setFeedback] = useState(null)
 
@@ -128,6 +128,19 @@ export default function BrainPage() {
               </div>
             </div>
 
+            {tokenUsage?.entries?.length > 0 && (
+              <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+                <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">Daily Token Budget</h3>
+                <div className="space-y-2">
+                  <TokenBudgetBar entries={tokenUsage.entries} budget={tokenUsage.dailyBudget} />
+                  <div className="flex justify-between text-xs text-[var(--color-text-sec)]">
+                    <span>Today: {tokenUsage.entries[0]?.tokens || 0} / {tokenUsage.dailyBudget}</span>
+                    <span>Budget: {tokenUsage.dailyBudget}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">{t('brain.activity')}</h3>
               {activity.length === 0 ? (
@@ -157,6 +170,35 @@ export default function BrainPage() {
                         {item.mood === 'happy' ? <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> : item.mood === 'curious' ? <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg> : <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>}
                       </span>
                       <p className="text-[var(--color-text)] text-xs">{typeof item.content === 'string' ? item.content.slice(0, 200) : ''}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {goals.length > 0 && (
+              <div className="bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-2xl p-5">
+                <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">Active Goals</h3>
+                <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-thin">
+                  {goals.slice(0, 10).map((g, i) => (
+                    <div key={i} className="flex items-start gap-3 text-sm py-2 border-b border-[var(--color-border)]/50 last:border-0">
+                      <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${g.status === 'active' ? 'bg-green-400' : g.status === 'completed' ? 'bg-blue-400' : 'bg-gray-400'}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[var(--color-text)] text-xs font-medium">{g.title}</p>
+                        {g.description && <p className="text-[var(--color-text-muted)] text-[10px] mt-0.5 truncate">{g.description}</p>}
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {g.progress !== undefined && (
+                            <div className="flex items-center gap-1">
+                              <div className="w-16 h-1.5 bg-[var(--color-border)] rounded-full overflow-hidden">
+                                <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${g.progress}%` }} />
+                              </div>
+                              <span className="text-[10px] text-[var(--color-text-muted)]">{g.progress}%</span>
+                            </div>
+                          )}
+                          <span className="text-[10px] text-[var(--color-text-muted)]">p{g.priority}</span>
+                          {g.deadline && <span className="text-[10px] text-[var(--color-text-muted)]">due {new Date(g.deadline).toLocaleDateString()}</span>}
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -217,6 +259,26 @@ function StatCard({ label, value, color }) {
     <div className="bg-[var(--color-bg)] rounded-xl p-3 border border-[var(--color-border)]">
       <p className="text-[10px] text-[var(--color-text-muted)] uppercase">{label}</p>
       <p className="text-lg font-bold" style={{ color }}>{value}</p>
+    </div>
+  )
+}
+
+function TokenBudgetBar({ entries, budget }) {
+  const today = entries[0]
+  const used = today?.tokens || 0
+  const pct = Math.min(100, (used / budget) * 100)
+  const color = pct > 80 ? '#EF4444' : pct > 50 ? '#F59E0B' : '#10B981'
+  return (
+    <div>
+      <div className="h-3 bg-[var(--color-border)] rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color, boxShadow: `0 0 6px ${color}` }} />
+      </div>
+      {entries.slice(0, 7).reverse().map((d, i) => (
+        <div key={i} className="flex justify-between text-[10px] text-[var(--color-text-muted)] mt-1">
+          <span>{d.date?.slice(5)}</span>
+          <span>{d.tokens}</span>
+        </div>
+      ))}
     </div>
   )
 }

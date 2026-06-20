@@ -41,3 +41,13 @@ export async function denyTool(brainUrl, id) {
   })
   return res.ok
 }
+
+export async function fetchBrainGoals(brainUrl) {
+  const res = await fetch(`${brainUrl}/brain/goals`).catch(() => null)
+  return res?.ok ? res.json() : { entries: [] }
+}
+
+export async function fetchBrainTokenUsage(brainUrl) {
+  const res = await fetch(`${brainUrl}/brain/token-usage`).catch(() => null)
+  return res?.ok ? res.json() : { entries: [], dailyBudget: 10000 }
+}

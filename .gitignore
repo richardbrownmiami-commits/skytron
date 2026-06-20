@@ -14,16 +14,20 @@ work/skytron-app/.git/
 
 # Node
 node_modules/
-/package-lock.json
-/package.json
+# CI/CD needs these tracked
+# /package-lock.json
+# /package.json
 
-# Other
+# Junk / backup files in root
+*.zip
+*.tmp
+app-debug*/
 extracted/
-saraha-web-*.zip
-
-# Build artifacts (web)
 work/skytron-app/web/dist/
 work/skytron-app/web/node_modules/
+screenshot.png
+skytron_device.db
+ui.xml
 
 # Build artifacts (Android)
 work/skytron-app/app/build/
