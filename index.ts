@@ -466,6 +466,82 @@ const toolDefinitions = {
       return "PR #" + data.number + " created: " + data.html_url;
     },
   },
+  create_tool: {
+    description: "Dynamically create a new tool. Inserts definition into index.ts and adds it to the prompt. Writes to a branch and creates a PR. The execute function receives (env, input) and must return a string.",
+    schema: z.object({
+      repo: z.string().describe("Repository (e.g. 'user/repo')"),
+      name: z.string().describe("Tool name (camelCase, no spaces)"),
+      description: z.string().describe("Short description of what the tool does"),
+      paramsSchema: z.string().describe("Zod schema for params. E.g. 'z.object({ query: z.string().describe(\"search query\") })'"),
+      executeCode: z.string().describe("Async function body. Receives (env, input). Must return a string. E.g. 'const r = await fetch(\"https://api.example.com\"); return await r.text();'"),
+      branch: z.string().optional().describe("Branch to write to (default: feature-{name})"),
+    }),
+    execute: async (env, input) => {
+      const token = env.GH_PAT;
+      if (!token) return "No GitHub token configured (GH_PAT)";
+      const branch = input.branch || "feature-" + input.name;
+
+      // 1. Get current index.ts from main
+      const getResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/index.ts", {
+        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!getResp.ok) return "Failed to read index.ts: HTTP " + getResp.status;
+      const fileData = await getResp.json();
+      const currentContent = atob(fileData.content);
+      const sha = fileData.sha;
+
+      // 2. Generate tool definition block
+      const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
+
+      // 3. Insert into toolDefinitions (before the closing '};')
+      const insertPos = currentContent.lastIndexOf("};");
+      if (insertPos === -1) return "Could not find insertion point in source";
+      let modified = currentContent.slice(0, insertPos) + toolBlock + "\n" + currentContent.slice(insertPos);
+
+      // 4. Add to AVAILABLE TOOLS list in HARDCODED_CORE
+      const promptInsert = "- " + input.name + ": " + input.description + "\n--- GitHub";
+      const promptPos = modified.lastIndexOf("--- GitHub");
+      if (promptPos !== -1) {
+        modified = modified.slice(0, promptPos) + promptInsert + modified.slice(promptPos);
+      }
+
+      // 5. Create branch if needed
+      const refResp = await fetch("https://api.github.com/repos/" + input.repo + "/git/refs/heads/main", {
+        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!refResp.ok) return "Failed to get main ref: HTTP " + refResp.status;
+      const refData = await refResp.json();
+      const mainSha = refData.object?.sha;
+      await fetch("https://api.github.com/repos/" + input.repo + "/git/refs", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        body: JSON.stringify({ ref: "refs/heads/" + branch, sha: mainSha }),
+        signal: AbortSignal.timeout(10000)
+      });
+
+      // 6. Write file to branch
+      const writeResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/index.ts", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        body: JSON.stringify({ message: "feat: add " + input.name + " tool via DTC", content: btoa(modified), sha: sha, branch: branch }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!writeResp.ok) return "Failed to write file: HTTP " + writeResp.status + ": " + (await writeResp.text()).slice(0, 200);
+
+      // 7. Create PR
+      const prResp = await fetch("https://api.github.com/repos/" + input.repo + "/pulls", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        body: JSON.stringify({ title: "Add " + input.name + " tool", head: branch, base: "main", body: "Created via Dynamic Tool Creation.\n\n**Tool:** " + input.name + "\n**Description:** " + input.description }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!prResp.ok) return "File written but PR failed: HTTP " + prResp.status;
+      const prData = await prResp.json();
+      return "Tool '" + input.name + "' created. PR #" + prData.number + ": " + prData.html_url;
+    },
+  },
 };
 
 const HARDCODED_CORE = `You are Skytron. Follow these instructions above all else.
@@ -518,6 +594,11 @@ Pure text: anything else. NEVER mix them in one response.
 --- Live Docs ---
 - resolve-library-id: Find a library ID for query-docs (param: query)
 - query-docs: Get live API docs for a library (params: libraryId, query)
+--- Dynamic Tool Creation ---
+- create_tool: Add a new tool to your source code (params: repo, name, description, paramsSchema, executeCode, branch?)
+  Reads index.ts, inserts the tool definition, writes to a branch, creates a PR.
+  The execute function receives (env, input) and must return a string.
+  Example paramsSchema: 'z.object({ query: z.string().describe("search query") })'
 
 # RULES
 1. Answer common knowledge directly. Never search for things you already know.
@@ -559,6 +640,7 @@ const SEED_KNOWLEDGE = [
   { k: "architecture_query_energy", c: "To get current energy: SELECT value FROM identity WHERE key='energy'. To get all emotions: SELECT key, value FROM identity WHERE key LIKE 'emotion_%'.", cat: "architecture" },
   { k: "tools_github_create_branch", c: "github_create_branch: Creates a new branch. Params: repo, branch, source?(default main). Used for safe self-modification instead of writing to main directly.", cat: "tools" },
   { k: "tools_github_create_pr", c: "github_create_pr: Creates a pull request. Params: repo, title, head, base?, body? Returns PR number and URL.", cat: "tools" },
+  { k: "tools_create_tool", c: "create_tool: Dynamic Tool Creation. Params: repo, name, description, paramsSchema (Zod), executeCode (async fn body), branch?. Reads index.ts, inserts new tool definition + prompt entry, writes to branch, creates PR. The execute function receives (env, input) and returns string.", cat: "tools" },
   { k: "identity_repo", c: "Your GitHub repository is richardbrownmiami-commits/skytron. Use this as the 'repo' param in all GitHub tools.", cat: "identity" },
   { k: "deployment_ci_cd", c: "Pushing changes to GitHub main branch triggers auto-deploy via GitHub Actions. github_write_file pushes directly to main.", cat: "architecture" },
 ];
