@@ -622,7 +622,8 @@ Pure text: anything else. NEVER mix them in one response.
 - run_code: Execute code (params: language, code)
 - prompt_edit: Override editable prompt (param: prompt)
 - one_knowledge: Lookup API details (params: platform, action?, query?)
---- GitHub ---
+- generate_image: returns a markdown image link
+--- GitHub--- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
 - github_search_code: Search code on GitHub (params: query, repo?)
@@ -1010,4 +1011,12 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     return json({ error: "not found" }, 404);
   },
 
+
+  generate_image: {
+    description: "returns a markdown image link",
+    schema: z.object({ prompt: z.string().describe("string describing the image"), width: z.number().optional().describe("width of the image, default 512"), height: z.number().optional().describe("height of the image, default 512") }),
+    execute: async (env, input) => {
+const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(input.prompt)}?width=${input.width || 512}&height=${input.height || 512}`; return `![generated](${url})`;
+    },
+  },
 };
