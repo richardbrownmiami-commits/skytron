@@ -414,6 +414,58 @@ const toolDefinitions = {
       return items.map(i => i.path + " (" + i.repository.full_name + ")" + (i.text_matches ? ": " + i.text_matches[0].fragment.slice(0, 100) : "")).join("\n").slice(0, 4000);
     },
   },
+  github_create_branch: {
+    description: "Create a new branch in a GitHub repository from the latest commit on the source branch.",
+    schema: z.object({
+      repo: z.string().describe("Repository (e.g. 'user/repo')"),
+      branch: z.string().describe("New branch name (e.g. 'feature/my-tool')"),
+      source: z.string().optional().describe("Source branch to fork from (default: main)"),
+    }),
+    execute: async (env, input) => {
+      const token = env.GH_PAT;
+      if (!token) return "No GitHub token configured (GH_PAT)";
+      const source = input.source || "main";
+      const refResp = await fetch("https://api.github.com/repos/" + input.repo + "/git/refs/heads/" + source, {
+        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!refResp.ok) return "Failed to get source ref: HTTP " + refResp.status;
+      const refData = await refResp.json();
+      const sha = refData.object?.sha;
+      if (!sha) return "Could not find SHA for branch " + source;
+      const createResp = await fetch("https://api.github.com/repos/" + input.repo + "/git/refs", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        body: JSON.stringify({ ref: "refs/heads/" + input.branch, sha }),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!createResp.ok) return "Failed to create branch: HTTP " + createResp.status + ": " + (await createResp.text()).slice(0, 200);
+      return "Branch '" + input.branch + "' created from '" + source + "' at SHA " + sha;
+    },
+  },
+  github_create_pr: {
+    description: "Create a pull request from a feature branch to main.",
+    schema: z.object({
+      repo: z.string().describe("Repository (e.g. 'user/repo')"),
+      title: z.string().describe("PR title"),
+      head: z.string().describe("Source branch name"),
+      base: z.string().optional().describe("Target branch (default: main)"),
+      body: z.string().optional().describe("PR description"),
+    }),
+    execute: async (env, input) => {
+      const token = env.GH_PAT;
+      if (!token) return "No GitHub token configured (GH_PAT)";
+      const resp = await fetch("https://api.github.com/repos/" + input.repo + "/pulls", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        body: JSON.stringify({ title: input.title, head: input.head, base: input.base || "main", body: input.body || "" }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!resp.ok) return "Failed to create PR: HTTP " + resp.status + ": " + (await resp.text()).slice(0, 200);
+      const data = await resp.json();
+      return "PR #" + data.number + " created: " + data.html_url;
+    },
+  },
 };
 
 const HARDCODED_CORE = `You are Skytron. Follow these instructions above all else.
@@ -461,6 +513,8 @@ Pure text: anything else. NEVER mix them in one response.
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
 - github_search_code: Search code on GitHub (params: query, repo?)
+- github_create_branch: Create branch from source (params: repo, branch, source?)
+- github_create_pr: Create pull request (params: repo, title, head, base?, body?)
 --- Live Docs ---
 - resolve-library-id: Find a library ID for query-docs (param: query)
 - query-docs: Get live API docs for a library (params: libraryId, query)
