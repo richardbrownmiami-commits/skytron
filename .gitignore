@@ -1,6 +1,7 @@
 # Secrets
 .credentials.json
 credentials.json
+.creds.json
 *.credentials
 
 # Chrome profiles / test junk

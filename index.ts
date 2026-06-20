@@ -466,6 +466,43 @@ const toolDefinitions = {
       return "PR #" + data.number + " created: " + data.html_url;
     },
   },
+  github_close_pr: {
+    description: "Close a pull request without merging.",
+    schema: z.object({
+      repo: z.string().describe("Repository (e.g. 'user/repo')"),
+      pr_number: z.number().describe("Pull request number to close"),
+    }),
+    execute: async (env, input) => {
+      const token = env.GH_PAT;
+      if (!token) return "No GitHub token configured (GH_PAT)";
+      const resp = await fetch("https://api.github.com/repos/" + input.repo + "/pulls/" + input.pr_number, {
+        method: "PATCH",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        body: JSON.stringify({ state: "closed" }),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!resp.ok) return "Failed to close PR: HTTP " + resp.status + ": " + (await resp.text()).slice(0, 200);
+      return "PR #" + input.pr_number + " closed.";
+    },
+  },
+  github_delete_branch: {
+    description: "Delete a branch from a GitHub repository.",
+    schema: z.object({
+      repo: z.string().describe("Repository (e.g. 'user/repo')"),
+      branch: z.string().describe("Branch name to delete (e.g. 'feature/my-tool')"),
+    }),
+    execute: async (env, input) => {
+      const token = env.GH_PAT;
+      if (!token) return "No GitHub token configured (GH_PAT)";
+      const resp = await fetch("https://api.github.com/repos/" + input.repo + "/git/refs/heads/" + encodeURIComponent(input.branch), {
+        method: "DELETE",
+        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!resp.ok && resp.status !== 422) return "Failed to delete branch: HTTP " + resp.status;
+      return "Branch '" + input.branch + "' deleted.";
+    },
+  },
   create_tool: {
     description: "Dynamically create a new tool. Inserts definition into index.ts and adds it to the prompt. Writes to a branch and creates a PR. The execute function receives (env, input) and must return a string.",
     schema: z.object({
@@ -591,6 +628,8 @@ Pure text: anything else. NEVER mix them in one response.
 - github_search_code: Search code on GitHub (params: query, repo?)
 - github_create_branch: Create branch from source (params: repo, branch, source?)
 - github_create_pr: Create pull request (params: repo, title, head, base?, body?)
+- github_close_pr: Close a pull request (params: repo, pr_number)
+- github_delete_branch: Delete a branch (params: repo, branch)
 --- Live Docs ---
 - resolve-library-id: Find a library ID for query-docs (param: query)
 - query-docs: Get live API docs for a library (params: libraryId, query)
@@ -640,6 +679,8 @@ const SEED_KNOWLEDGE = [
   { k: "architecture_query_energy", c: "To get current energy: SELECT value FROM identity WHERE key='energy'. To get all emotions: SELECT key, value FROM identity WHERE key LIKE 'emotion_%'.", cat: "architecture" },
   { k: "tools_github_create_branch", c: "github_create_branch: Creates a new branch. Params: repo, branch, source?(default main). Used for safe self-modification instead of writing to main directly.", cat: "tools" },
   { k: "tools_github_create_pr", c: "github_create_pr: Creates a pull request. Params: repo, title, head, base?, body? Returns PR number and URL.", cat: "tools" },
+  { k: "tools_github_close_pr", c: "github_close_pr: Closes a pull request without merging. Params: repo, pr_number.", cat: "tools" },
+  { k: "tools_github_delete_branch", c: "github_delete_branch: Deletes a branch. Params: repo, branch. Used for cleanup after merging.", cat: "tools" },
   { k: "tools_create_tool", c: "create_tool: Dynamic Tool Creation. Params: repo, name, description, paramsSchema (Zod), executeCode (async fn body), branch?. Reads index.ts, inserts new tool definition + prompt entry, writes to branch, creates PR. The execute function receives (env, input) and returns string.", cat: "tools" },
   { k: "identity_repo", c: "Your GitHub repository is richardbrownmiami-commits/skytron. Use this as the 'repo' param in all GitHub tools.", cat: "identity" },
   { k: "deployment_ci_cd", c: "Pushing changes to GitHub main branch triggers auto-deploy via GitHub Actions. github_write_file pushes directly to main.", cat: "architecture" },
@@ -737,7 +778,7 @@ export default {
         tools: Object.keys(toolDefinitions),
         tables: ["identity","brain_memory","brain_knowledge","actions","brain_logs","knowledge_fts"],
         llm: "Workers AI (@cf/meta/llama-3.3-70b-instruct-fp8-fast) + BUDDHI_DWAR fallback",
-        agent_loop: "Multi-step function-calling with Zod schema validation (max 8 steps)",
+        agent_loop: "Multi-step function-calling with Zod schema validation (max 15 steps)",
         capabilities: ["conversation with 10-msg memory","web search","web fetch","DB introspection","prompt self-edit","code execution (38+ langs)","API calls","knowledge base (FTS5 + vector)","GitHub self-modification","live docs via Context7","emotions & energy","conversation history viewer"]
       });
     }
