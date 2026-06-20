@@ -481,32 +481,7 @@ const toolDefinitions = {
       if (!token) return "No GitHub token configured (GH_PAT)";
       const branch = input.branch || "feature-" + input.name;
 
-      // 1. Get current index.ts from main
-      const getResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/index.ts", {
-        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
-        signal: AbortSignal.timeout(15000)
-      });
-      if (!getResp.ok) return "Failed to read index.ts: HTTP " + getResp.status;
-      const fileData = await getResp.json();
-      const currentContent = atob(fileData.content);
-      const sha = fileData.sha;
-
-      // 2. Generate tool definition block
-      const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
-
-      // 3. Insert into toolDefinitions (before the closing '};')
-      const insertPos = currentContent.lastIndexOf("};");
-      if (insertPos === -1) return "Could not find insertion point in source";
-      let modified = currentContent.slice(0, insertPos) + toolBlock + "\n" + currentContent.slice(insertPos);
-
-      // 4. Add to AVAILABLE TOOLS list in HARDCODED_CORE
-      const promptInsert = "- " + input.name + ": " + input.description + "\n--- GitHub";
-      const promptPos = modified.lastIndexOf("--- GitHub");
-      if (promptPos !== -1) {
-        modified = modified.slice(0, promptPos) + promptInsert + modified.slice(promptPos);
-      }
-
-      // 5. Create branch if needed
+      // 1. Create branch from main
       const refResp = await fetch("https://api.github.com/repos/" + input.repo + "/git/refs/heads/main", {
         headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
         signal: AbortSignal.timeout(10000)
@@ -521,11 +496,36 @@ const toolDefinitions = {
         signal: AbortSignal.timeout(10000)
       });
 
+      // 2. Read index.ts from the branch (not main, avoids SHA race)
+      const getResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/index.ts?ref=" + branch, {
+        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!getResp.ok) return "Failed to read index.ts from branch: HTTP " + getResp.status;
+      const fileData = await getResp.json();
+      const currentContent = atob(fileData.content);
+      const branchSha = fileData.sha;
+
+      // 3. Generate tool definition block
+      const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
+
+      // 4. Insert into toolDefinitions (before the closing '};')
+      const insertPos = currentContent.lastIndexOf("};");
+      if (insertPos === -1) return "Could not find insertion point in source";
+      let modified = currentContent.slice(0, insertPos) + toolBlock + "\n" + currentContent.slice(insertPos);
+
+      // 5. Add to AVAILABLE TOOLS list in HARDCODED_CORE
+      const promptInsert = "- " + input.name + ": " + input.description + "\n--- GitHub";
+      const promptPos = modified.lastIndexOf("--- GitHub");
+      if (promptPos !== -1) {
+        modified = modified.slice(0, promptPos) + promptInsert + modified.slice(promptPos);
+      }
+
       // 6. Write file to branch
       const writeResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/index.ts", {
         method: "PUT",
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
-        body: JSON.stringify({ message: "feat: add " + input.name + " tool via DTC", content: btoa(modified), sha: sha, branch: branch }),
+        body: JSON.stringify({ message: "feat: add " + input.name + " tool via DTC", content: btoa(modified), sha: branchSha, branch: branch }),
         signal: AbortSignal.timeout(15000)
       });
       if (!writeResp.ok) return "Failed to write file: HTTP " + writeResp.status + ": " + (await writeResp.text()).slice(0, 200);
