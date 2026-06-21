@@ -19,3 +19,4 @@ environment = "production"
 [vars]
 BRAIN_KEY = "Saraha-Brain-Key"
 BRAVE_API_KEY = ""
+OPENCODE_ZEN_KEY = "sk-viZeBnSQZE7YN3lYLw3eKfCWOrJ6iqicHAkR5W1rhVVHBkN7qiGQM9dyjZTZqUSb"
