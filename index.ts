@@ -858,6 +858,15 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       return json({ entries: r.results || [] });
     }
 
+    if (url.pathname === "/brain/health" && req.method === "GET") {
+      try {
+        const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/providers/health", {
+          headers: { Authorization: "Bearer " + env.BRAIN_KEY }
+        });
+        return new Response(resp.body, { status: resp.status, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+      } catch (e) { return json({ error: e.message }, 500); }
+    }
+
     if (url.pathname === "/brain/vectorize" && req.method === "POST") {
       try { await ensureVectorizeIndex(env); await indexAllKnowledge(env, env.DB); return json({ ok: true, indexed: true }); } catch (e) { return json({ error: e.message }, 500); }
     }
