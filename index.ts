@@ -622,6 +622,7 @@ Pure text: anything else. NEVER mix them in one response.
 - run_code: Execute code (params: language, code)
 - prompt_edit: Override editable prompt (param: prompt)
 - one_knowledge: Lookup API details (params: platform, action?, query?)
+- hello_world: 
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
@@ -1010,4 +1011,12 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     return json({ error: "not found" }, 404);
   },
 
+
+  hello_world: {
+    description: "",
+    schema: {},
+    execute: async (env, input) => {
+return 'Hello from Skytron!';
+    },
+  },
 };
