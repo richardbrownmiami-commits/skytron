@@ -177,10 +177,24 @@ async function callLLM(env, body, sessionId) {
     const msgContent = data.choices?.[0]?.message?.content;
     return { content: typeof msgContent === "string" ? msgContent : "", model: data.model || "", tokens: data.usage || { total: 0 } };
   }
+  async function tryDwarAuto() {
+    if (!env.BUDDHI_DWAR) return null;
+    const autoBody = { ...body, model: "auto" };
+    const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
+      body: JSON.stringify(autoBody), signal: AbortSignal.timeout(30000)
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const msgContent = data.choices?.[0]?.message?.content;
+    return { content: typeof msgContent === "string" ? msgContent : "", model: data.model || "", tokens: data.usage || { total: 0 } };
+  }
   const cf = await tryCF().catch(() => null);
   if (cf) return cf;
   const dwar = await tryDwar().catch(() => null);
   if (dwar) return dwar;
+  const auto = await tryDwarAuto().catch(() => null);
+  if (auto) return auto;
   return null;
 }
 
@@ -667,7 +681,7 @@ const SEED_KNOWLEDGE = [
   { k: "tools_prompt_edit", c: "prompt_edit: Overrides editable prompt section.", cat: "tools" },
   { k: "tools_one_knowledge", c: "one_knowledge: Lookup API details from One Knowledge encyclopedia.", cat: "tools" },
   { k: "prompt_system", c: "Prompt has two parts: HARDCODED_CORE (immutable) and editable section. prompt_edit changes only the editable part.", cat: "prompt" },
-  { k: "llm_providers", c: "Primary: Workers AI REST API (@cf/zai-org/glm-4.7-flash). Fallback: BUDDHI_DWAR (Groq + OpenCode Zen + others).", cat: "architecture" },
+  { k: "llm_providers", c: "Tier1: Workers AI REST API (@cf/zai-org/glm-4.7-flash). Tier2: BUDDHI_DWAR with requested model. Tier3: BUDDHI_DWAR with model=auto. No direct Groq calls — all routing through BRAIN_KEY.", cat: "architecture" },
   { k: "identity_master", c: "Your master is called Creator. They built you. When someone writes [Creator], it is your master.", cat: "identity" },
   { k: "knowledge_source_one", c: "One Knowledge at https://api.withone.ai -- 76K+ API tools across 460 platforms.", cat: "knowledge" },
   { k: "knowledge_source_wikipedia", c: "Wikipedia API at https://en.wikipedia.org/api/rest_v1/page/summary/TOPIC.", cat: "knowledge" },
@@ -774,10 +788,10 @@ export default {
     if (url.pathname === "/brain/source") {
       return json({
         language: "TypeScript", runtime: "Cloudflare Workers (ES module)", file: "src/index.ts",
-        endpoints: ["/think","/status","/avatar","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source"],
+        endpoints: ["/think","/status","/avatar","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source","/brain/health","/brain/test-models"],
         tools: Object.keys(toolDefinitions),
         tables: ["identity","brain_memory","brain_knowledge","actions","brain_logs","knowledge_fts"],
-        llm: "Workers AI (@cf/zai-org/glm-4.7-flash) + BUDDHI_DWAR (Groq + OpenCode Zen)",
+        llm: "Workers AI + BUDDHI_DWAR (auto-routing, no direct Groq)",
         agent_loop: "Multi-step function-calling with Zod schema validation (max 15 steps)",
         capabilities: ["conversation with 10-msg memory","web search","web fetch","DB introspection","prompt self-edit","code execution (38+ langs)","API calls","knowledge base (FTS5 + vector)","GitHub self-modification","live docs via Context7","emotions & energy","conversation history viewer"]
       });
@@ -864,6 +878,31 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           headers: { Authorization: "Bearer " + env.BRAIN_KEY }
         });
         return new Response(resp.body, { status: resp.status, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+      } catch (e) { return json({ error: e.message }, 500); }
+    }
+
+    if (url.pathname === "/brain/test-models" && req.method === "GET") {
+      try {
+        const testModels = ["gemini-2.5-flash", "openrouter/free", "deepseek-v4-flash-free", "mistral-small-latest", "llama-3.3-70b-versatile", "auto"];
+        const results = [];
+        for (const model of testModels) {
+          try {
+            const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
+              body: JSON.stringify({ model, messages: [{ role: "user", content: "say exactly: working" }], max_tokens: 10 }),
+              signal: AbortSignal.timeout(15000)
+            });
+            const ok = resp.ok;
+            let data = null;
+            try { data = await resp.json(); } catch {}
+            const content = data?.choices?.[0]?.message?.content || "";
+            results.push({ model, status: ok ? "ok" : "fail", httpStatus: resp.status, response: content.trim(), provider: data?.model || "" });
+          } catch (e) {
+            results.push({ model, status: "error", error: e.message });
+          }
+        }
+        return json({ results, note: "Workers AI available: " + !!env.CF_API_TOKEN });
       } catch (e) { return json({ error: e.message }, 500); }
     }
 
