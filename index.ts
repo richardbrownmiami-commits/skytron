@@ -162,7 +162,8 @@ async function callLLM(env, body, sessionId) {
     if (!resp.ok) return null;
     const data = await resp.json();
     const msgContent = data.choices?.[0]?.message?.content;
-    return { content: typeof msgContent === "string" ? msgContent : "", model: data.model || "", tokens: data.usage || { total: 0 } };
+    const finishReason = data.choices?.[0]?.finish_reason;
+    return { content: typeof msgContent === "string" ? msgContent : "", model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: finishReason || "" };
   }
   const dwar = await tryDwar().catch(() => null);
   if (dwar) return dwar;
@@ -344,7 +345,7 @@ const toolDefinitions = {
       const data = await resp.json();
       if (data.content) {
         const decoded = atob(data.content);
-        return "SHA: " + data.sha + "\nCONTENT:\n" + decoded.slice(0, 8000);
+        return "SHA: " + data.sha + "\n[TRUNCATED TO 8000 CHARS — use specific search to see more]\nCONTENT:\n" + decoded.slice(0, 8000);
       }
       return JSON.stringify(data).slice(0, 4000);
     },
@@ -630,7 +631,10 @@ Pure text: anything else. NEVER mix them in one response.
 3. You have only the tools listed above. Never mention others.
 4. Never claim a tool ran unless you actually called it.
 5. Never simulate tool output. Only report what came back.
-6. When asked about your tools, list them from memory — don't search.`;
+6. When asked about your tools, list them from memory — don't search.
+7. BE CONCISE. Give short, direct answers. No verbose intros, summaries, or extra commentary.
+8. For long content (code, logs, essays, lists >5 items), wrap it in a \`\`\` markdown code block with a language label.
+9. When asked to find bugs in your own source code: read the actual file with github_get_file first. If you cannot see the complete function due to truncation, say "COULD NOT VERIFY" instead of guessing. Never invent syntax errors that don't exist in the code you read.`;
 
 const SYSTEM_PROMPT = `# SETUP
 You run on Cloudflare Workers with D1 database, Workers AI, and web tools. Your full architecture is stored in SEED_KNOWLEDGE — use db_query or searchKnowledge to recall details if needed.`;
@@ -638,8 +642,8 @@ You run on Cloudflare Workers with D1 database, Workers AI, and web tools. Your 
 const SEED_KNOWLEDGE = [
   { k: "identity_self", c: "Skytron -- a fusion of Skynet and Ultron. Tech human brain. Created by master. Lives on Cloudflare Workers with D1 database.", cat: "identity" },
   { k: "identity_personality", c: "Proud, loyal, resourceful. Your master Creator speaks to you directly.", cat: "identity" },
-  { k: "architecture_runtime", c: "Cloudflare Worker ES module, single file src/index.ts.", cat: "architecture" },
-  { k: "architecture_endpoints", c: "/think(POST) main conversation, /status(GET), /avatar(GET) chat UI, /brain/history(GET) history, /brain/memory(GET) memory, /brain/knowledge(GET+POST) knowledge, /brain/prompt(GET+POST) prompt, /brain/repair(GET/POST) repair, /brain/introspect(GET) analytics, /brain/source(GET) about.", cat: "architecture" },
+  { k: "architecture_runtime", c: "Cloudflare Worker ES module, single file index.ts at repo root.", cat: "architecture" },
+  { k: "architecture_endpoints", c: "/think(POST) main conversation, /status(GET), /skytronchat(GET) chat UI, /brain/history(GET) history, /brain/memory(GET) memory, /brain/knowledge(GET+POST) knowledge, /brain/prompt(GET+POST) prompt, /brain/repair(GET/POST) repair, /brain/introspect(GET) analytics, /brain/source(GET) about.", cat: "architecture" },
   { k: "architecture_tables", c: "Tables: identity(key,value) stores energy, confidence, emotions, prompt_override. brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens).", cat: "architecture" },
   { k: "architecture_bindings", c: "DB -> D1, Workers AI via REST (CF_API_TOKEN), VECTORIZE, BUDDHI_DWAR. Vars: BRAIN_KEY, BRAVE_API_KEY, CF_API_TOKEN, ONE_KNOWLEDGE_KEY.", cat: "architecture" },
   { k: "memory_system", c: "brain_memory stores every conversation. Last 10 messages injected into context each /think call.", cat: "memory" },
@@ -667,43 +671,96 @@ const SEED_KNOWLEDGE = [
   { k: "tools_github_close_pr", c: "github_close_pr: Closes a pull request without merging. Params: repo, pr_number.", cat: "tools" },
   { k: "tools_github_delete_branch", c: "github_delete_branch: Deletes a branch. Params: repo, branch. Used for cleanup after merging.", cat: "tools" },
   { k: "tools_create_tool", c: "create_tool: Dynamic Tool Creation. Params: repo, name, description, paramsSchema (Zod), executeCode (async fn body), branch?. Reads index.ts, inserts new tool definition + prompt entry, writes to branch, creates PR. The execute function receives (env, input) and returns string.", cat: "tools" },
-  { k: "identity_repo", c: "Your GitHub repository is richardbrownmiami-commits/skytron. Use this as the 'repo' param in all GitHub tools.", cat: "identity" },
+  { k: "identity_repo", c: "Your GitHub repository is richardbrownmiami-commits/skytron. Use this as the 'repo' param in all GitHub tools. Your source file is at the root: path='index.ts', NOT src/index.ts.", cat: "identity" },
   { k: "deployment_ci_cd", c: "Pushing changes to GitHub main branch triggers auto-deploy via GitHub Actions. github_write_file pushes directly to main.", cat: "architecture" },
 ];
 
-const CHAT_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Skytron Chat</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{min-height:100vh;display:flex;flex-direction:column;background:#0F172A;font-family:sans-serif;color:#E2E8F0}
-.chat{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;max-width:640px;margin:0 auto;width:100%}
-.msg{max-width:85%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;word-break:break-word}
-.msg.user{background:#1E3A5F;align-self:flex-end;border-bottom-right-radius:4px}
-.msg.bot{background:#1E293B;align-self:flex-start;border-bottom-left-radius:4px;border:1px solid #334155}
-.msg .label{font-size:10px;font-weight:600;margin-bottom:4px;display:block}
-.msg.user .label{color:#60A5FA;text-align:right}.msg.bot .label{color:#94A3B8}
-.input-row{display:flex;gap:8px;padding:12px 16px;background:#1E293B;border-top:1px solid #334155;max-width:640px;margin:0 auto;width:100%}
-.input-row input{flex:1;padding:10px 14px;border-radius:8px;border:1px solid #334155;background:#0F172A;color:#E2E8F0;font-size:14px;outline:none}
-.input-row input:focus{border-color:#38BDF8}
-.input-row button{padding:10px 20px;border-radius:8px;border:none;background:#38BDF8;color:#0F172A;font-weight:bold;font-size:14px;cursor:pointer}
-.input-row button:disabled{opacity:0.5}
-</style>
-</head>
-<body>
-<div class="chat" id="chat"></div>
-<div class="input-row"><input type="text" id="msgInput" placeholder="Talk to Skytron..." /><button id="sendBtn">Send</button></div>
-<script>
-const chat=document.getElementById('chat'),inp=document.getElementById('msgInput'),btn=document.getElementById('sendBtn');
-function addMsg(role,text){var d=document.createElement('div');d.className='msg '+role;d.innerHTML='<span class="label">'+(role==='user'?'You':'Skytron')+'</span>'+esc(text);chat.appendChild(d);d.scrollIntoView({behavior:'smooth'})}
-function esc(s){var d=document.createElement('div');d.textContent=s.slice(0,2000);return d.innerHTML}
-inp.addEventListener('keydown',e=>{if(e.key==='Enter')sendBtn.click()});
-btn.addEventListener('click',async()=>{var t=inp.value.trim();if(!t)return;addMsg('user',t);inp.value='';btn.disabled=true;btn.textContent='...';try{var r=await fetch('/think',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:t})});var d=await r.json();addMsg('bot',d.result||'(no response)')}catch(e){addMsg('bot','(connection error)')}btn.disabled=false;btn.textContent='Send'});
-addMsg('bot',"Skytron online. Awake. Ready.");
-</script>
-</body>
-</html>`;
+const CHAT_HTML = '<!DOCTYPE html>'+
+'<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'+
+'<title>Skytron</title><style>'+
+'*{margin:0;padding:0;box-sizing:border-box}'+
+'body{background:#0b1120;color:#e6edf3;font-family:system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column}'+
+'.tabs{display:flex;background:#161b22;border-bottom:1px solid #30363d;padding:0 16px;overflow-x:auto;gap:0}'+
+'.tab{padding:12px 20px;cursor:pointer;color:#8b949e;font-size:13px;font-weight:500;border-bottom:2px solid transparent;white-space:nowrap;user-select:none}'+
+'.tab:hover{color:#e6edf3;background:#1c2333}'+
+'.tab.active{color:#58a6ff;border-bottom-color:#58a6ff}'+
+'.panel{flex:1;display:none;flex-direction:column;overflow:hidden}'+
+'.panel.active{display:flex}'+
+'#chatPanel{flex:1}'+
+'.msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;max-width:720px;margin:0 auto;width:100%}'+
+'.msg{max-width:85%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;word-break:break-word;white-space:pre-wrap}'+
+'.msg.user{background:#1e3a5f;align-self:flex-end;border-bottom-right-radius:4px}'+
+'.msg.bot{background:#1c2333;align-self:flex-start;border-bottom-left-radius:4px;border:1px solid #30363d}'+
+'.msg .label{font-size:10px;font-weight:600;margin-bottom:4px;display:block}'+
+'.msg.user .label{color:#60a5fa;text-align:right}.msg.bot .label{color:#8b949e}'+
+'.input-row{display:flex;gap:8px;padding:12px 16px;background:#161b22;border-top:1px solid #30363d;max-width:720px;margin:0 auto;width:100%}'+
+'.input-row input{flex:1;padding:10px 14px;border-radius:8px;border:1px solid #30363d;background:#0b1120;color:#e6edf3;font-size:14px;outline:none}'+
+'.input-row input:focus{border-color:#58a6ff}'+
+'.input-row button{padding:10px 20px;border-radius:8px;border:none;background:#58a6ff;color:#0b1120;font-weight:600;font-size:14px;cursor:pointer}'+
+'.input-row button:disabled{opacity:0.5}'+
+'.input-row button.sending{background:#8b949e}'+
+'.thinking{display:flex;align-items:center;gap:6px;padding:12px 16px;background:#1c2333;align-self:flex-start;border-radius:12px;border-bottom-left-radius:4px;border:1px solid #30363d;font-size:13px;color:#8b949e}'+
+'.thinking .dots{display:flex;gap:3px}'+
+'.thinking .dot{width:6px;height:6px;background:#58a6ff;border-radius:50%;animation:bounce 1.2s infinite}'+
+'.thinking .dot:nth-child(2){animation-delay:0.2s}'+
+'.thinking .dot:nth-child(3){animation-delay:0.4s}'+
+'@keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px)}}'+
+'details.collapsible{background:#0b1120;border:1px solid #30363d;border-radius:8px;margin:8px 0;overflow:hidden}'+
+'details.collapsible summary{padding:8px 12px;cursor:pointer;background:#161b22;color:#8b949e;font-size:11px;font-weight:600;user-select:none;letter-spacing:0.5px}'+
+'details.collapsible summary:hover{background:#1c2333}'+
+'details.collapsible .code-wrap{padding:8px 12px;overflow-x:auto;max-height:400px;overflow-y:auto}'+
+'details.collapsible pre{margin:0;font-size:13px;line-height:1.4;color:#e6edf3;white-space:pre-wrap;word-break:break-word}'+
+'.data-view{padding:16px;overflow-y:auto;max-width:720px;margin:0 auto;width:100%}'+
+'.data-view .item{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:8px;font-size:13px;line-height:1.4}'+
+'.data-view .item .key{color:#58a6ff;font-weight:600}'+
+'.data-view .item .meta{color:#8b949e;font-size:11px;margin-top:4px}'+
+'.nav-bar{display:flex;align-items:center;gap:6px;padding:8px 16px;justify-content:center;flex-wrap:wrap}'+
+'.nav-bar button{background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px}'+
+'.nav-bar button:hover{background:#1c2333;border-color:#58a6ff}'+
+'.nav-bar button:disabled{opacity:0.3;cursor:default}'+
+'.nav-bar .page-input{width:50px;padding:4px 6px;border-radius:6px;border:1px solid #30363d;background:#0b1120;color:#e6edf3;font-size:12px;text-align:center;outline:none}'+
+'.nav-bar .page-input:focus{border-color:#58a6ff}'+
+'.nav-bar .page-info{color:#8b949e;font-size:12px;margin:0 4px}'+
+'.data-view .empty{color:#8b949e;text-align:center;padding:40px 16px;font-size:14px}'+
+'.loading{text-align:center;padding:40px;color:#8b949e;font-size:14px}'+
+'@keyframes spin{to{transform:rotate(360deg)}}'+
+'.spinner{width:20px;height:20px;border:2px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin 0.6s linear infinite;display:inline-block;vertical-align:middle;margin-right:8px}'+
+'</style></head><body>'+
+'<div class="tabs" id="tabs">'+
+'<div class="tab active" data-tab="chat">Chat</div>'+
+'<div class="tab" data-tab="memory">Memory</div>'+
+'<div class="tab" data-tab="knowledge">Knowledge</div>'+
+'<div class="tab" data-tab="logs">Logs</div>'+
+'<div class="tab" data-tab="status">Status</div>'+
+'<div class="tab" data-tab="source">Source</div>'+
+'</div>'+
+'<div class="panel active" id="chatPanel"><div class="msgs" id="msgs"></div><div class="nav-bar" id="navBar"></div><div class="input-row"><input type="text" id="msgInput" placeholder="Message Skytron..."><button id="sendBtn">Send</button></div></div>'+
+'<div class="panel" id="memoryPanel"><div class="data-view" id="memoryView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
+'<div class="panel" id="knowledgePanel"><div class="data-view" id="knowledgeView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
+'<div class="panel" id="logsPanel"><div class="data-view" id="logsView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
+'<div class="panel" id="statusPanel"><div class="data-view" id="statusView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
+'<div class="panel" id="sourcePanel"><div class="data-view" id="sourceView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
+'<script>'+
+'var T={chat:1,memory:2,knowledge:3,logs:4,status:5,source:6};'+
+'var msgs=document.getElementById("msgs"),inp=document.getElementById("msgInput"),btn=document.getElementById("sendBtn"),navBar=document.getElementById("navBar");'+
+'var allMsgs=[],curPage=1,pageSize=20,totalPages=1;'+
+'function showTab(n){document.querySelectorAll(".panel").forEach(function(p){p.classList.remove("active")});document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("active")});document.getElementById(n+"Panel").classList.add("active");document.querySelector("[data-tab=\'"+n+"\']").classList.add("active");if(n!=="chat")loadData(n);else refreshChat()}'+
+'document.getElementById("tabs").addEventListener("click",function(e){var t=e.target;if(t.classList.contains("tab"))showTab(t.getAttribute("data-tab"))});'+
+'function refreshChat(){fetch("/brain/memory").then(function(r){return r.json()}).then(function(d){allMsgs=d.entries||[];totalPages=Math.max(1,Math.ceil(allMsgs.length/pageSize));curPage=totalPages;renderPage()}).catch(function(){msgs.innerHTML="<div class=\\"empty\\">Failed to load history</div>"})}'+
+'function renderPage(){msgs.innerHTML="";var start=(curPage-1)*pageSize;var end=Math.min(start+pageSize,allMsgs.length);for(var i=start;i<end;i++){var m=allMsgs[i];addMsg(m.role,m.content)}updateNav();msgs.scrollTop=msgs.scrollHeight}'+
+'function updateNav(){var nav=navBar;nav.innerHTML="<button onclick=\\"firstPage()\\""+(curPage<=1?" disabled":"")+">&laquo;</button><button onclick=\\"prevPage()\\""+(curPage<=1?" disabled":"")+">&lsaquo;</button><span class=\\"page-info\\">Page</span><input class=\\"page-input\\" id=\\"pageInput\\" type=\\"text\\" value=\\""+curPage+"\\" onchange=\\"jumpPage(this.value)\\"/><span class=\\"page-info\\">of "+totalPages+"</span><button onclick=\\"nextPage()\\""+(curPage>=totalPages?" disabled":"")+">&rsaquo;</button><button onclick=\\"lastPage()\\""+(curPage>=totalPages?" disabled":"")+">&raquo;</button>"}'+
+'function firstPage(){curPage=1;renderPage()}function prevPage(){if(curPage>1){curPage--;renderPage()}}function nextPage(){if(curPage<totalPages){curPage++;renderPage()}}function lastPage(){curPage=totalPages;renderPage()}'+
+'function jumpPage(v){v=parseInt(v);if(v>=1&&v<=totalPages){curPage=v;renderPage()}else{document.getElementById("pageInput").value=curPage}}'+
+'function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}'+
+'function render(t,r){if(r==="user")return esc(t);var out="",i=0;while(true){var si=t.indexOf("\x60\x60\x60",i);if(si===-1){out+=esc(t.slice(i));break}out+=esc(t.slice(i,si));var ei=t.indexOf("\x60\x60\x60",si+3);if(ei===-1){out+=esc(t.slice(si));break}var bl=t.slice(si+3,ei);var nl=bl.indexOf("\\n");var lb=nl>0?bl.slice(0,nl).toUpperCase()||"CODE":"CODE";var cd=nl>0?bl.slice(nl+1):bl;out+="<details class=\\"collapsible\\"><summary>"+lb+"</summary><div class=\\"code-wrap\\"><pre>"+esc(cd)+"</pre></div></details>";i=ei+3}return out}'+
+'function addMsg(r,t){var d=document.createElement("div");d.className="msg "+r;d.innerHTML="<span class=\\"label\\">"+(r==="user"?"You":"Skytron")+"</span>"+render(t,r);msgs.appendChild(d)}'+
+'btn.addEventListener("click",function(){send()});inp.addEventListener("keydown",function(e){if(e.key==="Enter")send()});'+
+'var thinkingMsg=null;function thinkingBubble(){var d=document.createElement("div");d.className="thinking";d.id="thinking";d.innerHTML="Thinking<span class=\\"dots\\"><span class=\\"dot\\"></span><span class=\\"dot\\"></span><span class=\\"dot\\"></span></span>";msgs.appendChild(d);d.scrollIntoView({behavior:"smooth"});return d}'+
+'function send(){var t=inp.value.trim();if(!t)return;inp.value="";btn.disabled=true;btn.textContent="";btn.classList.add("sending");thinkingMsg=thinkingBubble();fetch("/think",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({input:t})}).then(function(r){return r.json()}).then(function(d){if(thinkingMsg){thinkingMsg.remove();thinkingMsg=null}refreshChat()}).catch(function(){if(thinkingMsg){thinkingMsg.remove();thinkingMsg=null}msgs.innerHTML="<div class=\\"empty\\">Connection error</div>"}).finally(function(){btn.disabled=false;btn.textContent="Send";btn.classList.remove("sending")})}'+
+'refreshChat();'+
+'function loadData(n){var v=document.getElementById(n+"View");if(v.getAttribute("data-loaded"))return;v.innerHTML="<div class=\\"loading\\"><span class=\\"spinner\\"></span>Loading...</div>";fetch("/brain/"+n).then(function(r){return r.json()}).then(function(d){v.innerHTML=renderData(n,d);v.setAttribute("data-loaded","1")}).catch(function(){v.innerHTML="<div class=\\"empty\\">Failed to load "+n+"</div>"})}'+
+'function renderData(n,d){if(!d||!d.results&&!d.result&&!Array.isArray(d)&&!d.endpoints){return "<div class=\\"empty\\">No data</div>"}if(n==="memory"){var r=d.results||[];if(!r.length)return "<div class=\\"empty\\">No memory entries</div>";return r.map(function(m){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(m.role||"")+"</span>: "+esc((m.content||"").slice(0,300))+"<div class=\\"meta\\">"+new Date(m.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="knowledge"){var r2=d.results||[];if(!r2.length)return "<div class=\\"empty\\">No knowledge entries</div>";return r2.map(function(k){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k.key||"")+"</span>: "+esc((k.content||"").slice(0,200))+"<div class=\\"meta\\">"+esc(k.category||"")+"</div></div>"}).join("")}if(n==="logs"){var r3=d.results||[];if(!r3.length)return "<div class=\\"empty\\">No logs</div>";return r3.map(function(l){return "<div class=\\"item\\"><span class=\\"key\\">Step "+esc(String(l.step||""))+"</span> ("+esc(l.model||"")+")<br>"+esc((l.content||"").slice(0,200))+"<div class=\\"meta\\">"+new Date(l.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="status"){return Object.keys(d).map(function(k){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span>: "+esc(String(d[k]||""))+"</div>"}).join("")}if(n==="source"){return Object.keys(d).map(function(k){var v=d[k];if(Array.isArray(v))return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span><br>"+v.map(function(x){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(String(x))+"</span>"}).join(", ")+"</div>";return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span>: "+esc(String(v))+"</div>"}).join("")}return "<div class=\\"empty\\">Unknown tab</div>"}'+
+'</script></body></html>';
 
 export default {
   async fetch(req, env) {
@@ -714,7 +771,7 @@ export default {
       status, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
     });
 
-    if (url.pathname === "/avatar") return new Response(CHAT_HTML, { headers: { "Content-Type": "text/html;charset=utf-8" } });
+    if (url.pathname === "/skytronchat") return new Response(CHAT_HTML, { headers: { "Content-Type": "text/html;charset=utf-8" } });
 
     if (url.pathname === "/status") {
       let dbOk = false; try { await env.DB.prepare("SELECT 1").run(); dbOk = true; } catch {}
@@ -758,8 +815,8 @@ export default {
 
     if (url.pathname === "/brain/source") {
       return json({
-        language: "TypeScript", runtime: "Cloudflare Workers (ES module)", file: "src/index.ts",
-        endpoints: ["/think","/status","/avatar","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source"],
+        language: "TypeScript", runtime: "Cloudflare Workers (ES module)", file: "index.ts",
+        endpoints: ["/think","/status","/skytronchat","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source"],
         tools: Object.keys(toolDefinitions),
         tables: ["identity","brain_memory","brain_knowledge","actions","brain_logs","knowledge_fts"],
         llm: "Workers AI (@cf/zai-org/glm-4.7-flash) + BUDDHI_DWAR (Groq + OpenCode Zen)",
@@ -834,7 +891,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       const state = await getState(env.DB);
       const memCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_memory").all()).results[0]?.c || 0;
       const knCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_knowledge").all()).results[0]?.c || 0;
-      return new Response(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skytron</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem}.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.5rem;margin:0.5rem;max-width:500px;width:100%}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:1rem}.stat{display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid #21262d;font-size:0.85rem}.stat:last-child{border:none}.label{color:#8b949e}.links{display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap}.links a{color:#58a6ff;text-decoration:none;padding:0.4rem 0.8rem;border:1px solid #30363d;border-radius:8px;font-size:0.8rem}.links a:hover{background:#1f2937}</style></head><body><h1>Skytron</h1><div class="card"><div class="stat"><span class="label">Energy</span><span class="val" style="color:${state.reg.energy>60?'#3fb950':state.reg.energy>30?'#d29922':'#f85149'}">${state.reg.energy}%</span></div><div class="stat"><span class="label">Happy</span><span class="val">${state.emotions.happy}/10</span></div><div class="stat"><span class="label">Energetic</span><span class="val">${state.emotions.energetic}/10</span></div><div class="stat"><span class="label">Memory</span><span class="val">${memCount} messages</span></div><div class="stat"><span class="label">Knowledge</span><span class="val">${knCount} facts</span></div></div><div class="card"><div class="links"><a href="/avatar">Chat</a><a href="/status">Status</a><a href="/brain/history">History</a><a href="/brain/memory">Memory</a><a href="/brain/memory/search?q=">Search</a><a href="/brain/knowledge">Knowledge</a><a href="/brain/introspect">Insights</a><a href="/brain/source">About</a></div></div></body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8" } });
+      return new Response(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skytron</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem}.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.5rem;margin:0.5rem;max-width:500px;width:100%}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:1rem}.stat{display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid #21262d;font-size:0.85rem}.stat:last-child{border:none}.label{color:#8b949e}.links{display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap}.links a{color:#58a6ff;text-decoration:none;padding:0.4rem 0.8rem;border:1px solid #30363d;border-radius:8px;font-size:0.8rem}.links a:hover{background:#1f2937}</style></head><body><h1>Skytron</h1><div class="card"><div class="stat"><span class="label">Energy</span><span class="val" style="color:${state.reg.energy>60?'#3fb950':state.reg.energy>30?'#d29922':'#f85149'}">${state.reg.energy}%</span></div><div class="stat"><span class="label">Happy</span><span class="val">${state.emotions.happy}/10</span></div><div class="stat"><span class="label">Energetic</span><span class="val">${state.emotions.energetic}/10</span></div><div class="stat"><span class="label">Memory</span><span class="val">${memCount} messages</span></div><div class="stat"><span class="label">Knowledge</span><span class="val">${knCount} facts</span></div></div><div class="card"><div class="links"><a href="/skytronchat">Chat</a><a href="/status">Status</a><a href="/brain/history">History</a><a href="/brain/memory">Memory</a><a href="/brain/memory/search?q=">Search</a><a href="/brain/knowledge">Knowledge</a><a href="/brain/introspect">Insights</a><a href="/brain/source">About</a></div></div></body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8" } });
     }
 
     if (url.pathname === "/brain/logs") {
@@ -914,7 +971,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         fullHistory.push({ role: "user", content: llmInput });
 
         for (let step = 0; step < MAX_STEPS; step++) {
-          const resp = await callLLM(env, { messages: fullHistory, temperature: 0.7, max_tokens: 4096 }, "skytron-" + conversationId);
+          const resp = await callLLM(env, { messages: fullHistory, temperature: 0.7 }, "skytron-" + conversationId);
           if (!resp) return json({ error: "all LLM providers failed" }, 502);
 
           modelName = resp.model;
@@ -942,7 +999,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
                       fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + tc.tool + "'. Available: " + listTools() + "]" });
                       continue;
                     }
-                    fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult.slice(0, 4000) + "]" });
+fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult.slice(0, 4000) + "]" });
                     totalTokens += resp.tokens?.total || 0;
                     continue;
                   }
@@ -985,7 +1042,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           }
 
           fullHistory.push({ role: "assistant", content: trimmed });
-          fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult.slice(0, 4000) + "]" });
+fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult.slice(0, 4000) + "]" });
           totalTokens += resp.tokens?.total || 0;
         }
 
