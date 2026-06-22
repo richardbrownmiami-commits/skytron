@@ -152,20 +152,7 @@ async function webSearch(env, query) {
 const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054eba9a58a9573949" };
 
 async function callLLM(env, body, sessionId) {
-  async function tryCF() {
-    if (!env.CF_API_TOKEN) return null;
-    const headers = { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN };
-    if (sessionId) headers["x-session-affinity"] = sessionId;
-    const resp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/" + CF_AI.model, {
-      method: "POST", headers, signal: AbortSignal.timeout(30000),
-      body: JSON.stringify({ messages: body.messages || [], temperature: body.temperature ?? 0.7, max_tokens: body.max_tokens ?? 4096, stream: false })
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    if (!data.success || !data.result?.response) return null;
-    const cfContent = data.result.response;
-    return { content: typeof cfContent === "string" ? cfContent : JSON.stringify(cfContent), model: CF_AI.model, tokens: { prompt: 0, completion: 0, total: 0 } };
-  }
+  // Skip Workers AI (degraded/rate-limited), go directly to BUDDHI_DWAR
   async function tryDwar() {
     if (!env.BUDDHI_DWAR) return null;
     const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
@@ -177,8 +164,6 @@ async function callLLM(env, body, sessionId) {
     const msgContent = data.choices?.[0]?.message?.content;
     return { content: typeof msgContent === "string" ? msgContent : "", model: data.model || "", tokens: data.usage || { total: 0 } };
   }
-  const cf = await tryCF().catch(() => null);
-  if (cf) return cf;
   const dwar = await tryDwar().catch(() => null);
   if (dwar) return dwar;
   return null;
