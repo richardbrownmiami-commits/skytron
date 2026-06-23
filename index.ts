@@ -152,21 +152,27 @@ async function webSearch(env, query) {
 const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054eba9a58a9573949" };
 
 async function callLLM(env, body, sessionId) {
-  // Skip Workers AI (degraded/rate-limited), go directly to BUDDHI_DWAR
-  async function tryDwar() {
-    if (!env.BUDDHI_DWAR) return null;
-    const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
-      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
-      body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const msgContent = data.choices?.[0]?.message?.content;
-    const finishReason = data.choices?.[0]?.finish_reason;
-    return { content: typeof msgContent === "string" ? msgContent : "", model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: finishReason || "" };
+  const providers = [
+    { provider: "openrouter", model: "openrouter/free" },
+    { provider: "groq", model: "llama-3.3-70b-versatile" },
+    { provider: "mistral", model: "mistral-small-latest" },
+  ];
+  for (const p of providers) {
+    if (!env.BUDDHI_DWAR) break;
+    try {
+      const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
+        body: JSON.stringify({ ...body, provider: p.provider, model: p.model }), signal: AbortSignal.timeout(30000)
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const msgContent = data.choices?.[0]?.message?.content;
+        if (typeof msgContent === "string") {
+          return { content: msgContent, model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+        }
+      }
+    } catch {}
   }
-  const dwar = await tryDwar().catch(() => null);
-  if (dwar) return dwar;
   return null;
 }
 
