@@ -191,7 +191,7 @@ async function callLLM(env, body, sessionId) {
       if (waResp.ok) {
         const waData = await waResp.json();
         const waContent = waData.result?.response;
-        if (waContent) return { content: waContent, model: "workers-ai/llama-3.1-8b", tokens: { total: 0 } };
+        if (typeof waContent === "string") return { content: waContent, model: "workers-ai/llama-3.1-8b", tokens: { total: 0 } };
       }
     } catch {}
   }
@@ -686,39 +686,42 @@ async function processOneStep(env, action) {
   // If already done (e.g. max steps reached on previous tick), finalize
   if (state.done) { await finalizeAction(db, action.id, state); return; }
 
-  const resp = await callLLM(env, { messages: state.fullHistory, temperature: 0.7 }, "skytron-" + state.conversationId);
-  if (!resp) {
-    state.finalContent = "(error: all LLM providers failed)"; state.done = true;
+  let resp, content;
+  for (let retry = 0; retry < 3; retry++) {
+    if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
+    resp = await callLLM(env, { messages: state.fullHistory, temperature: 0.7 }, "skytron-" + state.conversationId);
+    if (!resp) continue;
+    content = resp.content;
+    if (typeof content === "string") break;
+  }
+  if (!resp || typeof content !== "string") {
+    state.finalContent = "(all LLM providers failed after 3 retries)"; state.done = true;
   } else {
     state.modelName = resp.model;
-    const content = resp.content;
-    if (typeof content !== "string") { state.finalContent = "(internal error)"; state.done = true; }
-    else {
-      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 500), state.modelName, resp.tokens?.total || 0).run(); } catch {}
+    try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 500), state.modelName, resp.tokens?.total || 0).run(); } catch {}
 
-      const trimmed = content.trim();
-      const parsed = tryParseToolCall(trimmed);
-      if (parsed) {
-        state.fullHistory.push({ role: "assistant", content: trimmed });
-        const result = await dispatchTool(env, parsed.tool, parsed.input);
-        if (result === null) {
-          state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
-        } else {
-          state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
-        }
-        state.totalTokens += resp.tokens?.total || 0;
-        state.step++;
-        if (state.step >= 15) { state.finalContent = "[Reached max steps]"; state.done = true; }
-        await saveAgentState(db, action.id, state);
-        if (!state.done) {
-          await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
-          return;
-        }
-        // max steps reached — fall through to finalize
+    const trimmed = content.trim();
+    const parsed = tryParseToolCall(trimmed);
+    if (parsed) {
+      state.fullHistory.push({ role: "assistant", content: trimmed });
+      const result = await dispatchTool(env, parsed.tool, parsed.input);
+      if (result === null) {
+        state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
       } else {
-        state.finalContent = content; state.done = true;
-        state.totalTokens += resp.tokens?.total || 0;
+        state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
       }
+      state.totalTokens += resp.tokens?.total || 0;
+      state.step++;
+      if (state.step >= 15) { state.finalContent = "[Reached max steps]"; state.done = true; }
+      await saveAgentState(db, action.id, state);
+      if (!state.done) {
+        await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+        return;
+      }
+      // max steps reached — fall through to finalize
+    } else {
+      state.finalContent = content; state.done = true;
+      state.totalTokens += resp.tokens?.total || 0;
     }
   }
 
