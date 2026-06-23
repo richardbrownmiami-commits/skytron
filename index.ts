@@ -625,6 +625,7 @@ When you need live data or are unsure, output ONLY the JSON. No surrounding text
 - run_code: Execute code (params: language, code)
 - prompt_edit: Override editable prompt (param: prompt)
 - one_knowledge: Lookup API details (params: platform, action?, query?)
+- review_code: Reviews code for quality, bugs, and best practices using BUDDHI_DWAR for analysis
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
@@ -1109,4 +1110,34 @@ fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult.slice(0,
     return json({ error: "not found" }, 404);
   },
 
-};
+}
+  review_code: {
+    description: "Reviews code for quality, bugs, and best practices using BUDDHI_DWAR for analysis",
+    schema: z.object({
+      repo: z.string().describe("GitHub repository in format owner/repo"),
+      file_path: z.string().describe("Path to the file to review"),
+      pr_number: z.number().optional().describe("Pull request number if reviewing code in a PR"),
+    }),
+    execute: async (env, input) => {
+      const token = env.GH_PAT;
+      if (!token) return "No GitHub token configured";
+      const fileResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/" + input.file_path, {
+        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!fileResp.ok) return "Failed to fetch file: HTTP " + fileResp.status;
+      const fileData = await fileResp.json();
+      const fileContent = atob(fileData.content);
+      const reviewPrompt = "Review this code for bugs, security issues, performance problems, and best practices:\\n\\n`\\n" + fileContent.slice(0, 4000) + "\\n`\\n\\nProvide specific line-level feedback.";
+      const reviewResp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + env.BRAIN_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "groq", model: "llama-3.3-70b-versatile", messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }),
+        signal: AbortSignal.timeout(60000)
+      });
+      if (!reviewResp.ok) return "Review API returned HTTP " + reviewResp.status;
+      const reviewData = await reviewResp.json();
+      return "Review of " + input.file_path + ":\\n\\n" + (reviewData.choices?.[0]?.message?.content || JSON.stringify(reviewData).slice(0, 4000));
+    },
+  },
+;
