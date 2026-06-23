@@ -972,7 +972,7 @@ const CHAT_HTML = '<!DOCTYPE html>'+
 '</script></body></html>';
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
     try { await initSchema(env.DB, env); } catch {}
 
@@ -1187,6 +1187,13 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         ];
 
         await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false });
+
+        ctx.waitUntil((async () => {
+          try {
+            await env.DB.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(aid).run();
+            await processOneStep(env, { id: aid });
+          } catch (e) { console.error("background /think processing error:", e); }
+        })());
 
         return json({ action_id: aid, status: "queued", message: "Request queued. Poll /think/result?id=" + aid + " for result." });
       } catch (e) {
