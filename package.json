@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "build": "vite build"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +18,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "vite": "^5.4.0",
+    "@vitejs/plugin-vue": "^5.1.2",
     "wrangler": "^4.103.0"
   }
 }
