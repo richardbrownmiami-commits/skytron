@@ -590,15 +590,47 @@ const toolDefinitions = {
       const fileData = await fileResp.json();
       const fileContent = atob(fileData.content);
       const reviewPrompt = "Review this code for bugs, security issues, performance problems, and best practices:\n\n```\n" + fileContent.slice(0, 2000) + "\n```\n\nProvide specific line-level feedback.";
-      const reviewResp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: "Bearer " + env.BRAIN_KEY, "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: "google", model: "gemini-2.5-flash", messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }),
-        signal: AbortSignal.timeout(25000)
-      });
-      if (!reviewResp.ok) return "Review API returned HTTP " + reviewResp.status;
-      const reviewData = await reviewResp.json();
-      return "Review of " + input.file_path + ":\n\n" + (reviewData.choices?.[0]?.message?.content || JSON.stringify(reviewData).slice(0, 2000));
+
+      const providers = [
+        { provider: "google", model: "gemini-2.5-flash" },
+        { provider: "mistral", model: "mistral-small-latest" },
+        { provider: "groq", model: "llama-3.3-70b-versatile" },
+      ];
+
+      for (const p of providers) {
+        try {
+          const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + env.BRAIN_KEY, "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: p.provider, model: p.model, messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }),
+            signal: AbortSignal.timeout(30000)
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            const content = data.choices?.[0]?.message?.content;
+            if (content) return "Review of " + input.file_path + ":\n\n" + content;
+          }
+        } catch {}
+      }
+
+      // Fallback: Workers AI free model
+      if (env.CF_API_TOKEN) {
+        try {
+          const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }),
+            signal: AbortSignal.timeout(60000)
+          });
+          if (waResp.ok) {
+            const waData = await waResp.json();
+            const waContent = waData.result?.response;
+            if (waContent) return "Review of " + input.file_path + " (Workers AI):\n\n" + waContent;
+          }
+        } catch {}
+      }
+
+      return "All review providers failed. Unable to complete code review.";
     },
   },
 };
