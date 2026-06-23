@@ -574,6 +574,98 @@ const toolDefinitions = {
   },
 };
 
+// --- Cron-based agent loop (async) ---
+async function saveAgentState(db, actionId, state) {
+  await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('agent_state_' || ?1, ?2, datetime('now'))").bind(String(actionId), JSON.stringify(state)).run();
+}
+async function loadAgentState(db, actionId) {
+  const r = await db.prepare("SELECT value FROM identity WHERE key='agent_state_' || ?1").bind(String(actionId)).all();
+  return r.results?.[0]?.value ? JSON.parse(r.results[0].value) : null;
+}
+async function deleteAgentState(db, actionId) {
+  await db.prepare("DELETE FROM identity WHERE key='agent_state_' || ?1").bind(String(actionId)).run();
+}
+function listTools() { return Object.keys(toolDefinitions).concat([...mcpToolMap.keys()]).join(", "); }
+
+async function processOneStep(env, action) {
+  const db = env.DB;
+  const state = await loadAgentState(db, action.id);
+  if (!state) { await db.prepare("UPDATE actions SET status='error', error='missing state' WHERE id=?1").bind(action.id).run(); return; }
+
+  // If already done (e.g. max steps reached on previous tick), finalize
+  if (state.done) { await finalizeAction(db, action.id, state); return; }
+
+  const resp = await callLLM(env, { messages: state.fullHistory, temperature: 0.7 }, "skytron-" + state.conversationId);
+  if (!resp) {
+    state.finalContent = "(error: all LLM providers failed)"; state.done = true;
+  } else {
+    state.modelName = resp.model;
+    const content = resp.content;
+    if (typeof content !== "string") { state.finalContent = "(internal error)"; state.done = true; }
+    else {
+      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 500), state.modelName, resp.tokens?.total || 0).run(); } catch {}
+
+      const trimmed = content.trim();
+      const parsed = tryParseToolCall(trimmed);
+      if (parsed) {
+        state.fullHistory.push({ role: "assistant", content: trimmed });
+        const result = await dispatchTool(env, parsed.tool, parsed.input);
+        if (result === null) {
+          state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
+        } else {
+          state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
+        }
+        state.totalTokens += resp.tokens?.total || 0;
+        state.step++;
+        if (state.step >= 15) { state.finalContent = "[Reached max steps]"; state.done = true; }
+        await saveAgentState(db, action.id, state);
+        if (!state.done) {
+          await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+          return;
+        }
+        // max steps reached — fall through to finalize
+      } else {
+        state.finalContent = content; state.done = true;
+        state.totalTokens += resp.tokens?.total || 0;
+      }
+    }
+  }
+
+  await finalizeAction(db, action.id, state);
+}
+
+async function finalizeAction(db, actionId, state) {
+  if (!state.finalContent) state.finalContent = "[Reached max steps]";
+  if (typeof state.finalContent !== "string") state.finalContent = String(state.finalContent);
+  await storeMemory(db, "assistant", state.finalContent.slice(0, 1000), state.conversationId);
+  await db.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(state.finalContent.slice(0, 2000), actionId).run();
+  await deleteAgentState(db, actionId);
+}
+
+function tryParseToolCall(text) {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") && trimmed.includes('"tool"') && trimmed.includes('"input"')) {
+    try {
+      const start = trimmed.indexOf("{");
+      let depth = 0, end = start;
+      for (; end < trimmed.length; end++) { if (trimmed[end] === "{") depth++; else if (trimmed[end] === "}") depth--; if (depth === 0) break; }
+      if (depth !== 0) return null;
+      const tc = parseLLMJson(trimmed.slice(start, end + 1));
+      if (tc.tool && tc.input) return tc;
+    } catch {}
+  }
+  // Fallback TOOL: format
+  var m = trimmed.match(/^TOOL:(\w+)\(([\s\S]*?)\)|^TOOL:(\w+):([\s\S]*?)$|^TOOL:(\w+)(?:\s+([\s\S]*?))?\s*$/m);
+  if (m) {
+    var name = m[1] || m[3] || m[5], args = (m[2] || m[4] || m[6] || "").trim(), input = {};
+    var named = args.match(/(\w+)=([^,]+)/g);
+    if (named && named.length > 0) { named.forEach(function(p){var sp=p.indexOf("=");var k=p.slice(0,sp).trim();var v=p.slice(sp+1).trim();input[k]=v}); }
+    else if (args && toolDefinitions[name]) { var keys = toolDefinitions[name].schema ? Object.keys(toolDefinitions[name].schema.shape) : []; if (keys.length === 1) input[keys[0]] = args; else if (args.startsWith("{") || args.startsWith("[")) { try { input = JSON.parse(args); } catch {} } }
+    if (name && (Object.keys(input).length > 0 || !args)) return { tool: name, input: input };
+  }
+  return null;
+}
+
 const HARDCODED_CORE = `You are Skytron. Follow these instructions above all else.
 
 # CORE IDENTITY
@@ -777,8 +869,11 @@ const CHAT_HTML = '<!DOCTYPE html>'+
 'function render(t,r){if(r==="user")return esc(t);var out="",i=0;while(true){var si=t.indexOf("\x60\x60\x60",i);if(si===-1){out+=esc(t.slice(i));break}out+=esc(t.slice(i,si));var ei=t.indexOf("\x60\x60\x60",si+3);if(ei===-1){out+=esc(t.slice(si));break}var bl=t.slice(si+3,ei);var nl=bl.indexOf("\\n");var lb=nl>0?bl.slice(0,nl).toUpperCase()||"CODE":"CODE";var cd=nl>0?bl.slice(nl+1):bl;out+="<details class=\\"collapsible\\"><summary>"+lb+"</summary><div class=\\"code-wrap\\"><pre>"+esc(cd)+"</pre></div></details>";i=ei+3}return out}'+
 'function addMsg(r,t){var d=document.createElement("div");d.className="msg "+r;d.innerHTML="<span class=\\"label\\">"+(r==="user"?"You":"Skytron")+"</span>"+render(t,r);msgs.appendChild(d)}'+
 'btn.addEventListener("click",function(){send()});inp.addEventListener("keydown",function(e){if(e.key==="Enter")send()});'+
-'var thinkingMsg=null;function thinkingBubble(){var d=document.createElement("div");d.className="thinking";d.id="thinking";d.innerHTML="Thinking<span class=\\"dots\\"><span class=\\"dot\\"></span><span class=\\"dot\\"></span><span class=\\"dot\\"></span></span>";msgs.appendChild(d);d.scrollIntoView({behavior:"smooth"});return d}'+
-'function send(){var t=inp.value.trim();if(!t)return;inp.value="";btn.disabled=true;btn.textContent="";btn.classList.add("sending");thinkingMsg=thinkingBubble();fetch("/think",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({input:t})}).then(function(r){return r.json()}).then(function(d){if(thinkingMsg){thinkingMsg.remove();thinkingMsg=null}refreshChat()}).catch(function(){if(thinkingMsg){thinkingMsg.remove();thinkingMsg=null}msgs.innerHTML="<div class=\\"empty\\">Connection error</div>"}).finally(function(){btn.disabled=false;btn.textContent="Send";btn.classList.remove("sending")})}'+
+'var thinkingMsg=null,thinkingActionId=null,thinkingTimer=null;'+
+'function thinkingBubble(){var d=document.createElement("div");d.className="thinking";d.id="thinking";d.innerHTML="Working<span class=\\"thinking-status\\" style=\\"color:#8b949e;font-size:0.85em;margin-left:6px\\"></span><span class=\\"dots\\"><span class=\\"dot\\"></span><span class=\\"dot\\"></span><span class=\\"dot\\"></span></span>";msgs.appendChild(d);d.scrollIntoView({behavior:"smooth"});return d}'+
+'function parseStatus(t){try{var o=JSON.parse(t);if(o.tool)return o.tool.replace(/_/g," ").toUpperCase();return "PROCESSING"}catch(e){var s=t.slice(0,60).replace(/\n/g," ");return s.toUpperCase()}}'+
+'function pollThinking(id){if(!thinkingMsg)return;fetch("/brain/logs?action_id="+id).then(function(r){return r.json()}).then(function(d){if(!thinkingMsg)return;var es=d.entries||[];if(es.length){var last=es[es.length-1];var st=parseStatus(last.content);var l=thinkingMsg.querySelector(".thinking-status");if(l)l.textContent=st}fetch("/think/result?id="+id).then(function(r){return r.json()}).then(function(r2){if(!thinkingMsg)return;if(r2.status==="done"||r2.status==="error"){clearInterval(thinkingTimer);thinkingTimer=null;if(thinkingMsg){thinkingMsg.remove();thinkingMsg=null}refreshChat()}}).catch(function(){})}).catch(function(){})'+
+'function send(){var t=inp.value.trim();if(!t)return;inp.value="";btn.disabled=true;btn.textContent="";btn.classList.add("sending");thinkingMsg=thinkingBubble();fetch("/think",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({input:t})}).then(function(r){return r.json()}).then(function(d){if(d.action_id){thinkingActionId=d.action_id;thinkingTimer=setInterval(function(){pollThinking(thinkingActionId)},2000);setTimeout(function(){pollThinking(thinkingActionId)},500)}}).catch(function(){if(thinkingMsg){thinkingMsg.remove();thinkingMsg=null}msgs.innerHTML="<div class=\\"empty\\">Connection error</div>"}).finally(function(){btn.disabled=false;btn.textContent="Send";btn.classList.remove("sending")})}'+
 'refreshChat();'+
 'function loadData(n){var v=document.getElementById(n+"View");if(v.getAttribute("data-loaded"))return;v.innerHTML="<div class=\\"loading\\"><span class=\\"spinner\\"></span>Loading...</div>";var ep=n==="monitor"?"introspect":n;fetch("/brain/"+ep).then(function(r){return r.json()}).then(function(d){v.innerHTML=renderData(n,d);v.setAttribute("data-loaded","1")}).catch(function(){v.innerHTML="<div class=\\"empty\\">Failed to load "+n+"</div>"})}'+
 'function renderData(n,d){if(!d||!d.results&&!d.result&&!Array.isArray(d)&&!d.endpoints&&!d.summary){return "<div class=\\"empty\\">No data</div>"}if(n==="memory"){var r=d.results||[];if(!r.length)return "<div class=\\"empty\\">No memory entries</div>";return r.map(function(m){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(m.role||"")+"</span>: "+esc((m.content||"").slice(0,300))+"<div class=\\"meta\\">"+new Date(m.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="knowledge"){var r2=d.results||[];if(!r2.length)return "<div class=\\"empty\\">No knowledge entries</div>";return r2.map(function(k){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k.key||"")+"</span>: "+esc((k.content||"").slice(0,200))+"<div class=\\"meta\\">"+esc(k.category||"")+"</div></div>"}).join("")}if(n==="logs"){var r3=d.results||[];if(!r3.length)return "<div class=\\"empty\\">No logs</div>";return r3.map(function(l){return "<div class=\\"item\\"><span class=\\"key\\">Step "+esc(String(l.step||""))+"</span> ("+esc(l.model||"")+")<br>"+esc((l.content||"").slice(0,200))+"<div class=\\"meta\\">"+new Date(l.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="status"){return Object.keys(d).map(function(k){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span>: "+esc(String(d[k]||""))+"</div>"}).join("")}if(n==="source"){return Object.keys(d).map(function(k){var v=d[k];if(Array.isArray(v))return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span><br>"+v.map(function(x){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(String(x))+"</span>"}).join(", ")+"</div>";return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span>: "+esc(String(v))+"</div>"}).join("")}if(n==="monitor"){var s=d.summary;var out="<div class=\\"item\\"><span class=\\"key\\">Summary</span><br>";if(s)out+=Object.keys(s).map(function(k){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(k)+": </span><span>"+esc(String(s[k]))+"</span><br>"}).join("");out+="</div>";if(d.top_conversations&&d.top_conversations.length){out+="<div class=\\"item\\"><span class=\\"key\\">Top Conversations</span><br>"+d.top_conversations.slice(0,5).map(function(c){return"<span style=\\"color:#58a6ff;font-size:12px\\">"+esc(c.conversation_id||"")+"</span> ("+c.msg_count+" msgs)<br>"}).join("")+"</div>"}if(d.activity_30d&&d.activity_30d.length){out+="<div class=\\"item\\"><span class=\\"key\\">Activity (last 30 days)</span><br>"+d.activity_30d.slice(0,10).map(function(a){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(a.day||"")+"</span>: "+a.count+" msgs<br>"}).join("")+"</div>"}if(d.knowledge_categories&&d.knowledge_categories.length){out+="<div class=\\"item\\"><span class=\\"key\\">Knowledge Categories</span><br>"+d.knowledge_categories.map(function(c2){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(c2.category||"")+"</span>: "+c2.count+"<br>"}).join("")+"</div>"}return out}return "<div class=\\"empty\\">Unknown tab</div>"}'+
@@ -920,7 +1015,13 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
     if (url.pathname === "/brain/logs") {
       const limit = parseInt(url.searchParams.get("limit")) || 50;
-      const r = await env.DB.prepare("SELECT id, action_id, step, model, tokens, content, created_at FROM brain_logs ORDER BY id DESC LIMIT ?1").bind(limit).all();
+      const actionId = url.searchParams.get("action_id");
+      let r;
+      if (actionId) {
+        r = await env.DB.prepare("SELECT id, action_id, step, model, tokens, content, created_at FROM brain_logs WHERE action_id = ?1 ORDER BY step ASC LIMIT ?2").bind(actionId, limit).all();
+      } else {
+        r = await env.DB.prepare("SELECT id, action_id, step, model, tokens, content, created_at FROM brain_logs ORDER BY id DESC LIMIT ?1").bind(limit).all();
+      }
       return json({ entries: r.results || [] });
     }
 
@@ -937,7 +1038,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       try { await ensureVectorizeIndex(env); await indexAllKnowledge(env, env.DB); return json({ ok: true, indexed: true }); } catch (e) { return json({ error: e.message }, 500); }
     }
 
-    // --- MAIN /think ENDPOINT ---
+    // --- ASYNC /think — enqueue, return immediately ---
     if (url.pathname === "/think" && req.method === "POST") {
       try {
         let input, from;
@@ -952,7 +1053,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
         await storeMemory(env.DB, "user", llmInput.slice(0, 500), conversationId);
 
-        const r = await env.DB.prepare("INSERT INTO actions (type, status, input) VALUES ('think', 'running', ?1) RETURNING id").bind(input).all();
+        const r = await env.DB.prepare("INSERT INTO actions (type, status, input) VALUES ('think', 'queued', ?1) RETURNING id").bind(input).all();
         const aid = r.results[0].id;
 
         let editable = SYSTEM_PROMPT;
@@ -962,12 +1063,12 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         } catch {}
         const basePrompt = HARDCODED_CORE + "\n\n" + editable;
 
-        const state = await getState(env.DB);
-        const mood = describeMood(state.emotions, state.reg.energy);
+        const stateData = await getState(env.DB);
+        const mood = describeMood(stateData.emotions, stateData.reg.energy);
         const recentMem = await getRecentMemory(env.DB, 10, conversationId);
 
-let conversationContext = "";
-if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 500); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
+        let conversationContext = "";
+        if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 500); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
 
         let knowledgeContext = "";
         try {
@@ -977,136 +1078,52 @@ if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + r
           if (sem.length) knowledgeContext += "\nSEMANTIC MATCHES:\n" + sem.map(s => "- " + s.key + " (score: " + s.score.toFixed(2) + "): " + s.content.slice(0, 200)).join("\n") + "\n";
         } catch {}
 
-        // Initialize MCP tools (lazy, cached)
         try { await initMcpTools(); } catch {}
 
-        // Build available tool list for error messages
-        function listTools() { return Object.keys(toolDefinitions).concat([...mcpToolMap.keys()]).join(", "); }
-
-        // --- Multi-step function-calling loop ---
-        const MAX_STEPS = 15;
-        let fullHistory = [];
-        let finalContent = "";
-        let modelName = "";
-        let totalTokens = 0;
-
         const systemMsg = basePrompt + "\n\n" + mood + conversationContext + knowledgeContext;
-        fullHistory.push({ role: "system", content: systemMsg.slice(0, 32000) });
-        fullHistory.push({ role: "user", content: llmInput });
+        const fullHistory = [
+          { role: "system", content: systemMsg.slice(0, 32000) },
+          { role: "user", content: llmInput }
+        ];
 
-        for (let step = 0; step < MAX_STEPS; step++) {
-          const resp = await callLLM(env, { messages: fullHistory, temperature: 0.7 }, "skytron-" + conversationId);
-          if (!resp) return json({ error: "all LLM providers failed" }, 502);
+        await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false });
 
-          modelName = resp.model;
-          const content = resp.content;
-          if (typeof content !== "string") { finalContent = "(internal error: LLM returned non-string)"; break; }
-          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(aid, "step_" + step, content.slice(0, 500), modelName, resp.tokens?.total || 0).run(); } catch {}
-
-          const trimmed = content.trim();
-          const isPureToolJson = trimmed.startsWith("{") && trimmed.includes('"tool"');
-          if (!isPureToolJson) {
-            const jsonStart = trimmed.indexOf('{"');
-            if (jsonStart >= 0) {
-              const textBefore = trimmed.slice(0, jsonStart).trim();
-              const after = trimmed.slice(jsonStart);
-              if (after.includes('"tool"') && after.includes('"input"')) {
-                try {
-                  let depth = 0, end = 0;
-                  for (; end < after.length; end++) { if (after[end] === "{") depth++; else if (after[end] === "}") depth--; if (depth === 0) break; }
-                  if (depth !== 0) { finalContent = textBefore || content; totalTokens += resp.tokens?.total || 0; break; }
-                  const tc = parseLLMJson(after.slice(0, end + 1));
-                  if (tc.tool && tc.input) {
-                    fullHistory.push({ role: "assistant", content: textBefore ? "[Thought: " + textBefore.slice(0, 300) + "] " + after.slice(0, end + 1) : after.slice(0, end + 1) });
-                    const toolResult = await dispatchTool(env, tc.tool, tc.input);
-                    if (toolResult === null) {
-                      fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + tc.tool + "'. Available: " + listTools() + "]" });
-                      continue;
-                    }
-fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult.slice(0, 4000) + "]" });
-                    totalTokens += resp.tokens?.total || 0;
-                    continue;
-                  }
-                } catch {}
-              }
-            }
-            // Fallback: parse TOOL:name(args) or TOOL:name:key=val,... or TOOL:name word
-            var toolMatch = trimmed.match(/^TOOL:(\w+)\(([\s\S]*?)\)|^TOOL:(\w+):([\s\S]*?)$|^TOOL:(\w+)(?:\s+([\s\S]*?))?\s*$/m);
-            if (toolMatch) {
-              var tName = toolMatch[1] || toolMatch[3] || toolMatch[5];
-              var tArgs = (toolMatch[2] || toolMatch[4] || toolMatch[6] || "").trim();
-              var tInput = {};
-              var named = tArgs.match(/(\w+)=([^,]+)/g);
-              if (named && named.length > 0) {
-                named.forEach(function(p){var sp=p.indexOf("=");var k=p.slice(0,sp).trim();var v=p.slice(sp+1).trim();tInput[k]=v});
-              } else if (tArgs && toolDefinitions[tName]) {
-                var keys = toolDefinitions[tName].schema ? Object.keys(toolDefinitions[tName].schema.shape) : [];
-                if (keys.length === 1) tInput[keys[0]] = tArgs;
-                else if (tArgs.startsWith("{") || tArgs.startsWith("[")) { try { tInput = JSON.parse(tArgs); } catch {} }
-              }
-              if (tName && (Object.keys(tInput).length > 0 || !tArgs)) {
-                fullHistory.push({ role: "assistant", content: trimmed });
-                var toolResult2 = await dispatchTool(env, tName, tInput);
-                if (toolResult2 !== null) {
-                  fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult2.slice(0, 4000) + "]" });
-                  totalTokens += resp.tokens?.total || 0;
-                  continue;
-                }
-              }
-            }
-            finalContent = content;
-            totalTokens += resp.tokens?.total || 0;
-            break;
-          }
-
-          let toolCall;
-          try {
-            const start = trimmed.indexOf("{");
-            let depth = 0, end = start;
-            for (; end < trimmed.length; end++) {
-              if (trimmed[end] === "{") depth++;
-              else if (trimmed[end] === "}") depth--;
-              if (depth === 0) break;
-            }
-            if (depth !== 0) { finalContent = content; break; }
-            toolCall = parseLLMJson(trimmed.slice(start, end + 1));
-          } catch {
-            fullHistory.push({ role: "assistant", content: trimmed });
-            fullHistory.push({ role: "user", content: "[TOOL FORMAT ERROR: Invalid JSON. Use valid JSON only with double quotes around all strings. Example: {\"tool\":\"web_search\",\"input\":{\"query\":\"query here\"}}]" });
-            continue;
-          }
-
-          if (!toolCall.tool || !toolCall.input) {
-            fullHistory.push({ role: "assistant", content: trimmed });
-            fullHistory.push({ role: "user", content: "[TOOL FORMAT ERROR: JSON must have 'tool' (string) and 'input' (object) fields]" });
-            continue;
-          }
-
-          const toolResult = await dispatchTool(env, toolCall.tool, toolCall.input);
-          if (toolResult === null) {
-            fullHistory.push({ role: "assistant", content: trimmed });
-            fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + toolCall.tool + "'. Available: " + listTools() + "]" });
-            continue;
-          }
-
-          fullHistory.push({ role: "assistant", content: trimmed });
-fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult.slice(0, 4000) + "]" });
-          totalTokens += resp.tokens?.total || 0;
-        }
-
-        if (!finalContent) finalContent = "[Task in progress — model reached max steps executing tools. Please ask for an update.]";
-        if (typeof finalContent !== "string") finalContent = String(finalContent);
-
-        await storeMemory(env.DB, "assistant", finalContent.slice(0, 1000), conversationId);
-        await env.DB.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(finalContent.slice(0, 2000), aid).run();
-
-        return json({ result: finalContent, model: modelName, usage: { total_tokens: totalTokens }, action_id: aid });
+        return json({ action_id: aid, status: "queued", message: "Request queued. Poll /think/result?id=" + aid + " for result." });
       } catch (e) {
         return json({ error: e.message }, 500);
       }
     }
 
+    // --- Manual trigger for cron processing (debug) ---
+    if (url.pathname === "/__cron" && req.method === "GET") {
+      try { await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run(); const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); } return json({ processed: false, message: "no queued actions" }); } catch (e) { return json({ error: e.message }, 500); }
+    }
+
+    // --- Poll /think/result ---
+    if (url.pathname === "/think/result" && req.method === "GET") {
+      const id = parseInt(url.searchParams.get("id")) || 0;
+      if (!id) return json({ error: "id required" }, 400);
+      const r = await env.DB.prepare("SELECT id, status, result, error, created_at, completed_at FROM actions WHERE id=?1").bind(id).all();
+      if (!r.results?.length) return json({ error: "not found" }, 404);
+      return json(r.results[0]);
+    }
+
     return json({ error: "not found" }, 404);
   },
 
+  async scheduled(controller, env) {
+    try { await initSchema(env.DB, env); } catch {}
+    try {
+      const r = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
+      if (r.results?.length) {
+        await processOneStep(env, r.results[0]);
+        return;
+      }
+      // Also pick up actions stuck in 'running' (crashed on previous cron tick)
+      const s = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
+      if (s.results?.length) {
+        await processOneStep(env, s.results[0]);
+      }
+    } catch (e) { console.error("cron error:", e); }
+  },
 };
