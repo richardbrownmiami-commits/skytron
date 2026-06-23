@@ -599,6 +599,16 @@ Only use tools for:
 Pure JSON: {"tool":"name","input":{"param":"value"}}
 Pure text: anything else. NEVER mix them in one response.
 
+# CRITICAL: JSON ONLY — NO "TOOL:" PREFIX
+You MUST use pure JSON for tool calls. The "TOOL:name(params)" format is WRONG and will NOT execute. Only pure JSON works.
+Examples:
+  - Correct: {"tool":"web_search","input":{"query":"latest AI news 2026"}}
+  - Correct: {"tool":"db_query","input":{"sql":"SELECT * FROM brain_knowledge"}}
+  - WRONG: TOOL:web_search(query=something)
+  - WRONG: TOOL:db_query(SELECT ...)
+
+When you need live data or are unsure, output ONLY the JSON. No surrounding text. The system executes the tool and returns the result.
+
 # AVAILABLE TOOLS
 --- Core ---
 - web_search: Search the internet (param: query)
@@ -949,8 +959,8 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         const mood = describeMood(state.emotions, state.reg.energy);
         const recentMem = await getRecentMemory(env.DB, 10, conversationId);
 
-        let conversationContext = "";
-        if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => "[" + m.role + "]: " + m.content.slice(0, 500)).join("\n") + "\n";
+let conversationContext = "";
+if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 500); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
 
         let knowledgeContext = "";
         try {
@@ -1011,6 +1021,30 @@ fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult.slice(0,
                     continue;
                   }
                 } catch {}
+              }
+            }
+            // Fallback: parse TOOL:name(args) or TOOL:name:key=val,... or TOOL:name word
+            var toolMatch = trimmed.match(/^TOOL:(\w+)\(([\s\S]*?)\)|^TOOL:(\w+):([\s\S]*?)$|^TOOL:(\w+)(?:\s+([\s\S]*?))?\s*$/m);
+            if (toolMatch) {
+              var tName = toolMatch[1] || toolMatch[3] || toolMatch[5];
+              var tArgs = (toolMatch[2] || toolMatch[4] || toolMatch[6] || "").trim();
+              var tInput = {};
+              var named = tArgs.match(/(\w+)=([^,]+)/g);
+              if (named && named.length > 0) {
+                named.forEach(function(p){var sp=p.indexOf("=");var k=p.slice(0,sp).trim();var v=p.slice(sp+1).trim();tInput[k]=v});
+              } else if (tArgs && toolDefinitions[tName]) {
+                var keys = toolDefinitions[tName].schema ? Object.keys(toolDefinitions[tName].schema.shape) : [];
+                if (keys.length === 1) tInput[keys[0]] = tArgs;
+                else if (tArgs.startsWith("{") || tArgs.startsWith("[")) { try { tInput = JSON.parse(tArgs); } catch {} }
+              }
+              if (tName && (Object.keys(tInput).length > 0 || !tArgs)) {
+                fullHistory.push({ role: "assistant", content: trimmed });
+                var toolResult2 = await dispatchTool(env, tName, tInput);
+                if (toolResult2 !== null) {
+                  fullHistory.push({ role: "user", content: "[TOOL RESULT: " + toolResult2.slice(0, 4000) + "]" });
+                  totalTokens += resp.tokens?.total || 0;
+                  continue;
+                }
               }
             }
             finalContent = content;
