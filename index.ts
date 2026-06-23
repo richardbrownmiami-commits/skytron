@@ -1218,6 +1218,22 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       return json(r.results[0]);
     }
 
+    // --- Debug: test BUDDHI_DWAR response format ---
+    if (url.pathname === "/brain/test-llm" && req.method === "GET") {
+      const provider = url.searchParams.get("provider") || "groq";
+      try {
+        const testBody = { messages: [{ role: "user", content: "say hello" }], provider, model: url.searchParams.get("model") || "llama-3.3-70b-versatile", max_tokens: 50 };
+        const r = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
+          method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
+          body: JSON.stringify(testBody), signal: AbortSignal.timeout(15000)
+        });
+        const raw = await r.text();
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch { parsed = null; }
+        return json({ status: r.status, ok: r.ok, raw: raw.slice(0, 2000), parsed });
+      } catch (e) { return json({ error: e.message }); }
+    }
+
     return json({ error: "not found" }, 404);
   },
 
