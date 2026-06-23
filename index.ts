@@ -153,11 +153,16 @@ const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054e
 
 async function callLLM(env, body, sessionId) {
   if (!env.BUDDHI_DWAR) return null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const providers = [
+    { provider: "openrouter", model: "openrouter/free" },
+    { provider: "groq", model: "llama-3.3-70b-versatile" },
+    { provider: "mistral", model: "mistral-small-latest" },
+  ];
+  for (const p of providers) {
     try {
       const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
-        body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
+        body: JSON.stringify({ messages: body.messages, provider: p.provider, model: p.model }), signal: AbortSignal.timeout(30000)
       });
       if (resp.ok) {
         const data = await resp.json();
