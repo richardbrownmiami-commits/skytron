@@ -532,8 +532,15 @@ const toolDefinitions = {
       // 3. Generate tool definition block
       const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
 
-      // 4. Insert into toolDefinitions (before the closing '};')
-      const insertPos = currentContent.lastIndexOf("};");
+      // 4. Insert into toolDefinitions (find its closing '};' by brace depth from 'const toolDefinitions')
+      const tdStart = currentContent.indexOf("const toolDefinitions");
+      if (tdStart === -1) return "Could not find toolDefinitions";
+      const afterTd = currentContent.slice(tdStart);
+      let depth = 0, insertPos = -1;
+      for (let i = 0; i < afterTd.length; i++) {
+        if (afterTd[i] === '{') depth++;
+        else if (afterTd[i] === '}') { depth--; if (depth === 0 && afterTd[i + 1] === ';') { insertPos = tdStart + i; break; } }
+      }
       if (insertPos === -1) return "Could not find insertion point in source";
       let modified = currentContent.slice(0, insertPos) + toolBlock + "\n" + currentContent.slice(insertPos);
 
