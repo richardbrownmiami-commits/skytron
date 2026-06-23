@@ -2,7 +2,7 @@ name: Deploy Skytron
 
 on:
   push:
-    branches: [main]
+    branches: [main, setup-configs]
 
 jobs:
   deploy:
