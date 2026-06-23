@@ -158,11 +158,13 @@ async function callLLM(env, body, sessionId) {
     { provider: "groq", model: "llama-3.3-70b-versatile" },
     { provider: "mistral", model: "mistral-small-latest" },
   ];
+  const errors = [];
   for (const p of providers) {
     try {
+      const reqBody = { messages: body.messages, provider: p.provider, model: p.model, max_tokens: 1000 };
       const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
-        body: JSON.stringify({ messages: body.messages, provider: p.provider, model: p.model }), signal: AbortSignal.timeout(30000)
+        body: JSON.stringify(reqBody), signal: AbortSignal.timeout(30000)
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -170,9 +172,31 @@ async function callLLM(env, body, sessionId) {
         if (typeof msgContent === "string") {
           return { content: msgContent, model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
         }
+        errors.push(p.provider + ": no content in response");
+      } else {
+        const errBody = await resp.text().catch(() => "");
+        errors.push(p.provider + ": HTTP " + resp.status + " " + errBody.slice(0, 100));
+      }
+    } catch (e) {
+      errors.push(p.provider + ": " + (e.message || "unknown error"));
+    }
+  }
+  // Last resort: Workers AI free model via CF API
+  if (env.CF_API_TOKEN) {
+    try {
+      const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
+        method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: body.messages, max_tokens: 1000 }), signal: AbortSignal.timeout(60000)
+      });
+      if (waResp.ok) {
+        const waData = await waResp.json();
+        const waContent = waData.result?.response;
+        if (waContent) return { content: waContent, model: "workers-ai/llama-3.1-8b", tokens: { total: 0 } };
       }
     } catch {}
   }
+  // Log errors to memory for debugging
+  try { await env.DB.prepare("INSERT INTO brain_memory (role, content) VALUES ('system', ?1)").bind("callLLM errors: " + JSON.stringify(errors).slice(0, 500)).run(); } catch {}
   return null;
 }
 
