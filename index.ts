@@ -1197,7 +1197,15 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       try { await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run(); const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); } return json({ processed: false, message: "no queued actions" }); } catch (e) { return json({ error: e.message }, 500); }
     }
 
-    // --- Test review_code tool ---
+    // --- Test endpoints for chat/quick/review ---
+    if (url.pathname === "/test-chat" && req.method === "GET") {
+      const resp = await callLLM(env, { messages: [{ role: "user", content: "say hello in one word" }] }, "test-chat", "chat");
+      return json({ response: resp?.content, model: resp?.model });
+    }
+    if (url.pathname === "/test-quick" && req.method === "GET") {
+      const resp = await callLLM(env, { messages: [{ role: "user", content: "what is 2+2? answer in one word" }] }, "test-quick", "quick");
+      return json({ response: resp?.content, model: resp?.model });
+    }
     if (url.pathname === "/test-review" && req.method === "GET") {
       const codeWithBugs = `function calculateTotal(items) {
   var total = 0
@@ -1217,7 +1225,7 @@ function saveData(data) {
   eval(data.config)
 }`;
       const resp = await callLLM(env, { messages: [{ role: "user", content: "Review this code for bugs, security issues, and best practices:\n\n```\n" + codeWithBugs + "\n```\n\nProvide specific line-level feedback." }] }, "test-review", "review");
-      return json({ reviewed: true, response: resp?.content || "(no response)", model: resp?.model || "none" });
+      return json({ response: resp?.content, model: resp?.model });
     }
 
     // --- Poll /think/result ---
