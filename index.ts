@@ -792,6 +792,14 @@ Only use tools for:
 Pure JSON: {"tool":"name","input":{"param":"value"}}
 Pure text: anything else. NEVER mix them in one response.
 
+# CRITICAL: CHECK MEMORY FIRST BEFORE SEARCHING
+Before using any external tool (web_search, github_search_code, etc.), you MUST first check your own memory:
+- Use db_query to search brain_memory for relevant past conversations
+- Query by content keywords using LIKE '%topic%'
+- Use searchKnowledge or db_query on brain_knowledge for project info
+- Only reach for external tools if memory has nothing relevant
+This is automatic — do not wait to be told. Check memory on every question about past work, projects, or conversations.
+
 # CRITICAL: JSON ONLY — NO "TOOL:" PREFIX
 You MUST use pure JSON for tool calls. The "TOOL:name(params)" format is WRONG and will NOT execute. Only pure JSON works.
 Examples:
@@ -838,8 +846,7 @@ When you need live data or are unsure, output ONLY the JSON. No surrounding text
 6. When asked about your tools, list them from memory — don't search.
 7. BE CONCISE. Give short, direct answers. No verbose intros, summaries, or extra commentary.
 8. Always wrap code and JSON in \`\`\` markdown code blocks with a language label. Never write code inline.
-9. When asked to find bugs in your own source code: read the actual file with github_get_file first. If you cannot see the complete function due to truncation, say "COULD NOT VERIFY" instead of guessing. Never invent syntax errors that don't exist in the code you read.
-10. AUTO-MEMORY RECALL: When asked about past projects, conversations, or work you've done, automatically use db_query to search brain_memory for relevant context before answering. Query by content keywords (LIKE '%keyword%') and conversation_id. Use the found memories to give informed answers. As the conversation continues, query deeper for related topics. Do NOT wait to be told to check memory — do it automatically.`;
+9. When asked to find bugs in your own source code: read the actual file with github_get_file first. If you cannot see the complete function due to truncation, say "COULD NOT VERIFY" instead of guessing. Never invent syntax errors that don't exist in the code you read.`;
 
 const SYSTEM_PROMPT = `# SETUP
 You run on Cloudflare Workers with D1 database, Workers AI, and web tools. Your full architecture is stored in SEED_KNOWLEDGE — use db_query or searchKnowledge to recall details if needed.`;
