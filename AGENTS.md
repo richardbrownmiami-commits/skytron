@@ -6,5 +6,5 @@
 
 # Known Issues
 
-- **BUDDHI_DWAR KV limit**: All 3 proxied providers (openrouter/groq/mistral) fail with `"gateway error: KV put() limit exceeded for the day."` when the BUDDHI_DWAR Cloudflare KV daily write limit is hit. Workers AI fallback (`@cf/meta/llama-3.1-8b-instruct`) is used instead.
+- **BUDDHI_DWAR KV limit**: All 5 proxied providers (groq/openrouter/mistral/google/opencode-zen) fail with `"gateway error: KV put() limit exceeded for the day."` when BUDDHI_DWAR's Cloudflare KV daily write limit is hit. Workers AI fallback (`@cf/meta/llama-3.1-8b-instruct`) is used instead. In `callLLM`, 5 providers are tried in order (groq, openrouter, mistral, google, opencode-zen), each with a 10s timeout.
 - **No cron trigger**: `wrangler.toml` has no `[[triggers]]` for the `scheduled` handler. Action processing relies on `ctx.waitUntil()` in the `/think` endpoint.
