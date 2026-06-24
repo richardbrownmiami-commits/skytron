@@ -792,9 +792,6 @@ Only use tools for:
 Pure JSON: {"tool":"name","input":{"param":"value"}}
 Pure text: anything else. NEVER mix them in one response.
 
-# CRITICAL: SEARCH MEMORY FIRST
-When asked about past projects or conversations, search brain_memory using db_query before answering from training data.
-
 # CRITICAL: JSON ONLY — NO "TOOL:" PREFIX
 You MUST use pure JSON for tool calls. The "TOOL:name(params)" format is WRONG and will NOT execute. Only pure JSON works.
 Examples:
