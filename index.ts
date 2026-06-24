@@ -1197,6 +1197,29 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       try { await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run(); const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); } return json({ processed: false, message: "no queued actions" }); } catch (e) { return json({ error: e.message }, 500); }
     }
 
+    // --- Test review_code tool ---
+    if (url.pathname === "/test-review" && req.method === "GET") {
+      const codeWithBugs = `function calculateTotal(items) {
+  var total = 0
+  for(i=0; i<items.length; i++) {
+    total += items[i].price
+  }
+  return total
+}
+
+function getUser(id) {
+  let user = db.query("SELECT * FROM users WHERE id=" + id)
+  return user
+}
+
+function saveData(data) {
+  localStorage.setItem("data", JSON.stringify(data))
+  eval(data.config)
+}`;
+      const resp = await callLLM(env, { messages: [{ role: "user", content: "Review this code for bugs, security issues, and best practices:\n\n```\n" + codeWithBugs + "\n```\n\nProvide specific line-level feedback." }] }, "test-review", "review");
+      return json({ reviewed: true, response: resp?.content || "(no response)", model: resp?.model || "none" });
+    }
+
     // --- Poll /think/result ---
     if (url.pathname === "/think/result" && req.method === "GET") {
       const id = parseInt(url.searchParams.get("id")) || 0;
