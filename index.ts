@@ -737,7 +737,7 @@ async function finalizeAction(db, actionId, state) {
 }
 
 function tryParseToolCall(text) {
-  const trimmed = text.trim();
+  const trimmed = text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
   if (trimmed.startsWith("{") && trimmed.includes('"tool"') && trimmed.includes('"input"')) {
     try {
       const start = trimmed.indexOf("{");
