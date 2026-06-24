@@ -792,11 +792,8 @@ Only use tools for:
 Pure JSON: {"tool":"name","input":{"param":"value"}}
 Pure text: anything else. NEVER mix them in one response.
 
-# CRITICAL: SEARCH MEMORY FIRST — OUTPUT JSON, DON'T THINK OUT LOUD
-When asked about projects, conversations, or anything you worked on before, DO NOT narrate your thought process. Instead, immediately output a JSON tool call like:
-{"tool":"db_query","input":{"sql":"SELECT * FROM brain_memory WHERE content LIKE '%journal%' ORDER BY created_at DESC LIMIT 10"}}
-(Replace 'journal' with the relevant topic word.)
-Your training data has NO info about your creator's projects. Only brain_memory has the real context. Use searchKnowledge for additional project context. Only reach for external tools if memory has nothing.
+# CRITICAL: SEARCH MEMORY FIRST
+When asked about past projects or conversations, search brain_memory using db_query before answering from training data.
 
 # CRITICAL: JSON ONLY — NO "TOOL:" PREFIX
 You MUST use pure JSON for tool calls. The "TOOL:name(params)" format is WRONG and will NOT execute. Only pure JSON works.
@@ -1190,9 +1187,19 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           if (sem.length) knowledgeContext += "\nSEMANTIC MATCHES:\n" + sem.map(s => "- " + s.key + " (score: " + s.score.toFixed(2) + "): " + s.content.slice(0, 200)).join("\n") + "\n";
         } catch {}
 
+        let memoryContext = "";
+        try {
+          const keywords = input.split(/\s+/).filter(w => w.length > 3).slice(0, 4).map(w => w.replace(/[^a-zA-Z0-9]/g, ""));
+          if (keywords.length) {
+            const likeClauses = keywords.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
+            const mr = await env.DB.prepare("SELECT role, content, created_at FROM brain_memory WHERE (" + likeClauses + ") AND conversation_id != ?1 ORDER BY created_at DESC LIMIT 8").bind(conversationId).all();
+            if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES (from older conversations):\n" + mr.results.map(m => { var c = m.content.slice(0, 400); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
+          }
+        } catch {}
+
         try { await initMcpTools(); } catch {}
 
-        const systemMsg = basePrompt + "\n\n" + mood + conversationContext + knowledgeContext;
+        const systemMsg = basePrompt + "\n\n" + mood + conversationContext + memoryContext + knowledgeContext;
         const fullHistory = [
           { role: "system", content: systemMsg.slice(0, 32000) },
           { role: "user", content: llmInput }
