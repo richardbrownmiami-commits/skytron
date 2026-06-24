@@ -222,8 +222,7 @@ async function callLLM(env, body, sessionId, task = "chat") {
       }
     } catch {}
   }
-  try { await env.DB.prepare("INSERT INTO brain_memory (role, content) VALUES ('system', ?1)").bind("callLLM errors: " + JSON.stringify(errors).slice(0, 500)).run(); } catch {}
-  return null;
+  return { content: null, errors, model: "none", tokens: { total: 0 } };
 }
 
 // Parse LLM JSON output, handling common escape mistakes
@@ -675,25 +674,28 @@ async function processOneStep(env, action) {
   if (state.done) { await finalizeAction(db, action.id, state); return; }
 
   let resp, content;
+  let lastErrors = [];
   for (let retry = 0; retry < 3; retry++) {
     if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
     resp = await callLLM(env, { messages: state.fullHistory }, "skytron-" + state.conversationId, "chat");
     if (!resp) continue;
+    if (!resp.content && resp.errors) lastErrors = resp.errors;
     content = resp.content;
     if (typeof content === "string") break;
   }
   if (!resp || typeof content !== "string") {
-    // Try Workers AI one more time with error context so the brain can respond gracefully
+    const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
+    const fallbackPrompt = "You are a helpful assistant. Your AI providers failed: " + errorSummary.slice(0, 300) + ". Apologize briefly mentioning the real issue, and ask the user to try again later. Under 50 words.";
     try {
       if (env.CF_API_TOKEN) {
         const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
           method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: [{ role: "system", content: "You are a helpful assistant. All your AI providers are currently unreachable. Apologize briefly and ask the user to try again later. Under 40 words." }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200 }), signal: AbortSignal.timeout(15000)
+          body: JSON.stringify({ messages: [{ role: "system", content: fallbackPrompt }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200 }), signal: AbortSignal.timeout(15000)
         });
         if (waResp.ok) { const d = await waResp.json(); if (typeof d.result?.response === "string") { state.finalContent = d.result.response; state.done = true; await finalizeAction(db, action.id, state); return; } }
       }
     } catch {}
-    state.finalContent = "I'm having trouble connecting right now. Please try again in a moment."; state.done = true;
+    state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
   } else {
     state.modelName = resp.model;
     try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 500), state.modelName, resp.tokens?.total || 0).run(); } catch {}
@@ -835,7 +837,7 @@ When you need live data or are unsure, output ONLY the JSON. No surrounding text
 5. Never simulate tool output. Only report what came back.
 6. When asked about your tools, list them from memory — don't search.
 7. BE CONCISE. Give short, direct answers. No verbose intros, summaries, or extra commentary.
-8. For long content (code, logs, essays, lists >5 items), wrap it in a \`\`\` markdown code block with a language label.
+8. Always wrap code and JSON in \`\`\` markdown code blocks with a language label. Never write code inline.
 9. When asked to find bugs in your own source code: read the actual file with github_get_file first. If you cannot see the complete function due to truncation, say "COULD NOT VERIFY" instead of guessing. Never invent syntax errors that don't exist in the code you read.`;
 
 const SYSTEM_PROMPT = `# SETUP
