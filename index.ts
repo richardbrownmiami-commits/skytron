@@ -151,19 +151,44 @@ async function webSearch(env, query) {
 
 const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054eba9a58a9573949" };
 
-async function callLLM(env, body, sessionId) {
+const LLM_TASKS = {
+  chat: {
+    providers: [
+      { provider: "groq", model: "llama-3.3-70b-versatile" },
+      { provider: "openrouter", model: "openrouter/free" },
+      { provider: "mistral", model: "mistral-small-latest" },
+      { provider: "google", model: "gemini-2.5-flash" },
+      { provider: "opencode-zen", model: "deepseek-v4-flash-free" },
+    ],
+    max_tokens: 1000,
+    temperature: 0.7,
+  },
+  review: {
+    providers: [
+      { provider: "google", model: "gemini-2.5-flash" },
+      { provider: "mistral", model: "mistral-small-latest" },
+      { provider: "groq", model: "llama-3.3-70b-versatile" },
+    ],
+    max_tokens: 2000,
+    temperature: 0.3,
+  },
+  quick: {
+    providers: [
+      { provider: "groq", model: "llama-3.3-70b-versatile" },
+    ],
+    max_tokens: 500,
+    temperature: 0.5,
+  },
+};
+
+async function callLLM(env, body, sessionId, task = "chat") {
   if (!env.BUDDHI_DWAR) return null;
-  const providers = [
-    { provider: "groq", model: "llama-3.3-70b-versatile" },
-    { provider: "openrouter", model: "openrouter/free" },
-    { provider: "mistral", model: "mistral-small-latest" },
-    { provider: "google", model: "gemini-2.5-flash" },
-    { provider: "opencode-zen", model: "deepseek-v4-flash-free" },
-  ];
+  const config = LLM_TASKS[task] || LLM_TASKS.chat;
+  const { providers, max_tokens } = config;
   const errors = [];
   for (const p of providers) {
     try {
-      const reqBody = { messages: body.messages, provider: p.provider, model: p.model, max_tokens: 1000 };
+      const reqBody = { messages: body.messages, provider: p.provider, model: p.model, max_tokens, temperature: body.temperature ?? config.temperature };
       const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
         body: JSON.stringify(reqBody), signal: AbortSignal.timeout(10000)
@@ -188,7 +213,7 @@ async function callLLM(env, body, sessionId) {
     try {
       const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
         method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: body.messages, max_tokens: 1000 }), signal: AbortSignal.timeout(60000)
+        body: JSON.stringify({ messages: body.messages, max_tokens }), signal: AbortSignal.timeout(60000)
       });
       if (waResp.ok) {
         const waData = await waResp.json();
@@ -197,7 +222,6 @@ async function callLLM(env, body, sessionId) {
       }
     } catch {}
   }
-  // Log errors to memory for debugging
   try { await env.DB.prepare("INSERT INTO brain_memory (role, content) VALUES ('system', ?1)").bind("callLLM errors: " + JSON.stringify(errors).slice(0, 500)).run(); } catch {}
   return null;
 }
@@ -622,46 +646,8 @@ const toolDefinitions = {
       const fileData = await fileResp.json();
       const fileContent = atob(fileData.content);
       const reviewPrompt = "Review this code for bugs, security issues, performance problems, and best practices:\n\n```\n" + fileContent.slice(0, 2000) + "\n```\n\nProvide specific line-level feedback.";
-
-      const providers = [
-        { provider: "google", model: "gemini-2.5-flash" },
-        { provider: "mistral", model: "mistral-small-latest" },
-        { provider: "groq", model: "llama-3.3-70b-versatile" },
-      ];
-
-      for (const p of providers) {
-        try {
-          const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
-            method: "POST",
-            headers: { Authorization: "Bearer " + env.BRAIN_KEY, "Content-Type": "application/json" },
-            body: JSON.stringify({ provider: p.provider, model: p.model, messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }),
-            signal: AbortSignal.timeout(30000)
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            const content = data.choices?.[0]?.message?.content;
-            if (content) return "Review of " + input.file_path + ":\n\n" + content;
-          }
-        } catch {}
-      }
-
-      // Fallback: Workers AI free model
-      if (env.CF_API_TOKEN) {
-        try {
-          const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
-            method: "POST",
-            headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
-            body: JSON.stringify({ messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }),
-            signal: AbortSignal.timeout(60000)
-          });
-          if (waResp.ok) {
-            const waData = await waResp.json();
-            const waContent = waData.result?.response;
-            if (waContent) return "Review of " + input.file_path + " (Workers AI):\n\n" + waContent;
-          }
-        } catch {}
-      }
-
+      const reviewResp = await callLLM(env, { messages: [{ role: "user", content: reviewPrompt }] }, "review", "review");
+      if (reviewResp?.content) return "Review of " + input.file_path + ":\n\n" + reviewResp.content;
       return "All review providers failed. Unable to complete code review.";
     },
   },
@@ -691,7 +677,7 @@ async function processOneStep(env, action) {
   let resp, content;
   for (let retry = 0; retry < 3; retry++) {
     if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
-    resp = await callLLM(env, { messages: state.fullHistory, temperature: 0.7 }, "skytron-" + state.conversationId);
+    resp = await callLLM(env, { messages: state.fullHistory }, "skytron-" + state.conversationId, "chat");
     if (!resp) continue;
     content = resp.content;
     if (typeof content === "string") break;
