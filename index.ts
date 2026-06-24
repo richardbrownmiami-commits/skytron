@@ -62,9 +62,9 @@ async function getRecentMemory(db, limit = 10, conversationId = "default") {
 
 async function searchKnowledge(db, query, limit = 5) {
   try {
-    const terms = (query || "").replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean).map(t => t + "*").join(" ");
-    if (!terms) return [];
-    const r = await db.prepare("SELECT key, content, category FROM knowledge_fts WHERE knowledge_fts MATCH ?1 ORDER BY rank LIMIT ?2").bind(terms, limit).all();
+    const words = (query || "").replace(/[^\w\s-]/g, " ").trim().split(/[\s]+/).filter(Boolean).flatMap(t => t.split("-")).filter(Boolean).map(t => t + "*").join(" ");
+    if (!words) return [];
+    const r = await db.prepare("SELECT key, content, category FROM knowledge_fts WHERE knowledge_fts MATCH ?1 ORDER BY rank LIMIT ?2").bind(words, limit).all();
     if (r.results?.length) return r.results;
     const safe = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
     const fallback = await db.prepare("SELECT key, content, category FROM brain_knowledge WHERE content LIKE ?1 OR key LIKE ?1 LIMIT ?2").bind("%" + safe + "%", limit).all();
@@ -1186,10 +1186,15 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
         let memoryContext = "";
         try {
-          const words = input.split(/\s+/).filter(w => w.length > 2).slice(0, 3).map(w => w.replace(/[^a-zA-Z0-9-]/g, "")).filter(Boolean);
+          const words = input.split(/\s+/).filter(w => w.length > 2).slice(0, 4).map(w => w.replace(/[^a-zA-Z0-9-]/g, "")).filter(Boolean);
           if (words.length) {
+            // Exclude the most recent conversation IDs so we find older, more useful memories
+            const recentIds = recentMem.map(m => m.id).filter(id => id != null).join(",");
             const likes = words.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
-            const mr = await env.DB.prepare("SELECT role, content, created_at FROM brain_memory WHERE " + likes + " ORDER BY id DESC LIMIT 8").all();
+            let sql = "SELECT role, content, created_at FROM brain_memory WHERE (" + likes + ")";
+            if (recentIds) sql += " AND id NOT IN (" + recentIds + ")";
+            sql += " ORDER BY id DESC LIMIT 8";
+            const mr = await env.DB.prepare(sql).all();
             if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES:\n" + mr.results.map(m => { var c = m.content.slice(0, 400); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
           }
         } catch {}
