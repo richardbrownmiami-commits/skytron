@@ -43,6 +43,12 @@ work/skytron-app/local.properties
 .idea/
 *.iml
 
+# Build artifacts
+.wrangler/
+dev/
+dist/
+replace.js
+
 # OS
 .DS_Store
 Thumbs.db
