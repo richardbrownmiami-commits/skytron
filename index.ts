@@ -1186,12 +1186,18 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
         let memoryContext = "";
         try {
-          const keywords = input.split(/\s+/).filter(w => w.length > 3).slice(0, 4).map(w => w.replace(/[^a-zA-Z0-9]/g, ""));
+          const keywords = input.split(/\s+/).filter(w => w.length > 3).slice(0, 4).map(w => w.replace(/[^-a-zA-Z0-9]/g, ""));
           if (keywords.length && recentMem.length) {
             const recentIds = recentMem.map(m => m.id).join(",");
             const likeClauses = keywords.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
             const mr = await env.DB.prepare("SELECT role, content, created_at FROM brain_memory WHERE id NOT IN (" + recentIds + ") AND (" + likeClauses + ") ORDER BY id DESC LIMIT 8").all();
             if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES (from older conversations):\n" + mr.results.map(m => { var c = m.content.slice(0, 400); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
+          }
+          // Fallback: if no recent context found, try broader search
+          if (!memoryContext && keywords.length) {
+            const likeClauses = keywords.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
+            const mr = await env.DB.prepare("SELECT role, content, created_at FROM brain_memory WHERE " + likeClauses + " ORDER BY id DESC LIMIT 5").all();
+            if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES:\n" + mr.results.map(m => { var c = m.content.slice(0, 400); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
           }
         } catch {}
 
