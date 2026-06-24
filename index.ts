@@ -57,7 +57,7 @@ async function storeMemory(db, role, content, conversationId = "default") {
 }
 
 async function getRecentMemory(db, limit = 10, conversationId = "default") {
-  try { const r = await db.prepare("SELECT role, content, created_at FROM brain_memory WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2").bind(conversationId, limit).all(); return r.results ? r.results.reverse() : []; } catch { return []; }
+  try { const r = await db.prepare("SELECT id, role, content, created_at FROM brain_memory WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2").bind(conversationId, limit).all(); return r.results ? r.results.reverse() : []; } catch { return []; }
 }
 
 async function searchKnowledge(db, query, limit = 5) {
@@ -1190,9 +1190,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         let memoryContext = "";
         try {
           const keywords = input.split(/\s+/).filter(w => w.length > 3).slice(0, 4).map(w => w.replace(/[^a-zA-Z0-9]/g, ""));
-          if (keywords.length) {
+          if (keywords.length && recentMem.length) {
+            const recentIds = recentMem.map(m => m.id).join(",");
             const likeClauses = keywords.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
-            const mr = await env.DB.prepare("SELECT role, content, created_at FROM brain_memory WHERE " + likeClauses + " ORDER BY id DESC LIMIT 8").all();
+            const mr = await env.DB.prepare("SELECT role, content, created_at FROM brain_memory WHERE id NOT IN (" + recentIds + ") AND (" + likeClauses + ") ORDER BY id DESC LIMIT 8").all();
             if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES (from older conversations):\n" + mr.results.map(m => { var c = m.content.slice(0, 400); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
           }
         } catch {}
