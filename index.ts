@@ -683,7 +683,17 @@ async function processOneStep(env, action) {
     if (typeof content === "string") break;
   }
   if (!resp || typeof content !== "string") {
-    state.finalContent = "(all LLM providers failed after 3 retries)"; state.done = true;
+    // Try Workers AI one more time with error context so the brain can respond gracefully
+    try {
+      if (env.CF_API_TOKEN) {
+        const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
+          method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: [{ role: "system", content: "You are a helpful assistant. All your AI providers are currently unreachable. Apologize briefly and ask the user to try again later. Under 40 words." }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200 }), signal: AbortSignal.timeout(15000)
+        });
+        if (waResp.ok) { const d = await waResp.json(); if (typeof d.result?.response === "string") { state.finalContent = d.result.response; state.done = true; await finalizeAction(db, action.id, state); return; } }
+      }
+    } catch {}
+    state.finalContent = "I'm having trouble connecting right now. Please try again in a moment."; state.done = true;
   } else {
     state.modelName = resp.model;
     try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 500), state.modelName, resp.tokens?.total || 0).run(); } catch {}
@@ -1197,36 +1207,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       try { await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run(); const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); } return json({ processed: false, message: "no queued actions" }); } catch (e) { return json({ error: e.message }, 500); }
     }
 
-    // --- Test endpoints for chat/quick/review ---
-    if (url.pathname === "/test-chat" && req.method === "GET") {
-      const resp = await callLLM(env, { messages: [{ role: "user", content: "say hello in one word" }] }, "test-chat", "chat");
-      return json({ response: resp?.content, model: resp?.model });
-    }
-    if (url.pathname === "/test-quick" && req.method === "GET") {
-      const resp = await callLLM(env, { messages: [{ role: "user", content: "what is 2+2? answer in one word" }] }, "test-quick", "quick");
-      return json({ response: resp?.content, model: resp?.model });
-    }
-    if (url.pathname === "/test-review" && req.method === "GET") {
-      const codeWithBugs = `function calculateTotal(items) {
-  var total = 0
-  for(i=0; i<items.length; i++) {
-    total += items[i].price
-  }
-  return total
-}
-
-function getUser(id) {
-  let user = db.query("SELECT * FROM users WHERE id=" + id)
-  return user
-}
-
-function saveData(data) {
-  localStorage.setItem("data", JSON.stringify(data))
-  eval(data.config)
-}`;
-      const resp = await callLLM(env, { messages: [{ role: "user", content: "Review this code for bugs, security issues, and best practices:\n\n```\n" + codeWithBugs + "\n```\n\nProvide specific line-level feedback." }] }, "test-review", "review");
-      return json({ response: resp?.content, model: resp?.model });
-    }
+    // --- Poll /think/result ---
 
     // --- Poll /think/result ---
     if (url.pathname === "/think/result" && req.method === "GET") {
