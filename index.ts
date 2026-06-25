@@ -154,33 +154,23 @@ const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054e
 
 async function callLLM(env, body, sessionId) {
   if (!env.BUDDHI_DWAR) return null;
-  const providers = [
-    { provider: "groq", model: "llama-3.3-70b-versatile" },
-    { provider: "mistral", model: "mistral-small-latest" },
-    { provider: "opencode-zen", model: "deepseek-v4-flash-free" },
-  ];
   const errors = [];
-  for (const p of providers) {
-    try {
-      const reqBody = { messages: body.messages, provider: p.provider, model: p.model, max_tokens: 1000 };
-      const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
-        method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
-        body: JSON.stringify(reqBody), signal: AbortSignal.timeout(10000)
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const msgContent = data.choices?.[0]?.message?.content;
-        if (typeof msgContent === "string") {
-          return { content: msgContent, model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
-        }
-        errors.push(p.provider + ": no content in response");
-      } else {
-        const errBody = await resp.text().catch(() => "");
-        errors.push(p.provider + ": HTTP " + resp.status + " " + errBody.slice(0, 100));
-      }
-    } catch (e) {
-      errors.push(p.provider + ": " + (e.message || "unknown error"));
+  try {
+    const reqBody = { messages: body.messages, model: "", max_tokens: 1000 };
+    const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
+      body: JSON.stringify(reqBody), signal: AbortSignal.timeout(30000)
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const msgContent = data.choices?.[0]?.message?.content;
+      if (typeof msgContent === "string")
+        return { content: msgContent, model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
     }
+    const errBody = await resp.text().catch(() => "");
+    errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
+  } catch (e) {
+    errors.push("BUDDHI_DWAR: " + (e.message || "timeout"));
   }
   // Last resort: Workers AI free model via CF API
   if (env.CF_API_TOKEN) {
