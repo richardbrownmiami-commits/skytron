@@ -691,7 +691,7 @@ async function processOneStep(env, action) {
     const trimmed = content.trim();
     let parsed = tryParseToolCall(trimmed);
     const repromptCount = state.repromptCount || 0;
-    if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => trimmed.includes('"' + t + '"') || trimmed.includes("use " + t) || trimmed.includes("use the " + t)))) {
+    if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => { var lc = trimmed.toLowerCase(); return lc.includes('"' + t.toLowerCase() + '"') || lc.includes("use " + t.toLowerCase()) || lc.includes("use the " + t.toLowerCase()) || lc.includes("using " + t.toLowerCase()); }))) {
       state.repromptCount = repromptCount + 1;
       // Try to extract tool call from natural language plan
       const extracted = extractToolFromPlan(trimmed);
