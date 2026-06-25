@@ -219,8 +219,12 @@ async function ctx7Docs(apiKey, libraryId, query) {
       signal: AbortSignal.timeout(15000)
     });
     if (!resp.ok) return "Context7 API returned " + resp.status;
-    const data = await resp.json();
-    return (typeof data === "string" ? data : JSON.stringify(data)).slice(0, 4000);
+    const ct = resp.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const data = await resp.json();
+      return (typeof data === "string" ? data : JSON.stringify(data)).slice(0, 4000);
+    }
+    return (await resp.text()).slice(0, 4000);
   } catch (e) { return "Context7 docs error: " + e.message; }
 }
 
