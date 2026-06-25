@@ -688,7 +688,7 @@ async function processOneStep(env, action) {
     const trimmed = content.trim();
     let parsed = tryParseToolCall(trimmed);
     const repromptCount = state.repromptCount || 0;
-    if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => { var lc = trimmed.toLowerCase(); return lc.includes('"' + t.toLowerCase() + '"') || lc.includes("use " + t.toLowerCase()) || lc.includes("use the " + t.toLowerCase()) || lc.includes("using " + t.toLowerCase()); }))) {
+    if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => { var lc = trimmed.toLowerCase(); var tn = t.toLowerCase(); return lc.includes('"' + tn + '"') || lc.includes("use " + tn) || lc.includes("use the " + tn) || lc.includes("using " + tn) || lc.includes("- " + tn) || lc.includes(tn + ":"); }))) {
       state.repromptCount = repromptCount + 1;
       // Try to extract tool call from natural language plan
       const extracted = extractToolFromPlan(trimmed);
@@ -777,7 +777,7 @@ function tryParseToolCall(text) {
 
 function extractToolFromPlan(text) {
   const toolNames = Object.keys(toolDefinitions);
-  const pattern = new RegExp("(?:^|[\\n;.-])\\s*(?:\\d+\\.\\s*)?(?:I (?:should |need to |can |will |could |would )?)?(?:use|call|run|invoke|try|start|first|then|next|finally)?\\s*(?:a |an |the )?(?:" + toolNames.join("|") + ")\\s*(?:to|for|with|and)\\s*(.*?)(?=[\\n;]|\\d+\\.\\s*(?:use|call|run|invoke|try|start|then|next)|$)", "im");
+  const pattern = new RegExp("(?:^|[\\n;.-])\\s*(?:\\d+\\.\\s*)?(?:I (?:should |need to |can |will |could |would )?)?(?:(?:use|call|run|invoke|try|start|first|then|next|finally|create|write|read|search|find|delete|close|list|get|fetch|review)\\s+)?(?:a |an |the )?(?:" + toolNames.join("|") + ")\\s*(?:to|for|with|and|:)\\s*(.*?)(?=[\\n;]|\\d+\\.\\s*(?:use|call|run|invoke|try|start|then|next|create|write)|$)", "im");
   const m = text.match(pattern);
   if (!m) return null;
   const rawTool = text.slice(m.index, m.index + m[0].length);
