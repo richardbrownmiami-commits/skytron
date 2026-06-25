@@ -579,20 +579,24 @@ const toolDefinitions = {
   review_code: {
     description: "Reviews code for quality, bugs, and best practices using BUDDHI_DWAR for analysis",
     schema: z.object({
-      repo: z.string().describe("GitHub repository in format owner/repo"),
-      file_path: z.string().describe("Path to the file to review"),
+      repo: z.string().optional().describe("GitHub repository in format owner/repo"),
+      file_path: z.string().optional().describe("Path to the file to review"),
+      code: z.string().optional().describe("Raw source code to review directly (instead of repo+file_path)"),
       pr_number: z.number().optional().describe("Pull request number if reviewing code in a PR"),
     }),
     execute: async (env, input) => {
-      const token = env.GH_PAT;
-      if (!token) return "No GitHub token configured";
-      const fileResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/" + input.file_path, {
-        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
-        signal: AbortSignal.timeout(10000)
-      });
-      if (!fileResp.ok) return "Failed to fetch file: HTTP " + fileResp.status;
-      const fileData = await fileResp.json();
-      const fileContent = atob(fileData.content);
+      let fileContent = input.code;
+      if (!fileContent) {
+        const token = env.GH_PAT;
+        if (!token) return "No GitHub token configured";
+        const fileResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/" + input.file_path, {
+          headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (!fileResp.ok) return "Failed to fetch file: HTTP " + fileResp.status;
+        const fileData = await fileResp.json();
+        fileContent = atob(fileData.content);
+      }
       const reviewPrompt = "Review this code for bugs, security issues, performance problems, and best practices:\n\n```\n" + fileContent.slice(0, 2000) + "\n```\n\nProvide specific line-level feedback.";
       const reviewProviders = [
         { provider: "google", model: "gemini-2.5-flash" },
@@ -897,7 +901,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - run_code: Execute code (params: language, code)
 - prompt_edit: Override editable prompt (param: prompt)
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
-- review_code: Reviews code for quality, bugs, and best practices
+- review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
@@ -954,7 +958,7 @@ const SEED_KNOWLEDGE = [
   { k: "tool_run_code", c: "run_code(language, code): executes code snippets. Supports python and javascript. Code runs in a sandbox with 10s timeout. Use for: calculations, data processing, algorithm testing.", cat: "tools" },
   { k: "tool_prompt_edit", c: "prompt_edit(prompt): overrides the editable portion of your system prompt. Changes persist across conversations. Use for: updating your personality, adding new rules, changing behavior.", cat: "tools" },
   { k: "tool_one_knowledge", c: "one_knowledge(platform, action?, query?): looks up API documentation from One Knowledge API (76K+ API tools across 460 platforms). Platform is required (e.g. 'twitter', 'stripe', 'github'). Query is optional search term.", cat: "tools" },
-  { k: "tool_review_code", c: "review_code(repo, file_path, pr_number?): reviews a file from a GitHub repo for bugs, security, performance. Uses BUDDHI_DWAR with multiple LLM providers. Fallback: Workers AI.", cat: "tools" },
+  { k: "tool_review_code", c: "review_code(repo?, file_path?, code?, pr_number?): reviews source code for bugs, security, performance. Provide EITHER (repo + file_path) to fetch from GitHub, OR (code) to review raw source directly. Uses BUDDHI_DWAR with multiple LLM providers. Fallback: Workers AI.", cat: "tools" },
   { k: "tool_github_get_file", c: "github_get_file(repo, path, branch?): reads a file from a GitHub repository. Default repo: richardbrownmiami-commits/skytron. Use for: reading source code, configs, documentation from repos.", cat: "tools" },
   { k: "tool_github_write_file", c: "github_write_file(repo, path, content, message, sha?, branch?): writes/updates a file in a GitHub repo. Requires sha for updates (from github_get_file). Creates commit. Use for: fixing code, adding files, updating configs.", cat: "tools" },
   { k: "tool_github_search_code", c: "github_search_code(query, repo?): searches code across GitHub repositories using GitHub's code search API. Returns up to 5 results with file paths and matching fragments. Use for: finding function definitions, usage examples, configuration patterns.", cat: "tools" },
