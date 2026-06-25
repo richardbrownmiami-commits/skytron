@@ -206,8 +206,9 @@ async function ctx7Search(apiKey, query) {
     });
     if (!resp.ok) return "Context7 API returned " + resp.status;
     const data = await resp.json();
-    if (!data.libraries?.length) return "No libraries found for '" + query + "'";
-    return data.libraries.map(l => (l.id || l.name) + " - " + (l.description || "")).join("\n").slice(0, 2000);
+    const items = data.results || data.libraries || [];
+    if (!items.length) return "No libraries found for '" + query + "'";
+    return items.map(l => (l.id || l.name) + " - " + (l.description || "")).join("\n").slice(0, 2000);
   } catch (e) { return "Context7 search error: " + e.message; }
 }
 
