@@ -19,3 +19,4 @@ environment = "production"
 [vars]
 BRAIN_KEY = "Saraha-Brain-Key"
 BRAVE_API_KEY = ""
+CONTEXT7_API_KEY = ""

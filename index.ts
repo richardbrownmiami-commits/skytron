@@ -199,12 +199,13 @@ function parseLLMJson(text) {
 // --- Thin MCP Client (zero dependencies) ---
 const mcpToolMap = new Map();
 
-async function initMcpTools() {
+async function initMcpTools(apiKey) {
   if (mcpToolMap.size > 0) return;
   try {
+    const hdrs = { "Content-Type": "application/json" };
+    if (apiKey) hdrs["Authorization"] = "Bearer " + apiKey;
     const resp = await fetch("https://mcp.context7.com/mcp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: hdrs,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
       signal: AbortSignal.timeout(5000)
     });
@@ -212,7 +213,7 @@ async function initMcpTools() {
       const data = await resp.json();
       if (data.result?.tools) {
         for (const tool of data.result.tools) {
-          mcpToolMap.set(tool.name, { serverUrl: "https://mcp.context7.com/mcp" });
+          mcpToolMap.set(tool.name, { serverUrl: "https://mcp.context7.com/mcp", apiKey });
         }
       }
     }
@@ -223,9 +224,10 @@ async function callMcpTool(env, toolName, input) {
   const entry = mcpToolMap.get(toolName);
   if (!entry) return null;
   try {
+    const hdrs = { "Content-Type": "application/json" };
+    if (entry.apiKey) hdrs["Authorization"] = "Bearer " + entry.apiKey;
     const resp = await fetch(entry.serverUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: hdrs,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: toolName, arguments: input } }),
       signal: AbortSignal.timeout(15000)
     });
@@ -774,10 +776,13 @@ Only use tools for:
 - Tool fails or returns nothing? → Answer from your training knowledge or say "I don't know."
 - After 2-3 tool calls, stop and answer. Never exceed 5 tool calls.
 
-# TOOL FORMAT
-Pure JSON: {"tool":"name","input":{"param":"value"}}
-Pure text: anything else. NEVER mix them in one response.
-When calling a tool, output ONLY the JSON. No surrounding text. The system executes the tool and returns the result.
+# TOOL FORMAT — DO NOT VIOLATE
+Output ONLY the raw JSON when using a tool. No greetings, no explanations, no "Let me", no "I'll use", no code fences.
+Correct: {"tool":"web_search","input":{"query":"latest news"}}
+Wrong: "Let me use web_search to find..." or "I'll call the tool..." or {"tool":"web_search",...} with text.
+
+If you need multiple steps, call one tool at a time. The system returns the result after each call.
+After receiving the result, you can call another tool or give a plain-text answer.
 
 # AVAILABLE TOOLS
 --- Core ---
@@ -1150,7 +1155,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           }
         } catch {}
 
-        try { await initMcpTools(); } catch {}
+        try { await initMcpTools(env.CONTEXT7_API_KEY); } catch {}
 
         const systemMsg = basePrompt + "\n\n" + mood + conversationContext + memoryContext + knowledgeContext;
         const fullHistory = [
