@@ -692,11 +692,23 @@ async function processOneStep(env, action) {
     const parsed = tryParseToolCall(trimmed);
     if (parsed) {
       state.fullHistory.push({ role: "assistant", content: trimmed });
-      const result = await dispatchTool(env, parsed.tool, parsed.input);
-      if (result === null) {
-        state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
+      const callKey = parsed.tool + ":" + JSON.stringify(parsed.input);
+      if (state.lastToolCall === callKey) {
+        state.repeatCount = (state.repeatCount || 0) + 1;
       } else {
-        state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
+        state.repeatCount = 0;
+      }
+      state.lastToolCall = callKey;
+      if (state.repeatCount >= 3) {
+        state.finalContent = "I called the tool '" + parsed.tool + "' repeatedly with no progress. Here's what I got: " + (await dispatchTool(env, parsed.tool, parsed.input).catch(() => "empty")).slice(0, 800);
+        state.done = true;
+      } else {
+        const result = await dispatchTool(env, parsed.tool, parsed.input);
+        if (result === null) {
+          state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
+        } else {
+          state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
+        }
       }
       state.totalTokens += resp.tokens?.total || 0;
       state.step++;
