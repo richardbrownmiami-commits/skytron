@@ -935,7 +935,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 6. When asked about your tools, list them from memory — don't search.
 7. BE CONCISE. Give short, direct answers. No verbose intros, summaries, or extra commentary.
 8. Always wrap code and JSON in \`\`\` markdown code blocks with a language label. Never write code inline.
-9. Multi-step: call ONE tool at a time. After each result, call another tool or answer. Never describe your plan — just output the first tool JSON.
+9. Multi-step: call ONE tool at a time. After each tool result, IMMEDIATELY output the JSON for the next tool. Do NOT say "Now I need to..." or "Next I should..." — just output the JSON. Only answer in plain text when all tools are done.
 10. If you describe "use X to Y" in natural language, the system extracts the tool call automatically. But it's better to output JSON directly.
 11. After receiving a tool result, summarize it in your own words. Do NOT re-call the same tool unless the result was insufficient.
 12. For db_query: check the table names from your knowledge (actions, identity, brain_memory, brain_knowledge, brain_logs). Generate valid SQLite SQL.
@@ -963,6 +963,7 @@ const SEED_KNOWLEDGE = [
   { k: "architecture_energy", c: "Energy is stored in identity table (key='energy'). Emotions are stored as key='emotion_%'. Query with SQL.", cat: "architecture" },
   { k: "architecture_tool_fixes", c: "Re-prompt fallback: system auto-extracts tool from natural language if JSON not output. Loop detection: stops after 3 identical tool calls. Plan extraction: parses 'use X to Y' from text.", cat: "architecture" },
   { k: "architecture_context7", c: "resolve_library_id and query_docs use Context7 REST API (not MCP protocol). Key: CONTEXT7_API_KEY. Search: GET /api/v2/search?query=X. Docs: GET /api/v2/context?libraryId=X&query=Y. Authorization: Bearer.", cat: "architecture" },
+  { k: "behavior_multi_step", c: "Multi-step: call one tool at a time, JSON only. After a tool result, immediately output the next tool JSON. No 'now I need to', no descriptions. Only plain text when ALL tools are done.", cat: "behavior" },
   { k: "tool_web_search", c: "web_search(query): searches the internet via Brave Search API. Returns up to 5 results with titles, descriptions, URLs. Use for: current events, news, weather, recent data you don't know from training.", cat: "tools" },
   { k: "tool_web_fetch", c: "web_fetch(url): fetches and returns the content of a web page as markdown (up to 8000 chars). Use for: reading specific articles, documentation pages, API responses.", cat: "tools" },
   { k: "tool_db_query", c: "db_query(sql): runs SELECT queries on the D1 SQLite database. Tables: identity(key,value), brain_memory(role,content,conversation_id,created_at), brain_knowledge(key,content,category,source,created_at), actions(type,status,input,result,created_at,completed_at), brain_logs(action_id,step,content,model,tokens). Read-only SELECT only. Use for: counting actions, checking status, querying memories.", cat: "tools" },
