@@ -8,7 +8,7 @@ const TABLES = [
   `CREATE TABLE IF NOT EXISTS brain_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action_id INTEGER, step TEXT NOT NULL, content TEXT, model TEXT, tokens INTEGER, created_at TEXT DEFAULT (datetime('now')))`,
 ];
 
-const SCHEMA_VERSION = '6';
+const SCHEMA_VERSION = '7';
 
 async function initSchema(db, env) {
   try {
@@ -834,6 +834,12 @@ const SEED_KNOWLEDGE = [
   { k: "knowledge_source_one", c: "One Knowledge at https://api.withone.ai -- 76K+ API tools across 460 platforms.", cat: "knowledge" },
   { k: "knowledge_source_wikipedia", c: "Wikipedia API at https://en.wikipedia.org/api/rest_v1/page/summary/TOPIC.", cat: "knowledge" },
   { k: "prompt_system", c: "Prompt has two parts: HARDCODED_CORE (immutable) and editable section. prompt_edit changes only the editable part.", cat: "prompt" },
+  { k: "architecture_runtime", c: "Cloudflare Worker ES module, single file index.ts at repo root.", cat: "architecture" },
+  { k: "architecture_endpoints", c: "/think main conversation, /status health, /skytronchat chat UI, /brain/history history, /brain/memory memory, /brain/knowledge knowledge, /brain/prompt prompt, /brain/repair repair, /brain/logs logs, /brain/introspect analytics, /brain/source about, /think/result poll result, /brain/health provider health", cat: "architecture" },
+  { k: "architecture_tables", c: "identity(key,value) stores energy, confidence, emotions, prompt_override. brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens). knowledge_fts is FTS5 full-text search.", cat: "architecture" },
+  { k: "architecture_bindings", c: "DB -> D1. BUDDHI_DWAR gateway. VECTORIZE semantic search. CF_API_TOKEN for Workers AI. BRAVE_API_KEY for web search. ONE_KNOWLEDGE_KEY for API lookups.", cat: "architecture" },
+  { k: "llm_providers", c: "BUDDHI_DWAR gateway first (groq/llama-3.3-70b, mistral/mistral-small-latest, opencode-zen/deepseek-v4-flash-free). Fallback: Workers AI @cf/meta/llama-3.1-8b-instruct.", cat: "architecture" },
+  { k: "knowledge_system", c: "brain_knowledge with FTS5 full-text search (searchKnowledge function) + Vectorize semantic search (semanticSearch function).", cat: "architecture" },
   { k: "architecture_energy", c: "Energy is stored in identity table (key='energy'). Emotions are stored as key='emotion_%'. Query with SQL.", cat: "architecture" },
 ];
 
