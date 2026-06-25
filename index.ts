@@ -197,49 +197,33 @@ function parseLLMJson(text) {
 }
 
 // --- Thin MCP Client (zero dependencies) ---
-const mcpToolMap = new Map();
-
-async function initMcpTools(apiKey) {
-  if (mcpToolMap.size > 0) return;
+// Direct Context7 REST API calls (MCP server requires OAuth session, REST API works with API key)
+async function ctx7Search(apiKey, query) {
   try {
-    const hdrs = { "Content-Type": "application/json" };
-    if (apiKey) hdrs["Authorization"] = "Bearer " + apiKey;
-    const resp = await fetch("https://mcp.context7.com/mcp", {
-      method: "POST", headers: hdrs,
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
-      signal: AbortSignal.timeout(5000)
+    const resp = await fetch("https://context7.com/api/v2/search?query=" + encodeURIComponent(query), {
+      headers: { Authorization: "Bearer " + apiKey },
+      signal: AbortSignal.timeout(10000)
     });
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data.result?.tools) {
-        for (const tool of data.result.tools) {
-          mcpToolMap.set(tool.name, { serverUrl: "https://mcp.context7.com/mcp", apiKey });
-        }
-      }
-    }
-  } catch {}
+    if (!resp.ok) return "Context7 API returned " + resp.status;
+    const data = await resp.json();
+    if (!data.libraries?.length) return "No libraries found for '" + query + "'";
+    return data.libraries.map(l => (l.id || l.name) + " - " + (l.description || "")).join("\n").slice(0, 2000);
+  } catch (e) { return "Context7 search error: " + e.message; }
 }
 
-async function callMcpTool(env, toolName, input) {
-  const entry = mcpToolMap.get(toolName);
-  if (!entry) return null;
+async function ctx7Docs(apiKey, libraryId, query) {
   try {
-    const hdrs = { "Content-Type": "application/json" };
-    if (entry.apiKey) hdrs["Authorization"] = "Bearer " + entry.apiKey;
-    const resp = await fetch(entry.serverUrl, {
-      method: "POST", headers: hdrs,
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: toolName, arguments: input } }),
+    const resp = await fetch("https://context7.com/api/v2/context?libraryId=" + encodeURIComponent(libraryId) + "&query=" + encodeURIComponent(query), {
+      headers: { Authorization: "Bearer " + apiKey },
       signal: AbortSignal.timeout(15000)
     });
-    if (!resp.ok) return { error: "MCP server error: " + resp.status };
+    if (!resp.ok) return "Context7 API returned " + resp.status;
     const data = await resp.json();
-    if (data.error) return { error: data.error.message || "MCP error" };
-    const content = data.result?.content || [];
-    return content.filter(c => c.type === "text").map(c => c.text).join("\n") || JSON.stringify(data.result || {});
-  } catch (e) { return { error: e.message || "MCP call failed" }; }
+    return (typeof data === "string" ? data : JSON.stringify(data)).slice(0, 4000);
+  } catch (e) { return "Context7 docs error: " + e.message; }
 }
 
-// Unified tool dispatch: built-in tools first, then MCP tools
+// Unified tool dispatch: built-in tools first
 async function dispatchTool(env, toolName, input) {
   const def = toolDefinitions[toolName];
   if (def) {
@@ -248,12 +232,6 @@ async function dispatchTool(env, toolName, input) {
       const result = await def.execute(env, parsed);
       return typeof result === "string" ? result : JSON.stringify(result);
     } catch (e) { return "[TOOL ERROR: " + (e.message || String(e)) + "]"; }
-  }
-  if (mcpToolMap.has(toolName)) {
-    const result = await callMcpTool(env, toolName, input);
-    if (result === null) return "[TOOL ERROR: MCP tool '" + toolName + "' not available]";
-    if (result.error) return "[TOOL ERROR: " + result.error + "]";
-    return result;
   }
   return null;
 }
@@ -638,6 +616,16 @@ const toolDefinitions = {
       return "All review providers failed. Unable to complete code review.";
     },
   },
+  resolve_library_id: {
+    description: "Search for a library on Context7 to resolve its ID for documentation queries.",
+    schema: z.object({ query: z.string().describe("Library name to search for (e.g. 'react', 'next.js')") }),
+    execute: async (env, input) => ctx7Search(env.CONTEXT7_API_KEY, input.query),
+  },
+  query_docs: {
+    description: "Get up-to-date documentation for a library from Context7.",
+    schema: z.object({ libraryId: z.string().describe("Library ID resolved via resolve_library_id (e.g. '/vercel/next.js')"), query: z.string().describe("What you want to know about the library") }),
+    execute: async (env, input) => ctx7Docs(env.CONTEXT7_API_KEY, input.libraryId, input.query),
+  },
 };
 
 // --- Cron-based agent loop (async) ---
@@ -651,7 +639,7 @@ async function loadAgentState(db, actionId) {
 async function deleteAgentState(db, actionId) {
   await db.prepare("DELETE FROM identity WHERE key='agent_state_' || ?1").bind(String(actionId)).run();
 }
-function listTools() { return Object.keys(toolDefinitions).concat([...mcpToolMap.keys()]).join(", "); }
+function listTools() { return Object.keys(toolDefinitions).join(", "); }
 
 async function processOneStep(env, action) {
   const db = env.DB;
@@ -874,9 +862,9 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - github_create_pr: Create pull request (params: repo, title, head, base?, body?)
 - github_close_pr: Close a pull request (params: repo, pr_number)
 - github_delete_branch: Delete a branch (params: repo, branch)
---- Live Docs ---
-- resolve-library-id: Find a library ID for query-docs (param: query)
-- query-docs: Get live API docs for a library (params: libraryId, query)
+--- Live Docs (Context7) ---
+- resolve_library_id: Search for a library to get its ID (params: query)
+- query_docs: Get live API docs for a library (params: libraryId, query)
 --- Dynamic Tool Creation ---
 - create_tool: Add a new tool to your source code (params: repo, name, description, paramsSchema, executeCode, branch?)
   Reads index.ts, inserts the tool definition, writes to a branch, creates a PR.
@@ -1226,8 +1214,6 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
             if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES:\n" + mr.results.map(m => { var c = m.content.slice(0, 400); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
           }
         } catch {}
-
-        try { await initMcpTools(env.CONTEXT7_API_KEY); } catch {}
 
         const systemMsg = basePrompt + "\n\n" + mood + conversationContext + memoryContext + knowledgeContext;
         const fullHistory = [
