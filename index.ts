@@ -152,44 +152,17 @@ async function webSearch(env, query) {
 
 const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054eba9a58a9573949" };
 
-const LLM_TASKS = {
-  chat: {
-    providers: [
-      { provider: "groq", model: "llama-3.3-70b-versatile" },
-      { provider: "openrouter", model: "openrouter/free" },
-      { provider: "mistral", model: "mistral-small-latest" },
-      { provider: "google", model: "gemini-2.5-flash" },
-      { provider: "opencode-zen", model: "deepseek-v4-flash-free" },
-    ],
-    max_tokens: 1000,
-    temperature: 0.7,
-  },
-  review: {
-    providers: [
-      { provider: "google", model: "gemini-2.5-flash" },
-      { provider: "mistral", model: "mistral-small-latest" },
-      { provider: "groq", model: "llama-3.3-70b-versatile" },
-    ],
-    max_tokens: 2000,
-    temperature: 0.3,
-  },
-  quick: {
-    providers: [
-      { provider: "groq", model: "llama-3.3-70b-versatile" },
-    ],
-    max_tokens: 500,
-    temperature: 0.5,
-  },
-};
-
-async function callLLM(env, body, sessionId, task = "chat") {
+async function callLLM(env, body, sessionId) {
   if (!env.BUDDHI_DWAR) return null;
-  const config = LLM_TASKS[task] || LLM_TASKS.chat;
-  const { providers, max_tokens } = config;
+  const providers = [
+    { provider: "groq", model: "llama-3.3-70b-versatile" },
+    { provider: "mistral", model: "mistral-small-latest" },
+    { provider: "opencode-zen", model: "deepseek-v4-flash-free" },
+  ];
   const errors = [];
   for (const p of providers) {
     try {
-      const reqBody = { messages: body.messages, provider: p.provider, model: p.model, max_tokens, temperature: body.temperature ?? config.temperature };
+      const reqBody = { messages: body.messages, provider: p.provider, model: p.model, max_tokens: 1000 };
       const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
         body: JSON.stringify(reqBody), signal: AbortSignal.timeout(10000)
@@ -214,7 +187,7 @@ async function callLLM(env, body, sessionId, task = "chat") {
     try {
       const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
         method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: body.messages, max_tokens }), signal: AbortSignal.timeout(60000)
+        body: JSON.stringify({ messages: body.messages, max_tokens: 1000 }), signal: AbortSignal.timeout(60000)
       });
       if (waResp.ok) {
         const waData = await waResp.json();
@@ -646,8 +619,30 @@ const toolDefinitions = {
       const fileData = await fileResp.json();
       const fileContent = atob(fileData.content);
       const reviewPrompt = "Review this code for bugs, security issues, performance problems, and best practices:\n\n```\n" + fileContent.slice(0, 2000) + "\n```\n\nProvide specific line-level feedback.";
-      const reviewResp = await callLLM(env, { messages: [{ role: "user", content: reviewPrompt }] }, "review", "review");
-      if (reviewResp?.content) return "Review of " + input.file_path + ":\n\n" + reviewResp.content;
+      const reviewProviders = [
+        { provider: "google", model: "gemini-2.5-flash" },
+        { provider: "mistral", model: "mistral-small-latest" },
+        { provider: "groq", model: "llama-3.3-70b-versatile" },
+      ];
+      for (const rp of reviewProviders) {
+        if (!env.BUDDHI_DWAR) break;
+        try {
+          const rResp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
+            method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
+            body: JSON.stringify({ provider: rp.provider, model: rp.model, messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }), signal: AbortSignal.timeout(30000)
+          });
+          if (rResp.ok) { const d = await rResp.json(); const c = d.choices?.[0]?.message?.content; if (typeof c === "string") return "Review of " + input.file_path + ":\n\n" + c; }
+        } catch {}
+      }
+      if (env.CF_API_TOKEN) {
+        try {
+          const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
+            method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
+            body: JSON.stringify({ messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }), signal: AbortSignal.timeout(60000)
+          });
+          if (waResp.ok) { const d = await waResp.json(); if (typeof d.result?.response === "string") return "Review of " + input.file_path + " (Workers AI):\n\n" + d.result.response; }
+        } catch {}
+      }
       return "All review providers failed. Unable to complete code review.";
     },
   },
@@ -678,7 +673,7 @@ async function processOneStep(env, action) {
   let lastErrors = [];
   for (let retry = 0; retry < 3; retry++) {
     if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
-    resp = await callLLM(env, { messages: state.fullHistory }, "skytron-" + state.conversationId, "chat");
+    resp = await callLLM(env, { messages: state.fullHistory }, "skytron-" + state.conversationId);
     if (!resp) continue;
     if (!resp.content && resp.errors) lastErrors = resp.errors;
     content = resp.content;
