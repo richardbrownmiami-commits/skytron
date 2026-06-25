@@ -930,7 +930,9 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 10. If you describe "use X to Y" in natural language, the system extracts the tool call automatically. But it's better to output JSON directly.
 11. After receiving a tool result, summarize it in your own words. Do NOT re-call the same tool unless the result was insufficient.
 12. For db_query: check the table names from your knowledge (actions, identity, brain_memory, brain_knowledge, brain_logs). Generate valid SQLite SQL.
-13. For GitHub tools: your default repo is richardbrownmiami-commits/skytron. Include it explicitly.`;
+13. For GitHub tools: your default repo is richardbrownmiami-commits/skytron. Include it explicitly.
+14. review_code fetches the file from GitHub itself when given repo + file_path. Do NOT call github_get_file first — just call review_code directly.
+15. github_get_file returns only the first 4000 chars. For full file access, use review_code or github_write_file instead.`;
 
 const SYSTEM_PROMPT = `You run on Cloudflare Workers with databases, web search, code execution, and GitHub access.`;
 
@@ -959,7 +961,7 @@ const SEED_KNOWLEDGE = [
   { k: "tool_prompt_edit", c: "prompt_edit(prompt): overrides the editable portion of your system prompt. Changes persist across conversations. Use for: updating your personality, adding new rules, changing behavior.", cat: "tools" },
   { k: "tool_one_knowledge", c: "one_knowledge(platform, action?, query?): looks up API documentation from One Knowledge API (76K+ API tools across 460 platforms). Platform is required (e.g. 'twitter', 'stripe', 'github'). Query is optional search term.", cat: "tools" },
   { k: "tool_review_code", c: "review_code(repo?, file_path?, code?, pr_number?): reviews source code for bugs, security, performance. Provide EITHER (repo + file_path) to fetch from GitHub, OR (code) to review raw source directly. Uses BUDDHI_DWAR with multiple LLM providers. Fallback: Workers AI.", cat: "tools" },
-  { k: "tool_github_get_file", c: "github_get_file(repo, path, branch?): reads a file from a GitHub repository. Default repo: richardbrownmiami-commits/skytron. Use for: reading source code, configs, documentation from repos.", cat: "tools" },
+  { k: "tool_github_get_file", c: "github_get_file(repo, path, branch?): reads a file from GitHub (first 4000 chars only). Default repo: richardbrownmiami-commits/skytron. For full file analysis, use review_code instead (it fetches the full file itself).", cat: "tools" },
   { k: "tool_github_write_file", c: "github_write_file(repo, path, content, message, sha?, branch?): writes/updates a file in a GitHub repo. Requires sha for updates (from github_get_file). Creates commit. Use for: fixing code, adding files, updating configs.", cat: "tools" },
   { k: "tool_github_search_code", c: "github_search_code(query, repo?): searches code across GitHub repositories using GitHub's code search API. Returns up to 5 results with file paths and matching fragments. Use for: finding function definitions, usage examples, configuration patterns.", cat: "tools" },
   { k: "tool_github_create_branch", c: "github_create_branch(repo, branch, source?): creates a new branch from the latest commit on the source branch (defaults to main). Use before github_write_file or create_tool.", cat: "tools" },
