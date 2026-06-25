@@ -690,8 +690,9 @@ async function processOneStep(env, action) {
 
     const trimmed = content.trim();
     let parsed = tryParseToolCall(trimmed);
-    if (!parsed && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => trimmed.includes('"' + t + '"') || trimmed.includes("use " + t) || trimmed.includes("use the " + t)))) {
-      // Model talked about calling a tool without JSON — re-prompt with strict reminder
+    const repromptCount = state.repromptCount || 0;
+    if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => trimmed.includes('"' + t + '"') || trimmed.includes("use " + t) || trimmed.includes("use the " + t)))) {
+      state.repromptCount = repromptCount + 1;
       state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
       state.fullHistory.push({ role: "user", content: "[SYSTEM: You described using a tool but did NOT output the JSON. Output ONLY the raw JSON: {\"tool\":\"name\",\"input\":{...}}. No text, no explanation. Just the JSON object.]" });
       await saveAgentState(db, action.id, state);
