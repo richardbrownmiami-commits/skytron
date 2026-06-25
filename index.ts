@@ -794,10 +794,6 @@ function buildToolInput(toolName, desc) {
   const schema = def.schema;
   const shape = schema ? Object.keys(schema.shape) : [];
   const input = {};
-  if (shape.length === 1) {
-    input[shape[0]] = desc;
-    return { tool: toolName, input };
-  }
   if (toolName === "db_query") {
     const sqlMatch = desc.match(/(SELECT\s+.+?)(?:\s+and\s+then|\s+finally|\s+next|\d+\.|\n|$)/i);
     if (sqlMatch) input.sql = sqlMatch[1];
@@ -818,6 +814,10 @@ function buildToolInput(toolName, desc) {
   }
   if (toolName === "web_search") {
     input.query = desc;
+    return { tool: toolName, input };
+  }
+  if (shape.length === 1) {
+    input[shape[0]] = desc;
     return { tool: toolName, input };
   }
   return null;
