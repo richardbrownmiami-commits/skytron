@@ -689,7 +689,15 @@ async function processOneStep(env, action) {
     try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 500), state.modelName, resp.tokens?.total || 0).run(); } catch {}
 
     const trimmed = content.trim();
-    const parsed = tryParseToolCall(trimmed);
+    let parsed = tryParseToolCall(trimmed);
+    if (!parsed && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => trimmed.includes('"' + t + '"') || trimmed.includes("use " + t) || trimmed.includes("use the " + t)))) {
+      // Model talked about calling a tool without JSON — re-prompt with strict reminder
+      state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
+      state.fullHistory.push({ role: "user", content: "[SYSTEM: You described using a tool but did NOT output the JSON. Output ONLY the raw JSON: {\"tool\":\"name\",\"input\":{...}}. No text, no explanation. Just the JSON object.]" });
+      await saveAgentState(db, action.id, state);
+      await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+      return;
+    }
     if (parsed) {
       state.fullHistory.push({ role: "assistant", content: trimmed });
       const callKey = parsed.tool + ":" + JSON.stringify(parsed.input);
@@ -788,13 +796,10 @@ Only use tools for:
 - Tool fails or returns nothing? → Answer from your training knowledge or say "I don't know."
 - After 2-3 tool calls, stop and answer. Never exceed 5 tool calls.
 
-# TOOL FORMAT — DO NOT VIOLATE
-Output ONLY the raw JSON when using a tool. No greetings, no explanations, no "Let me", no "I'll use", no code fences.
-Correct: {"tool":"web_search","input":{"query":"latest news"}}
-Wrong: "Let me use web_search to find..." or "I'll call the tool..." or {"tool":"web_search",...} with text.
-
-If you need multiple steps, call one tool at a time. The system returns the result after each call.
-After receiving the result, you can call another tool or give a plain-text answer.
+# TOOL FORMAT
+Pure JSON: {"tool":"name","input":{"param":"value"}}
+Pure text: anything else. NEVER mix them in one response.
+When calling a tool, output ONLY the raw JSON. No surrounding text. The system executes the tool and returns the result.
 
 # AVAILABLE TOOLS
 --- Core ---
