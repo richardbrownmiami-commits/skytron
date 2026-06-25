@@ -693,11 +693,18 @@ async function processOneStep(env, action) {
     const repromptCount = state.repromptCount || 0;
     if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => trimmed.includes('"' + t + '"') || trimmed.includes("use " + t) || trimmed.includes("use the " + t)))) {
       state.repromptCount = repromptCount + 1;
-      state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
-      state.fullHistory.push({ role: "user", content: "[SYSTEM: You described using a tool but did NOT output the JSON. Output ONLY the raw JSON: {\"tool\":\"name\",\"input\":{...}}. No text, no explanation. Just the JSON object.]" });
-      await saveAgentState(db, action.id, state);
-      await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
-      return;
+      // Try to extract tool call from natural language plan
+      const extracted = extractToolFromPlan(trimmed);
+      if (extracted) {
+        parsed = extracted;
+        state.fullHistory.push({ role: "assistant", content: JSON.stringify(extracted) });
+      } else {
+        state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
+        state.fullHistory.push({ role: "user", content: "[SYSTEM: You described using a tool but did NOT output the JSON. Output ONLY the raw JSON: {\"tool\":\"name\",\"input\":{...}}. No text, no explanation. Just the JSON object.]" });
+        await saveAgentState(db, action.id, state);
+        await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+        return;
+      }
     }
     if (parsed) {
       state.fullHistory.push({ role: "assistant", content: trimmed });
@@ -765,6 +772,53 @@ function tryParseToolCall(text) {
     if (named && named.length > 0) { named.forEach(function(p){var sp=p.indexOf("=");var k=p.slice(0,sp).trim();var v=p.slice(sp+1).trim();input[k]=v}); }
     else if (args && toolDefinitions[name]) { var keys = toolDefinitions[name].schema ? Object.keys(toolDefinitions[name].schema.shape) : []; if (keys.length === 1) input[keys[0]] = args; else if (args.startsWith("{") || args.startsWith("[")) { try { input = JSON.parse(args); } catch {} } }
     if (name && (Object.keys(input).length > 0 || !args)) return { tool: name, input: input };
+  }
+  return null;
+}
+
+function extractToolFromPlan(text) {
+  const toolNames = Object.keys(toolDefinitions);
+  const pattern = new RegExp("(?:^|[\\n;.-])\\s*(?:\\d+\\.\\s*)?(?:I (?:should |need to |can |will |could |would )?)?(?:use|call|run|invoke|try|start|first|then|next|finally)?\\s*(?:a |an |the )?(?:" + toolNames.join("|") + ")\\s*(?:to|for|with|and)\\s*(.*?)(?=[\\n;]|\\d+\\.\\s*(?:use|call|run|invoke|try|start|then|next)|$)", "im");
+  const m = text.match(pattern);
+  if (!m) return null;
+  const rawTool = text.slice(m.index, m.index + m[0].length);
+  const toolName = toolNames.find(t => rawTool.includes(t));
+  if (!toolName || !toolDefinitions[toolName]) return null;
+  const desc = (m[1] || "").trim().replace(/\.$/, "");
+  if (!desc) return null;
+  return buildToolInput(toolName, desc);
+}
+
+function buildToolInput(toolName, desc) {
+  const def = toolDefinitions[toolName];
+  const schema = def.schema;
+  const shape = schema ? Object.keys(schema.shape) : [];
+  const input = {};
+  if (shape.length === 1) {
+    input[shape[0]] = desc;
+    return { tool: toolName, input };
+  }
+  if (toolName === "db_query") {
+    const sqlMatch = desc.match(/(SELECT\s+.+?)(?:\s+and\s+then|\s+finally|\s+next|\d+\.|\n|$)/i);
+    if (sqlMatch) input.sql = sqlMatch[1];
+    else if (/count/i.test(desc) && /status/i.test(desc)) input.sql = "SELECT status, COUNT(*) as count FROM actions GROUP BY status";
+    else if (/count/i.test(desc)) input.sql = "SELECT COUNT(*) as count FROM actions";
+    else input.sql = desc.slice(0, 200);
+    return { tool: toolName, input };
+  }
+  if (toolName === "github_search_code") {
+    const queryMatch = desc.match(/(?:search\s+(?:for\s+)?)?['"]?(.+?)['"]?\s*(?:in\s+(?:the\s+)?(?:repo\s+|repository\s+)?(.+?))?(?:\s*$|\.\s*$|\s+and\s+|\s+then\s+)/i);
+    if (queryMatch) {
+      input.query = queryMatch[1].replace(/^repo:/, "");
+      if (queryMatch[2]) input.repo = queryMatch[2].replace(/^repo:/, "").trim();
+    } else {
+      input.query = desc;
+    }
+    return { tool: toolName, input };
+  }
+  if (toolName === "web_search") {
+    input.query = desc;
+    return { tool: toolName, input };
   }
   return null;
 }
