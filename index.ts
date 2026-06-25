@@ -712,6 +712,8 @@ async function processOneStep(env, action) {
         state.repeatCount = 0;
       }
       state.lastToolCall = callKey;
+      // Save repeatCount before dispatch in case dispatch times out (long-running tools)
+      await saveAgentState(db, action.id, state);
       if (state.repeatCount >= 3) {
         state.finalContent = "I called the tool '" + parsed.tool + "' repeatedly with no progress. Here's what I got: " + (await dispatchTool(env, parsed.tool, parsed.input).catch(() => "empty")).slice(0, 800);
         state.done = true;
