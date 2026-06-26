@@ -536,7 +536,16 @@ const toolDefinitions = {
       // 3. Generate tool definition block
       const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
 
-      // 4. Insert into toolDefinitions (find closing '};' before '// --- Cron' marker)
+      // 4. Insert into toolDefinitions (find closing '
+  reddit_search: {
+    description: "[REMOVED] Reddit search tool disabled - Reddit API requires OAuth authentication, this tool no longer works",
+    schema: z.object({}),
+    execute: async (env, input) => {
+// Reddit search tool removed due to API changes
+return { disabled: true, reason: 'Reddit API requires OAuth, public endpoints deprecated' }
+    },
+  },
+};' before '// --- Cron' marker)
       const marker = "// --- Cron-based agent loop";
       const markerPos = currentContent.indexOf(marker);
       if (markerPos === -1) return "Could not find insertion point in source";
@@ -938,6 +947,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 - reddit_search: Search Reddit posts (params: query, subreddit?, limit?)
+- reddit_search: [REMOVED] Reddit search tool disabled - Reddit API requires OAuth authentication, this tool no longer works
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
