@@ -632,6 +632,18 @@ const toolDefinitions = {
     schema: z.object({ libraryId: z.string().describe("Library ID resolved via resolve_library_id (e.g. '/vercel/next.js')"), query: z.string().describe("What you want to know about the library") }),
     execute: async (env, input) => ctx7Docs(env.CONTEXT7_API_KEY, input.libraryId, input.query),
   },
+
+  reddit_search: {
+    description: "Search Reddit's public API without authentication using the simple .json endpoint pattern (https://www.reddit.com/search.json?q=query). Supports optional subreddit filtering and result limit.",
+    schema: z.object({
+    query: z.string(),
+    subreddit: z.string().optional(),
+    limit: z.number().optional()
+}),
+    execute: async (env, input) => {
+async (query, subreddit, limit) => {\n  let url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}`;\n  if (subreddit) {\n    url = `https://www.reddit.com/r/${subreddit}/search.json?q=${encodeURIComponent(query)}`;\n  }\n  if (limit) {\n    url += `&limit=${limit}`;\n  }\n  const response = await fetch(url);\n  if (!response.ok) {\n    throw new Error(`Reddit API error: ${response.status}`);\n  }\n  const data = await response.json();\n  return {\n    posts: data.data.children.map(post => ({\n      title: post.data.title,\n      author: post.data.author,\n      score: post.data.score,\n      url: post.data.url,\n      created: post.data.created_utc,\n      selftext: post.data.selftext,\n      numComments: post.data.num_comments\n    })),\n    after: data.data.after,\n    hasNextPage: !!data.data.after\n  };\n}
+    },
+  },
 };
 
 // --- Cron-based agent loop (async) ---
@@ -908,6 +920,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - prompt_edit: Override editable prompt (param: prompt)
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
+- reddit_search: Search Reddit's public API without authentication using the simple .json endpoint pattern (https://www.reddit.com/search.json?q=query). Supports optional subreddit filtering and result limit.
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
