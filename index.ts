@@ -1126,6 +1126,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - learn: Store a fact/lesson in long-term knowledge (params: key, content, category?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 - reddit_search: Search Reddit posts (params: query, subreddit?, limit?)
+- search_apis: Search for public APIs by keyword on GitHub and web (params: query, limit?). Better than web_search for finding new APIs to integrate.
 - spawn_agent: Spawn a sub-agent for parallel work (params: name, role, instruction). Agent runs independently with its own prompt, limited tools, max 8 steps. Returns agent ID. Check result with get_agent_result.
 - get_agent_result: Check the result of a spawned sub-agent (params: id). Returns "still running" with step count, or the final output.
 --- GitHub ---
