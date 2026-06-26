@@ -614,6 +614,14 @@ return {
 };
     },
   },
+
+  npm_search: {
+    description: "Search NPM packages using npm registry API",
+    schema: z.object({ query: z.string() }),
+    execute: async (env, input) => {
+const apiUrl = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}`;\n\nconst response = await fetch(apiUrl);\n\nif (!response.ok) {\n  return { error: `NPM API request failed with status ${response.status}` };\n}\n\nconst data = await response.json();\n\nif (!data.objects || data.objects.length === 0) {\n  return { error: `No packages found for query: ${query}` };\n}\n\nreturn {\n  query: query,\n  total: data.total,\n  packages: data.objects.map(pkg => ({\n    name: pkg.package.name,\n    description: pkg.package.description,\n    score: pkg.score,\n    publisher: pkg.package.publisher,\n    maintainers: pkg.package.maintainers,\n    version: pkg.package.version,\n    links: pkg.package.links,\n    repository: pkg.package.repository,\n    npmjs: `https://www.npmjs.com/package/${pkg.package.name}`\n  }))\n};
+    },
+  },
 };' before '// --- Cron' marker)
       const marker = "// --- Cron-based agent loop";
       const markerPos = currentContent.indexOf(marker);
@@ -1019,6 +1027,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 - reddit_search: Search Reddit posts (params: query, subreddit?, limit?)
 - npm_search: Search npm packages using npm registry API
+- npm_search: Search NPM packages using npm registry API
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
