@@ -73,13 +73,9 @@ async function getPromptSlot(db, slotName) {
 
 function detectTaskType(input) {
   const lower = (input || "").toLowerCase();
-  // Coding: mentions code editing, create_tool, git, PR, branch, file write, review
-  if (/\b(create_tool|add (a |)tool|new (tool|command|feature)|write (code|file)|edit (code|file)|refactor|fix (bug|issue)|pull request|pr|branch|commit|push|deploy|github_)/.test(lower)) return "coding";
-  // Search: explicit search queries, lookup, find, what is, how to, current, latest, news
-  if (/\b(search|lookup|find |what is the |how (does|do|to)|current |latest |news |weather|price|stock|define|meaning|documentation)/.test(lower)) return "search";
-  // Review: code review requests
-  if (/\b(review|check (code|my|this)|code review|audit|inspect)/.test(lower)) return "review";
-  // Default for everything else is chat mode
+  if (/\b(create_tool|add\b.*\btool|new (tool|command|feature)|write\b.*\b(file|code)|write_file|edit\b|refactor|fix\b.*\b(bug|issue)|pull request|pr\b|branch|commit|push\b|deploy|github_.*)/.test(lower)) return "coding";
+  if (/search|lookup|find\b|what is the |how (does|do|to)|current\b|latest\b|news\b|weather\b|price\b|stock\b|define\b|meaning\b|documentation/.test(lower) && !lower.includes("edit") && !lower.includes("fix ") && !lower.includes("pr ") && !lower.includes("branch")) return "search";
+  if (/\b(review\b|check\b|\bcode\b.*\breview\b|audit\b|inspect\b)/.test(lower) && !/\b(create|write|edit|fix|github_)/.test(lower)) return "review";
   return "chat";
 }
 
