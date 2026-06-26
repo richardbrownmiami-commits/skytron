@@ -847,6 +847,11 @@ async function processOneStep(env, action) {
         } else {
           state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
         }
+        // Reflection checkpoint: when tool fails, force structured analysis before next action
+        if (result && result.startsWith("[TOOL ERROR:")) {
+          state.repeatCount = 0; // Reset to prevent triple-fail force-stop — reflection counts as new attempt
+          state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nBefore your next action, audit:\n1. ERROR ANALYSIS: What specific error occurred? Why?\n2. ASSUMPTION CHECK: What assumption might be wrong?\n3. PATH VALIDATION: Same tool fixed? Different tool? Direct answer?\n4. ENERGY & FOCUS: Am I stuck in a loop? Time to summarize?\n\nAfter this audit, output your next action." });
+        }
       }
       state.totalTokens += resp.tokens?.total || 0;
       state.step++;
