@@ -589,7 +589,58 @@ const toolDefinitions = {
       // 3. Generate tool definition block
       const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
 
-      // 4. Insert into toolDefinitions (find closing '};' before '// --- Cron' marker)
+      // 4. Insert into toolDefinitions (find closing '
+  npm_search: {
+    description: "Search npm packages using npm registry API",
+    schema: z.object({ query: z.string(), limit: z.number().optional().default(10), filetype: z.string().optional(), downloads: z.boolean().optional().default(false) }),
+    execute: async (env, input) => {
+const url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(params.query)}&size=${params.limit || 10}`;
+const response = await fetch(url);
+const data = await response.json();
+if (!data.objects || data.objects.length === 0) {
+  return { error: 'No packages found', query: params.query };
+}
+const packages = data.objects.map(obj => ({
+  name: obj.package.name,
+  version: obj.package.version,
+  description: obj.package.description,
+  maintainer: obj.package.maintainer?.name || obj.package.maintainer?.username || 'Unknown',
+  downloads: params.downloads ? `https://www.npmjs.com/package/${obj.package.name}` : null
+}));
+return {
+  query: params.query,
+  total_found: data.total,
+  packages: packages
+};
+    },
+  },
+
+  npm_search: {
+    description: "Search NPM packages using npm registry API",
+    schema: z.object({ query: z.string() }),
+    execute: async (env, input) => {
+const apiUrl = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}`;\n\nconst response = await fetch(apiUrl);\n\nif (!response.ok) {\n  return { error: `NPM API request failed with status ${response.status}` };\n}\n\nconst data = await response.json();\n\nif (!data.objects || data.objects.length === 0) {\n  return { error: `No packages found for query: ${query}` };\n}\n\nreturn {\n  query: query,\n  total: data.total,\n  packages: data.objects.map(pkg => ({\n    name: pkg.package.name,\n    description: pkg.package.description,\n    score: pkg.score,\n    publisher: pkg.package.publisher,\n    maintainers: pkg.package.maintainers,\n    version: pkg.package.version,\n    links: pkg.package.links,\n    repository: pkg.package.repository,\n    npmjs: `https://www.npmjs.com/package/${pkg.package.name}`\n  }))\n};
+    },
+  },
+
+  npm_search: {
+    description: "Search NPM packages using npm registry API",
+    schema: z.object({ query: z.string() }),
+    execute: async (env, input) => {
+const apiUrl = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}`;\n\nconst response = await fetch(apiUrl);\n\nif (!response.ok) {\n  return { error: `NPM API request failed with status ${response.status}` };\n}\n\nconst data = await response.json();\n\nif (!data.objects || data.objects.length === 0) {\n  return { error: `No packages found for query: ${query}` };\n}\n\nreturn {\n  query: query,\n  total: data.total,\n  packages: data.objects.map(pkg => ({
+    name: pkg.package.name,
+    description: pkg.package.description,
+    score: pkg.score,
+    publisher: pkg.package.publisher,
+    maintainers: pkg.package.maintainers,
+    version: pkg.package.version,
+    links: pkg.package.links,
+    repository: pkg.package.repository,
+    npmjs: `https://www.npmjs.com/package/${pkg.package.name}`
+  }))\n};
+    },
+  },
+};' before '// --- Cron' marker)
       const marker = "// --- Cron-based agent loop";
       const markerPos = currentContent.indexOf(marker);
       if (markerPos === -1) return "Could not find insertion point in source";
@@ -993,6 +1044,9 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 - reddit_search: Search Reddit posts (params: query, subreddit?, limit?)
+- npm_search: Search npm packages using npm registry API
+- npm_search: Search NPM packages using npm registry API
+- npm_search: Search NPM packages using npm registry API
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
