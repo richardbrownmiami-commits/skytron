@@ -16,6 +16,10 @@ binding = "BUDDHI_DWAR"
 service = "buddhi-dwar"
 environment = "production"
 
+[[triggers]]
+type = "cron"
+pattern = "*/1 * * * *"
+
 [vars]
 BRAIN_KEY = "Saraha-Brain-Key"
 BRAVE_API_KEY = ""

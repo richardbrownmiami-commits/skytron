@@ -739,6 +739,7 @@ const toolDefinitions = {
       const r = await env.DB.prepare("INSERT INTO brain_agents (name, role, instruction, status, conversation_history) VALUES (?1, ?2, ?3, 'queued', ?4) RETURNING id").bind(input.name, input.role, input.instruction, JSON.stringify([])).all();
       const id = r.results?.[0]?.id;
       if (!id) return "Failed to spawn agent.";
+      processOneAgentStep(env, r.results[0]).catch(e => console.error("spawn_agent immediate processing error:", e));
       return "Agent spawned. ID: " + id + ". Name: " + input.name + ". Check result with get_agent_result({ id: " + id + " }).";
     },
   },
@@ -1207,7 +1208,7 @@ export default {
       status, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
     });
 
-    if (url.pathname === "/skytronchat") return new Response(CHAT_HTML, { headers: { "Content-Type": "text/html;charset=utf-8" } });
+    if (url.pathname === "/skytronchat") return new Response(CHAT_HTML, { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" } });
 
     if (url.pathname === "/status") {
       let dbOk = false; try { await env.DB.prepare("SELECT 1").run(); dbOk = true; } catch {}
