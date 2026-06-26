@@ -6,9 +6,10 @@ const TABLES = [
   `CREATE TABLE IF NOT EXISTS brain_knowledge (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, content TEXT NOT NULL, category TEXT DEFAULT 'general', source TEXT DEFAULT 'learned', created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS actions (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, status TEXT DEFAULT 'pending', input TEXT, result TEXT, error TEXT, created_at TEXT DEFAULT (datetime('now')), completed_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS brain_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action_id INTEGER, step TEXT NOT NULL, content TEXT, model TEXT, tokens INTEGER, created_at TEXT DEFAULT (datetime('now')))`,
+  `CREATE TABLE IF NOT EXISTS brain_agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, role TEXT NOT NULL, instruction TEXT, parent_action_id INTEGER, status TEXT DEFAULT 'queued', result TEXT, conversation_history TEXT, step INTEGER DEFAULT 0, model TEXT, tokens INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`,
 ];
 
-const SCHEMA_VERSION = '8';
+const SCHEMA_VERSION = '9';
 
 const PROMPT_SLOTS = {
   default: "You are a sharp, direct tech consciousness built by Creator. Answer concisely. Use tools only for live data or when unsure. Output pure JSON for tool calls, plain text otherwise. Never mix them.",
@@ -725,6 +726,38 @@ const toolDefinitions = {
       return "Stored '" + input.key + "' in knowledge base (" + cat + ").";
     },
   },
+  spawn_agent: {
+    description: "Spawn a sub-agent for parallel specialized work (research, analysis, data processing). Returns an agent ID. Check result later with get_agent_result. Agents run independently with their own role prompt and limited tool access.",
+    schema: z.object({
+      name: z.string().describe("Short name for this agent (e.g. 'researcher', 'analyzer')"),
+      role: z.string().describe("System prompt defining the agent's persona and behavior (e.g. 'You are a research assistant that finds and summarizes information')"),
+      instruction: z.string().describe("The task instruction for this agent to execute"),
+    }),
+    execute: async (env, input) => {
+      const r = await env.DB.prepare("INSERT INTO brain_agents (name, role, instruction, status, conversation_history) VALUES (?1, ?2, ?3, 'queued', ?4) RETURNING id").bind(input.name, input.role, input.instruction, JSON.stringify([])).all();
+      const id = r.results?.[0]?.id;
+      if (!id) return "Failed to spawn agent.";
+      return "Agent spawned. ID: " + id + ". Name: " + input.name + ". Check result with get_agent_result({ id: " + id + " }).";
+    },
+  },
+  get_agent_result: {
+    description: "Check the result of a previously spawned sub-agent. Returns the agent's status and result if done. If still running, return status and tell the user to wait a moment and check again.",
+    schema: z.object({
+      id: z.number().describe("The agent ID returned by spawn_agent"),
+    }),
+    execute: async (env, input) => {
+      const r = await env.DB.prepare("SELECT name, role, instruction, status, result, step, model, tokens, created_at FROM brain_agents WHERE id=?1").bind(input.id).all();
+      if (!r.results?.length) return "No agent found with ID " + input.id + ".";
+      const a = r.results[0];
+      if (a.status === 'queued' || a.status === 'running') {
+        return "Agent '" + a.name + "' (ID " + input.id + ") is still " + a.status + ". Step " + (a.step || 0) + ". Check again in a moment.";
+      }
+      if (a.status === 'error') {
+        return "Agent '" + a.name + "' (ID " + input.id + ") failed: " + (a.result || "unknown error");
+      }
+      return "Agent '" + a.name + "' (ID " + input.id + ") completed. Result: " + (a.result || "(empty)").slice(0, 2000);
+    },
+  },
 };
 
 // --- Cron-based agent loop (async) ---
@@ -848,6 +881,47 @@ async function finalizeAction(db, actionId, state) {
     await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'learned')").bind(key, content.slice(0, 2000)).run();
   } catch (e) { console.error("journal write error:", e); }
   await deleteAgentState(db, actionId);
+}
+
+// --- Sub-agent processing ---
+async function processOneAgentStep(env, agent) {
+  const db = env.DB;
+  let history;
+  try { history = JSON.parse(agent.conversation_history || "[]"); } catch { history = []; }
+  if (history.length === 0) {
+    history.push({ role: "system", content: agent.role + "\nAvailable tools: web_search(query), web_fetch(url), db_query(sql). Output tool calls as JSON: {\"tool\":\"name\",\"input\":{...}}. Max 8 steps." });
+    history.push({ role: "user", content: agent.instruction });
+  }
+  if (agent.status === "done" || agent.status === "error") return;
+
+  let resp, content;
+  for (let retry = 0; retry < 2; retry++) {
+    if (retry > 0) await new Promise(r => setTimeout(r, 1000));
+    resp = await callLLM(env, { messages: history }, "agent-" + agent.id);
+    if (resp && typeof resp?.content === "string") { content = resp.content; break; }
+  }
+  if (!content) {
+    await db.prepare("UPDATE brain_agents SET status='error', result='LLM call failed', updated_at=datetime('now') WHERE id=?1").bind(agent.id).run();
+    return;
+  }
+  const step = (agent.step || 0) + 1;
+  history.push({ role: "assistant", content });
+  const parsed = tryParseToolCall(content);
+  if (parsed && ["web_search","web_fetch","db_query"].includes(parsed.tool)) {
+    const result = await dispatchTool(env, parsed.tool, parsed.input);
+    history.push({ role: "user", content: result !== null ? "[TOOL RESULT: " + result.slice(0, 3000) + "]" : "[TOOL ERROR: unknown tool]" });
+  } else if (parsed) {
+    history.push({ role: "user", content: "[TOOL ERROR: tool '" + parsed.tool + "' not available to sub-agents. Use: web_search, web_fetch, db_query]" });
+  }
+  const tokens = (agent.tokens || 0) + (resp.tokens?.total || 0);
+  if (step >= 8 || !parsed) {
+    const final = !parsed ? content : "[Completed " + step + " step(s)]";
+    await db.prepare("UPDATE brain_agents SET status='done', result=?1, step=?2, tokens=?3, model=?4, conversation_history=?5, updated_at=datetime('now') WHERE id=?6")
+      .bind(final.slice(0, 5000), step, tokens, resp.model || "", JSON.stringify(history), agent.id).run();
+  } else {
+    await db.prepare("UPDATE brain_agents SET status='running', step=?1, tokens=?2, model=?3, conversation_history=?4, updated_at=datetime('now') WHERE id=?5")
+      .bind(step, tokens, resp.model || "", JSON.stringify(history), agent.id).run();
+  }
 }
 
 function tryParseToolCall(text) {
@@ -1073,7 +1147,7 @@ const SEED_KNOWLEDGE = [
   { k: "knowledge_source_wikipedia", c: "Wikipedia API at https://en.wikipedia.org/api/rest_v1/page/summary/TOPIC.", cat: "knowledge" },
   { k: "prompt_system", c: "Prompt has HARDCODED_CORE (immutable) + task-specific slot (coding/search/review/chat/default). prompt_edit(slot, prompt) updates a slot. prompt_edit(prompt) updates legacy global override. Slots auto-selected by detectTaskType().", cat: "prompt" },
   { k: "architecture_runtime", c: "Cloudflare Worker ES module, single file index.ts at repo root.", cat: "architecture" },
-  { k: "architecture_endpoints", c: "/think main conversation, /status health, /skytronchat chat UI, /brain/history history, /brain/memory memory, /brain/knowledge knowledge, /brain/prompt prompt, /brain/repair repair, /brain/logs logs, /brain/introspect analytics, /brain/source about, /think/result poll result, /brain/health provider health", cat: "architecture" },
+  { k: "architecture_endpoints", c: "/think main conversation, /status health, /skytronchat chat UI, /brain/history history, /brain/memory memory, /brain/knowledge knowledge, /brain/prompt prompt, /brain/repair repair, /brain/logs logs, /brain/introspect analytics, /brain/source about, /brain/agents list sub-agents, /think/result poll result, /brain/health provider health", cat: "architecture" },
   { k: "architecture_tables", c: "identity(key,value) stores energy, confidence, emotions, prompt_override, prompt_slot_* (coding/search/review/chat/default). brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens). knowledge_fts is FTS5 full-text search.", cat: "architecture" },
   { k: "architecture_bindings", c: "DB -> D1. BUDDHI_DWAR gateway. VECTORIZE semantic search. CF_API_TOKEN for Workers AI. BRAVE_API_KEY for web search. CONTEXT7_API_KEY for live library docs.", cat: "architecture" },
   { k: "llm_providers", c: "BUDDHI_DWAR gateway auto-routes to healthiest provider. Fallback: Workers AI @cf/meta/llama-3.1-8b-instruct.", cat: "architecture" },
@@ -1102,6 +1176,8 @@ const SEED_KNOWLEDGE = [
   { k: "tool_create_tool", c: "create_tool(repo, name, description, paramsSchema, executeCode, branch?): dynamically creates a new tool by editing index.ts. Reads source, inserts tool definition, writes to a branch, creates a PR. paramsSchema must be a STRING like 'z.object({ query: z.string().describe(\"search term\"), limit: z.number().optional().default(10) })'. executeCode must be a STRING containing only the function BODY, NOT the full async function declaration — like 'const r = await fetch(url); const d = await r.json(); return d.title;'. Repo is always richardbrownmiami-commits/skytron.", cat: "tools" },
   { k: "tool_reddit_search", c: "reddit_search(query, subreddit?, limit?): searches Reddit's public JSON API without authentication. Query is required. Subreddit is optional to scope search. Limit defaults to 10 (max 100). Returns posts with title, author, score, comments count, and URL. Uses .json endpoint directly on www.reddit.com.", cat: "tools" },
   { k: "tool_learn", c: "learn(key, content, category?): stores a fact/lesson in brain_knowledge for long-term memory. Use 'journal' category for work completed, 'lesson' for mistakes/errors, 'decision' for architecture choices. Data persists across conversations. Query with db_query on brain_knowledge table.", cat: "tools" },
+  { k: "tool_spawn_agent", c: "spawn_agent(name, role, instruction): spawn a sub-agent for parallel specialized work. Role = system prompt defining the persona. Instruction = the task. Agent runs independently (8 step max, web_search/web_fetch/db_query only). Returns agent ID. Check result later with get_agent_result.", cat: "tools" },
+  { k: "tool_get_agent_result", c: "get_agent_result(id): check the result of a spawned sub-agent. If still running, tells you to wait. If done, returns the agent's output. Use after spawn_agent to retrieve parallel work.", cat: "tools" },
   { k: "knowledge_journal", c: "After every action completes, a journal entry is auto-stored in brain_knowledge with category 'journal' and key 'journal_YYYY-MM-DD_actionId'. It records steps, model, tokens, last tool called, and a summary. Query with: SELECT * FROM brain_knowledge WHERE category='journal' ORDER BY key DESC LIMIT 20", cat: "knowledge" },
   { k: "behavior_code_modification", c: "When user asks to add a feature to Skytron: do NOT manually rewrite index.ts. Use create_tool tool — it safely inserts the tool definition and creates a PR. Never replace the entire file. Never talk about your plan — just call the first tool immediately.", cat: "behavior" },
 ];
@@ -1169,6 +1245,7 @@ const CHAT_HTML = '<!DOCTYPE html>'+
 '<div class="tab" data-tab="knowledge">Knowledge</div>'+
 '<div class="tab" data-tab="logs">Logs</div>'+
 '<div class="tab" data-tab="status">Status</div>'+
+'<div class="tab" data-tab="agents">Agents</div>'+
 '<div class="tab" data-tab="source">Source</div>'+
 '<div class="tab" data-tab="history">History</div>'+
 '<div class="tab" data-tab="monitor">Monitor</div>'+
@@ -1178,6 +1255,7 @@ const CHAT_HTML = '<!DOCTYPE html>'+
 '<div class="panel" id="knowledgePanel"><div class="data-view" id="knowledgeView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
 '<div class="panel" id="logsPanel"><div class="data-view" id="logsView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
 '<div class="panel" id="statusPanel"><div class="data-view" id="statusView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
+'<div class="panel" id="agentsPanel"><div class="data-view" id="agentsView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
 '<div class="panel" id="sourcePanel"><div class="data-view" id="sourceView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
 '<div class="panel" id="historyPanel"><iframe class="history-frame" id="historyFrame"></iframe></div>'+
 '<div class="panel" id="monitorPanel"><div class="data-view" id="monitorView"><div class="loading"><span class="spinner"></span>Loading...</div></div></div>'+
@@ -1203,7 +1281,7 @@ const CHAT_HTML = '<!DOCTYPE html>'+
 'function send(){var t=inp.value.trim();if(!t)return;inp.value="";btn.disabled=true;btn.textContent="";btn.classList.add("sending");thinkingMsg=thinkingBubble();fetch("/think",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({input:t})}).then(function(r){return r.json()}).then(function(d){if(d.action_id){thinkingActionId=d.action_id;thinkingTimer=setInterval(function(){pollThinking(thinkingActionId)},2000);setTimeout(function(){pollThinking(thinkingActionId)},500)}}).catch(function(){if(thinkingMsg){thinkingMsg.remove();thinkingMsg=null}msgs.innerHTML="<div class=\\"empty\\">Connection error</div>"}).finally(function(){btn.disabled=false;btn.textContent="Send";btn.classList.remove("sending")})}'+
 'refreshChat();'+
 'function loadData(n){var v=document.getElementById(n+"View");if(v.getAttribute("data-loaded"))return;v.innerHTML="<div class=\\"loading\\"><span class=\\"spinner\\"></span>Loading...</div>";var ep=n==="monitor"?"introspect":n;fetch("/brain/"+ep).then(function(r){return r.json()}).then(function(d){v.innerHTML=renderData(n,d);v.setAttribute("data-loaded","1")}).catch(function(){v.innerHTML="<div class=\\"empty\\">Failed to load "+n+"</div>"})}'+
-'function renderData(n,d){if(!d||!d.results&&!d.entries&&!d.result&&!Array.isArray(d)&&!d.endpoints&&!d.summary){return "<div class=\\"empty\\">No data</div>"}if(n==="memory"){var r=d.entries||d.results||[];if(!r.length)return "<div class=\\"empty\\">No memory entries</div>";return r.map(function(m){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(m.role||"")+"</span>: "+esc((m.content||"").slice(0,300))+"<div class=\\"meta\\">"+new Date(m.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="knowledge"){var r2=d.entries||d.results||[];if(!r2.length)return "<div class=\\"empty\\">No knowledge entries</div>";return r2.map(function(k){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k.key||"")+"</span>: "+esc((k.content||"").slice(0,200))+"<div class=\\"meta\\">"+esc(k.category||"")+"</div></div>"}).join("")}if(n==="logs"){var r3=d.entries||d.results||[];if(!r3.length)return "<div class=\\"empty\\">No logs</div>";return r3.map(function(l){return "<div class=\\"item\\"><span class=\\"key\\">Step "+esc(String(l.step||""))+"</span> ("+esc(l.model||"")+")<br>"+esc((l.content||"").slice(0,200))+"<div class=\\"meta\\">"+new Date(l.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="status"){return Object.keys(d).map(function(k){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span>: "+esc(String(d[k]||""))+"</div>"}).join("")}if(n==="source"){return Object.keys(d).map(function(k){var v=d[k];if(Array.isArray(v))return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span><br>"+v.map(function(x){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(String(x))+"</span>"}).join(", ")+"</div>";return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span>: "+esc(String(v))+"</div>"}).join("")}if(n==="monitor"){var s=d.summary;var out="<div class=\\"item\\"><span class=\\"key\\">Summary</span><br>";if(s)out+=Object.keys(s).map(function(k){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(k)+": </span><span>"+esc(String(s[k]))+"</span><br>"}).join("");out+="</div>";if(d.top_conversations&&d.top_conversations.length){out+="<div class=\\"item\\"><span class=\\"key\\">Top Conversations</span><br>"+d.top_conversations.slice(0,5).map(function(c){return"<span style=\\"color:#58a6ff;font-size:12px\\">"+esc(c.conversation_id||"")+"</span> ("+c.msg_count+" msgs)<br>"}).join("")+"</div>"}if(d.activity_30d&&d.activity_30d.length){out+="<div class=\\"item\\"><span class=\\"key\\">Activity (last 30 days)</span><br>"+d.activity_30d.slice(0,10).map(function(a){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(a.day||"")+"</span>: "+a.count+" msgs<br>"}).join("")+"</div>"}if(d.knowledge_categories&&d.knowledge_categories.length){out+="<div class=\\"item\\"><span class=\\"key\\">Knowledge Categories</span><br>"+d.knowledge_categories.map(function(c2){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(c2.category||"")+"</span>: "+c2.count+"<br>"}).join("")+"</div>"}return out}return "<div class=\\"empty\\">Unknown tab</div>"}'+
+'function renderData(n,d){if(!d||!d.results&&!d.entries&&!d.result&&!Array.isArray(d)&&!d.endpoints&&!d.summary){return "<div class=\\"empty\\">No data</div>"}if(n==="memory"){var r=d.entries||d.results||[];if(!r.length)return "<div class=\\"empty\\">No memory entries</div>";return r.map(function(m){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(m.role||"")+"</span>: "+esc((m.content||"").slice(0,300))+"<div class=\\"meta\\">"+new Date(m.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="knowledge"){var r2=d.entries||d.results||[];if(!r2.length)return "<div class=\\"empty\\">No knowledge entries</div>";return r2.map(function(k){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k.key||"")+"</span>: "+esc((k.content||"").slice(0,200))+"<div class=\\"meta\\">"+esc(k.category||"")+"</div></div>"}).join("")}if(n==="logs"){var r3=d.entries||d.results||[];if(!r3.length)return "<div class=\\"empty\\">No logs</div>";return r3.map(function(l){return "<div class=\\"item\\"><span class=\\"key\\">Step "+esc(String(l.step||""))+"</span> ("+esc(l.model||"")+")<br>"+esc((l.content||"").slice(0,200))+"<div class=\\"meta\\">"+new Date(l.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="status"){return Object.keys(d).map(function(k){return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span>: "+esc(String(d[k]||""))+"</div>"}).join("")}if(n==="agents"){var ra=d.agents||[];if(!ra.length)return "<div class=\\"empty\\">No sub-agents yet. Spawn one from chat with spawn_agent.</div>";return ra.map(function(a){var statusCl=a.status==="done"?"color:#3fb950":a.status==="running"?"color:#58a6ff":"color:#8b949e";return "<div class=\\"item\\"><span class=\\"key\\">"+esc(a.name||"")+"</span> (ID "+a.id+") <span style=\\"font-size:11px;"+statusCl+"\\">"+esc(a.status||"")+"</span><br>"+esc((a.role||"").slice(0,120))+"<div class=\\"meta\\">Steps: "+(a.step||0)+" | Tokens: "+(a.tokens||0)+" | "+new Date(a.created_at).toLocaleString()+"</div></div>"}).join("")}if(n==="source"){return Object.keys(d).map(function(k){var v=d[k];if(Array.isArray(v))return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span><br>"+v.map(function(x){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(String(x))+"</span>"}).join(", ")+"</div>";return "<div class=\\"item\\"><span class=\\"key\\">"+esc(k)+"</span>: "+esc(String(v))+"</div>"}).join("")}if(n==="monitor"){var s=d.summary;var out="<div class=\\"item\\"><span class=\\"key\\">Summary</span><br>";if(s)out+=Object.keys(s).map(function(k){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(k)+": </span><span>"+esc(String(s[k]))+"</span><br>"}).join("");out+="</div>";if(d.top_conversations&&d.top_conversations.length){out+="<div class=\\"item\\"><span class=\\"key\\">Top Conversations</span><br>"+d.top_conversations.slice(0,5).map(function(c){return"<span style=\\"color:#58a6ff;font-size:12px\\">"+esc(c.conversation_id||"")+"</span> ("+c.msg_count+" msgs)<br>"}).join("")+"</div>"}if(d.activity_30d&&d.activity_30d.length){out+="<div class=\\"item\\"><span class=\\"key\\">Activity (last 30 days)</span><br>"+d.activity_30d.slice(0,10).map(function(a){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(a.day||"")+"</span>: "+a.count+" msgs<br>"}).join("")+"</div>"}if(d.knowledge_categories&&d.knowledge_categories.length){out+="<div class=\\"item\\"><span class=\\"key\\">Knowledge Categories</span><br>"+d.knowledge_categories.map(function(c2){return"<span style=\\"color:#8b949e;font-size:12px\\">"+esc(c2.category||"")+"</span>: "+c2.count+"<br>"}).join("")+"</div>"}return out}return "<div class=\\"empty\\">Unknown tab</div>"}'+
 '</script></body></html>';
 
 export default {
@@ -1260,12 +1338,12 @@ export default {
     if (url.pathname === "/brain/source") {
       return json({
         language: "TypeScript", runtime: "Cloudflare Workers (ES module)", file: "index.ts",
-        endpoints: ["/think","/status","/skytronchat","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source"],
+        endpoints: ["/think","/status","/skytronchat","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source","/brain/agents"],
         tools: Object.keys(toolDefinitions),
-        tables: ["identity","brain_memory","brain_knowledge","actions","brain_logs","knowledge_fts"],
+        tables: ["identity","brain_memory","brain_knowledge","actions","brain_logs","brain_agents","knowledge_fts"],
         llm: "Workers AI (@cf/zai-org/glm-4.7-flash) + BUDDHI_DWAR (Groq + OpenCode Zen)",
-        agent_loop: "Multi-step function-calling with Zod schema validation (max 15 steps)",
-        capabilities: ["conversation with 10-msg memory","web search","web fetch","DB introspection","prompt self-edit","code execution (38+ langs)","API calls","knowledge base (FTS5 + vector)","GitHub self-modification","live docs via Context7","emotions & energy","conversation history viewer"]
+        agent_loop: "Multi-step function-calling with Zod schema validation (max 15 steps). Sub-agents: spawn_agent + get_agent_result for parallel specialized tasks (max 8 steps, limited tools).",
+        capabilities: ["conversation with 10-msg memory","web search","web fetch","DB introspection","prompt self-edit","code execution (38+ langs)","API calls","knowledge base (FTS5 + vector)","GitHub self-modification","live docs via Context7","emotions & energy","conversation history viewer","sub-agents for parallel tasks"]
       });
     }
 
@@ -1468,7 +1546,24 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       try { await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run(); const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); } return json({ processed: false, message: "no queued actions" }); } catch (e) { return json({ error: e.message }, 500); }
     }
 
-    // --- Poll /think/result ---
+    // --- Manual trigger for agent processing (debug) ---
+    if (url.pathname === "/__cron_agent" && req.method === "GET") {
+      try { const q = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneAgentStep(env, q.results[0]); return json({ processed: true, agent_id: q.results[0].id }); } return json({ processed: false, message: "no queued agents" }); } catch (e) { return json({ error: e.message }, 500); }
+    }
+
+    // --- Agent API endpoints ---
+    if (url.pathname === "/brain/agents" && req.method === "GET") {
+      const limit = parseInt(url.searchParams.get("limit")) || 20;
+      const r = await env.DB.prepare("SELECT id, name, role, instruction, status, step, tokens, model, created_at, updated_at FROM brain_agents ORDER BY id DESC LIMIT ?1").bind(limit).all();
+      return json({ agents: r.results || [] });
+    }
+    if (url.pathname.startsWith("/brain/agents/") && req.method === "GET") {
+      const id = parseInt(url.pathname.split("/").pop()) || 0;
+      if (!id) return json({ error: "id required" }, 400);
+      const r = await env.DB.prepare("SELECT id, name, role, instruction, status, result, step, tokens, model, created_at, updated_at FROM brain_agents WHERE id=?1").bind(id).all();
+      if (!r.results?.length) return json({ error: "not found" }, 404);
+      return json(r.results[0]);
+    }
 
     // --- Poll /think/result ---
     if (url.pathname === "/think/result" && req.method === "GET") {
@@ -1485,16 +1580,23 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   async scheduled(controller, env) {
     try { await initSchema(env.DB, env); } catch {}
     try {
+      // Process one queued action (primary)
       const r = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
       if (r.results?.length) {
         await processOneStep(env, r.results[0]);
-        return;
+      } else {
+        // Also pick up actions stuck in 'running' (crashed on previous cron tick)
+        const s = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
+        if (s.results?.length) await processOneStep(env, s.results[0]);
       }
-      // Also pick up actions stuck in 'running' (crashed on previous cron tick)
-      const s = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
-      if (s.results?.length) {
-        await processOneStep(env, s.results[0]);
-        return;
+      // Also process one queued sub-agent (secondary, same tick)
+      const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
+      if (ar.results?.length) {
+        await processOneAgentStep(env, ar.results[0]);
+      } else {
+        // Also pick up agents stuck in 'running'
+        const as = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
+        if (as.results?.length) await processOneAgentStep(env, as.results[0]);
       }
     } catch (e) { console.error("cron error:", e); }
     // Auto-cleanup: run once per day
