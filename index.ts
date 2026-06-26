@@ -174,19 +174,21 @@ async function indexAllKnowledge(env, db) {
 }
 
 async function webSearch(env, query) {
+  let lastError = "";
   if (env.BRAVE_API_KEY) {
     try {
       const resp = await fetch("https://api.search.brave.com/res/v1/web/search?q=" + encodeURIComponent(query) + "&count=5", {
         headers: { "X-Subscription-Token": env.BRAVE_API_KEY, "Accept": "application/json" }, signal: AbortSignal.timeout(10000)
       });
       if (resp.ok) { const data = await resp.json(); const results = data.web?.results || []; if (results.length) return results.map(r => r.title + ": " + (r.description || "")).join("\n"); }
-    } catch {}
+      lastError = "Brave returned " + resp.status;
+    } catch (e) { lastError = "Brave error: " + (e.message || e); }
   }
   try {
     const resp = await fetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query), { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(15000) });
     const html = await resp.text();
     const linkMatches = [...html.matchAll(/<a[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g)].slice(0, 5);
-    if (!linkMatches.length) return "No results for: " + query;
+    if (!linkMatches.length) return "[TOOL ERROR: DuckDuckGo returned no results. " + lastError + "]";
     const sniMatches = [...html.matchAll(/<td\s+class=['"]result-snippet['"][^>]*>([\s\S]*?)<\//g)];
     return linkMatches.map((m, i) => {
       const title = m[1].replace(/<[^>]*>/g, "").trim();
@@ -195,8 +197,8 @@ async function webSearch(env, query) {
       const snippet = sniMatches[i] ? sniMatches[i][1].replace(/<[^>]*>/g, "").trim() : "";
       return title + " (" + finalUrl + "): " + snippet;
     }).join("\n");
-  } catch {}
-  return "No results for: " + query;
+  } catch (e) { lastError = "DuckDuckGo error: " + (e.message || e); }
+  return "[TOOL ERROR: web_search failed. " + lastError + "]";
 }
 
 const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054eba9a58a9573949" };
@@ -847,10 +849,10 @@ async function processOneStep(env, action) {
         } else {
           state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
         }
-        // Reflection checkpoint: when tool fails, force structured analysis before next action
+        // Reflection checkpoint: force structured analysis when tool fails
         if (result && result.startsWith("[TOOL ERROR:")) {
-          state.repeatCount = 0; // Reset to prevent triple-fail force-stop — reflection counts as new attempt
-          state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nBefore your next action, audit:\n1. ERROR ANALYSIS: What specific error occurred? Why?\n2. ASSUMPTION CHECK: What assumption might be wrong?\n3. PATH VALIDATION: Same tool fixed? Different tool? Direct answer?\n4. ENERGY & FOCUS: Am I stuck in a loop? Time to summarize?\n\nAfter this audit, output your next action." });
+          state.repeatCount = 0;
+          state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Audit before acting:\n1. ERROR: What failed and why?\n2. ASSUMPTION: What was wrong with my approach?\n3. PATH: Should I fix params, switch tools, or answer directly?\n4. LOOP CHECK: Am I stuck? If so, answer in plain text now.\n\nOutput your audit FIRST, then your action." });
         }
         // Success audit: every other step, reflect on what worked
         if (result && !result.startsWith("[TOOL ERROR:") && state.step > 0 && state.step % 2 === 0) {
