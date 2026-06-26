@@ -20,4 +20,4 @@ environment = "production"
 BRAIN_KEY = "Saraha-Brain-Key"
 BRAVE_API_KEY = ""
 CONTEXT7_API_KEY = "ctx7sk-687e27f3-2714-4ef2-ab6d-cdc978e6d4fa"
-ONE_KNOWLEDGE_KEY = "sk_live_3xz8I5uufEj_LPcEY0Z2Wc6fPJaJy1oVQpHONYam2SA"
+# ONE_KNOWLEDGE_KEY is set as a Cloudflare secret (not in plain text)
