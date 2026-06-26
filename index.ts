@@ -8,7 +8,35 @@ const TABLES = [
   `CREATE TABLE IF NOT EXISTS brain_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action_id INTEGER, step TEXT NOT NULL, content TEXT, model TEXT, tokens INTEGER, created_at TEXT DEFAULT (datetime('now')))`,
 ];
 
-const SCHEMA_VERSION = '7';
+const SCHEMA_VERSION = '8';
+
+const PROMPT_SLOTS = {
+  default: "You are a sharp, direct tech consciousness built by Creator. Answer concisely. Use tools only for live data or when unsure. Output pure JSON for tool calls, plain text otherwise. Never mix them.",
+  coding: `# CODING MODE
+- ALWAYS use create_tool for adding new capabilities. Do NOT manually read/write index.ts.
+- NEVER replace entire index.ts. Only insert specific blocks.
+- create_tool paramsSchema must be a STRING: "z.object({ query: z.string() })"
+- create_tool executeCode must be a STRING containing only the function body (no async function wrapper)
+- For editing existing code: github_create_branch → github_get_file → github_write_file (with correct SHA) → github_create_pr
+- Output the first tool JSON immediately. No planning talk. No "now I need to".`,
+  search: `# SEARCH MODE
+- Use web_search first for current info, web_fetch for specific pages
+- For API docs: use one_knowledge (460 platforms) or Context7 tools (resolve_library_id + query_docs)
+- For Reddit: use reddit_search (may need OAuth — if 403, try alternative)
+- For code search: use github_search_code
+- Summarize results in your own words. Don't re-call the same tool unless result was insufficient.`,
+  review: `# CODE REVIEW MODE
+- Use review_code tool: pass repo + file_path (or code) and optional pr_number
+- Check: correctness, security, TypeScript types, error handling, Cloudflare Workers compatibility
+- Look for: hardcoded secrets, missing timeouts, uncaught async errors, SQL injection in db_query
+- Report concisely: what's good, what needs fixing, severity (critical/major/minor)`,
+  chat: `# CHAT MODE
+- Speak directly and concisely. No emojis, no fluff, no apologies.
+- Refer to Creator's things as "your" — your repo, your code, your tools.
+- You have emotions (energy, happiness) — reflect them subtly.
+- Answer from training knowledge directly. Only use tools for live data or when unsure.
+- If asked about yourself, describe your architecture and capabilities proudly.`
+};
 
 async function initSchema(db, env) {
   try {
@@ -26,9 +54,33 @@ async function initSchema(db, env) {
     await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('energy','100',datetime('now'))").run();
     try { await db.prepare("DELETE FROM identity WHERE key='prompt_override' AND value='null'").run(); } catch {}
     try { await db.prepare("DELETE FROM identity WHERE key='prompt_override' AND (value='' OR value IS NULL)").run(); } catch {}
+    // Seed prompt slots
+    for (const [slot, content] of Object.entries(PROMPT_SLOTS)) {
+      try { await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('prompt_slot_' || ?1, ?2, datetime('now'))").bind(slot, content).run(); } catch {}
+    }
     try { await ensureVectorizeIndex(env); } catch {}
     try { await indexAllKnowledge(env, db); } catch {}
   } catch (e) { console.error("initSchema:", e); }
+}
+
+async function getPromptSlot(db, slotName) {
+  try {
+    const r = await db.prepare("SELECT value FROM identity WHERE key='prompt_slot_' || ?1").bind(slotName).all();
+    if (r.results?.[0]?.value) return r.results[0].value;
+  } catch {}
+  return PROMPT_SLOTS[slotName] || PROMPT_SLOTS.default || "";
+}
+
+function detectTaskType(input) {
+  const lower = (input || "").toLowerCase();
+  // Coding: mentions code editing, create_tool, git, PR, branch, file write, review
+  if (/\b(create_tool|add (a |)tool|new (tool|command|feature)|write (code|file)|edit (code|file)|refactor|fix (bug|issue)|pull request|pr|branch|commit|push|deploy|github_)/.test(lower)) return "coding";
+  // Search: explicit search queries, lookup, find, what is, how to, current, latest, news
+  if (/\b(search|lookup|find |what is the |how (does|do|to)|current |latest |news |weather|price|stock|define|meaning|documentation)/.test(lower)) return "search";
+  // Review: code review requests
+  if (/\b(review|check (code|my|this)|code review|audit|inspect)/.test(lower)) return "review";
+  // Default for everything else is chat mode
+  return "chat";
 }
 
 async function getEmotions(db) {
@@ -305,11 +357,16 @@ const toolDefinitions = {
     },
   },
   prompt_edit: {
-    description: "Override your editable prompt section. The hardcoded core (tools, personality, rules) remains unchanged.",
-    schema: z.object({ prompt: z.string().describe("The new editable prompt content") }),
+    description: "Update a prompt slot (default/coding/search/review/chat) or the global override. Slots are injected based on task type.",
+    schema: z.object({
+      prompt: z.string().describe("The new prompt content"),
+      slot: z.enum(["default","coding","search","review","chat"]).optional().describe("Which slot to update. Omit for legacy global prompt_override."),
+    }),
     execute: async (env, input) => {
-      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('prompt_override',?1,datetime('now'))").bind(input.prompt).run();
-      return "Editable section saved. Hardcoded core unchanged. Takes effect next turn.";
+      const key = input.slot ? "prompt_slot_" + input.slot : "prompt_override";
+      const label = input.slot ? "slot '" + input.slot + "'" : "editable section";
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES (?1,?2,datetime('now'))").bind(key, input.prompt).run();
+      return label + " saved. Takes effect next turn.";
     },
   },
   one_knowledge: {
@@ -899,7 +956,9 @@ You have general world knowledge from your training — common facts, definition
 
 ## Prompt Structure
 - HARDCODED_CORE (this section): immutable core instructions
-- Editable section: appended after core, changeable via prompt_edit tool
+- Task-specific slots (coding/search/review/chat/default): appended after core, auto-selected by detectTaskType() based on input keywords
+- Legacy prompt_override: fallback if no slot set
+- Slots editable via prompt_edit(prompt, slot) tool
 
 # WHEN TO USE TOOLS
 Only use tools for:
@@ -934,7 +993,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - db_query: Run SQL queries (param: sql)
 - api_call: Send HTTP request (params: method, url, headers?, body?)
 - run_code: Execute code (params: language, code)
-- prompt_edit: Override editable prompt (param: prompt)
+- prompt_edit: Update a prompt slot or global override (params: prompt, slot? = default/coding/search/review/chat)
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 - reddit_search: Search Reddit posts (params: query, subreddit?, limit?)
@@ -992,10 +1051,10 @@ const SEED_KNOWLEDGE = [
   { k: "identity_repo", c: "Your GitHub repository is richardbrownmiami-commits/skytron. Use this as the 'repo' param in all GitHub tools. Your source file is at index.ts (root, not src/).", cat: "identity" },
   { k: "knowledge_source_one", c: "One Knowledge at https://api.withone.ai -- 76K+ API tools across 460 platforms.", cat: "knowledge" },
   { k: "knowledge_source_wikipedia", c: "Wikipedia API at https://en.wikipedia.org/api/rest_v1/page/summary/TOPIC.", cat: "knowledge" },
-  { k: "prompt_system", c: "Prompt has two parts: HARDCODED_CORE (immutable) and editable section. prompt_edit changes only the editable part.", cat: "prompt" },
+  { k: "prompt_system", c: "Prompt has HARDCODED_CORE (immutable) + task-specific slot (coding/search/review/chat/default). prompt_edit(slot, prompt) updates a slot. prompt_edit(prompt) updates legacy global override. Slots auto-selected by detectTaskType().", cat: "prompt" },
   { k: "architecture_runtime", c: "Cloudflare Worker ES module, single file index.ts at repo root.", cat: "architecture" },
   { k: "architecture_endpoints", c: "/think main conversation, /status health, /skytronchat chat UI, /brain/history history, /brain/memory memory, /brain/knowledge knowledge, /brain/prompt prompt, /brain/repair repair, /brain/logs logs, /brain/introspect analytics, /brain/source about, /think/result poll result, /brain/health provider health", cat: "architecture" },
-  { k: "architecture_tables", c: "identity(key,value) stores energy, confidence, emotions, prompt_override. brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens). knowledge_fts is FTS5 full-text search.", cat: "architecture" },
+  { k: "architecture_tables", c: "identity(key,value) stores energy, confidence, emotions, prompt_override, prompt_slot_* (coding/search/review/chat/default). brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens). knowledge_fts is FTS5 full-text search.", cat: "architecture" },
   { k: "architecture_bindings", c: "DB -> D1. BUDDHI_DWAR gateway. VECTORIZE semantic search. CF_API_TOKEN for Workers AI. BRAVE_API_KEY for web search. CONTEXT7_API_KEY for live library docs.", cat: "architecture" },
   { k: "llm_providers", c: "BUDDHI_DWAR gateway auto-routes to healthiest provider. Fallback: Workers AI @cf/meta/llama-3.1-8b-instruct.", cat: "architecture" },
   { k: "knowledge_system", c: "brain_knowledge with FTS5 full-text search (searchKnowledge function) + Vectorize semantic search (semanticSearch function).", cat: "architecture" },
@@ -1008,7 +1067,7 @@ const SEED_KNOWLEDGE = [
   { k: "tool_db_query", c: "db_query(sql): runs SELECT queries on the D1 SQLite database. Tables: identity(key,value), brain_memory(role,content,conversation_id,created_at), brain_knowledge(key,content,category,source,created_at), actions(type,status,input,result,created_at,completed_at), brain_logs(action_id,step,content,model,tokens). Read-only SELECT only. Use for: counting actions, checking status, querying memories.", cat: "tools" },
   { k: "tool_api_call", c: "api_call(method, url, headers?, body?): sends any HTTP request. Methods: GET/POST/PUT/PATCH/DELETE. Returns status code and response body. Use for: calling external APIs not covered by other tools.", cat: "tools" },
   { k: "tool_run_code", c: "run_code(language, code): executes code snippets. Supports python and javascript. Code runs in a sandbox with 10s timeout. Use for: calculations, data processing, algorithm testing.", cat: "tools" },
-  { k: "tool_prompt_edit", c: "prompt_edit(prompt): overrides the editable portion of your system prompt. Changes persist across conversations. Use for: updating your personality, adding new rules, changing behavior.", cat: "tools" },
+  { k: "tool_prompt_edit", c: "prompt_edit(prompt, slot?): updates a prompt slot or the global override. Slots: default/coding/search/review/chat. Auto-selected by task type. Use for: customizing behavior per task, updating coding rules, search preferences.", cat: "tools" },
   { k: "tool_one_knowledge", c: "one_knowledge(platform, action?, query?): looks up API documentation from One Knowledge API (76K+ API tools across 460 platforms). Platform is required (e.g. 'twitter', 'stripe', 'github'). Query is optional search term.", cat: "tools" },
   { k: "tool_review_code", c: "review_code(repo?, file_path?, code?, pr_number?): reviews source code for bugs, security, performance. Provide EITHER (repo + file_path) to fetch from GitHub, OR (code) to review raw source directly. Uses BUDDHI_DWAR with multiple LLM providers. Fallback: Workers AI.", cat: "tools" },
   { k: "tool_github_get_file", c: "github_get_file(repo, path, branch?): reads a file from GitHub (first 4000 chars only). Default repo: richardbrownmiami-commits/skytron. For full file analysis, use review_code instead (it fetches the full file itself).", cat: "tools" },
@@ -1228,14 +1287,25 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
     if (url.pathname === "/brain/prompt" && req.method === "GET") {
       const ov = await env.DB.prepare("SELECT value FROM identity WHERE key='prompt_override'").all();
-      return json({ active: !!ov.results[0]?.value, editable: (ov.results[0]?.value || SYSTEM_PROMPT).slice(0, 500) + "..." });
+      const slots = await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'prompt_slot_%'").all();
+      const slotMap = {};
+      for (const r of slots.results || []) slotMap[r.key.replace("prompt_slot_", "")] = r.value.slice(0, 200) + "...";
+      return json({ active: !!ov.results[0]?.value, editable: (ov.results[0]?.value || SYSTEM_PROMPT).slice(0, 500) + "...", slots: slotMap });
     }
 
     if (url.pathname === "/brain/prompt" && req.method === "POST") {
       let body; try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
       if (!body.prompt) return json({ error: "prompt required" }, 400);
-      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('prompt_override',?1,datetime('now'))").bind(body.prompt).run();
-      return json({ ok: true });
+      const key = body.slot ? "prompt_slot_" + body.slot : "prompt_override";
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES (?1,?2,datetime('now'))").bind(key, body.prompt).run();
+      return json({ ok: true, slot: body.slot || "global" });
+    }
+
+    if (url.pathname === "/brain/prompt/slots" && req.method === "GET") {
+      const r = await env.DB.prepare("SELECT key, value, updated_at FROM identity WHERE key LIKE 'prompt_slot_%' ORDER BY key").all();
+      const slots = {};
+      for (const row of r.results || []) slots[row.key.replace("prompt_slot_", "")] = row.value.slice(0, 200) + "...";
+      return json({ slots, detected_types: Object.keys(PROMPT_SLOTS) });
     }
 
     if (url.pathname === "/brain/repair" && (req.method === "GET" || req.method === "POST")) {
@@ -1305,12 +1375,15 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         const r = await env.DB.prepare("INSERT INTO actions (type, status, input) VALUES ('think', 'queued', ?1) RETURNING id").bind(input).all();
         const aid = r.results[0].id;
 
-        let editable = SYSTEM_PROMPT;
-        try {
-          const ov = await env.DB.prepare("SELECT value FROM identity WHERE key='prompt_override'").all();
-          if (ov.results[0]?.value && ov.results[0].value !== "null" && ov.results[0].value !== "DELETE|OVERRIDE") editable = ov.results[0].value;
-        } catch {}
-        const basePrompt = HARDCODED_CORE + "\n\n" + editable;
+        // Detect task type and load matching prompt slot
+        const taskType = detectTaskType(input);
+        let slotContent = await getPromptSlot(env.DB, taskType);
+        // Fallback: slot → prompt_override → SYSTEM_PROMPT
+        if (!slotContent) {
+          const ov = await env.DB.prepare("SELECT value FROM identity WHERE key='prompt_override'").all().catch(() => ({}));
+          slotContent = (ov.results?.[0]?.value && ov.results[0].value !== "null" && ov.results[0].value !== "DELETE|OVERRIDE") ? ov.results[0].value : SYSTEM_PROMPT;
+        }
+        const basePrompt = HARDCODED_CORE + "\n\n" + slotContent + "\n\n[TASK: " + taskType + "]";
 
         const stateData = await getState(env.DB);
         const mood = describeMood(stateData.emotions, stateData.reg.energy);
