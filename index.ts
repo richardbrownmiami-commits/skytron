@@ -632,6 +632,32 @@ const toolDefinitions = {
     schema: z.object({ libraryId: z.string().describe("Library ID resolved via resolve_library_id (e.g. '/vercel/next.js')"), query: z.string().describe("What you want to know about the library") }),
     execute: async (env, input) => ctx7Docs(env.CONTEXT7_API_KEY, input.libraryId, input.query),
   },
+  reddit_search: {
+    description: "Search Reddit's public API. No auth needed. Returns posts with title, author, score, comments, and URL.",
+    schema: z.object({
+      query: z.string().describe("Search query"),
+      subreddit: z.string().optional().describe("Limit search to a specific subreddit"),
+      limit: z.number().optional().default(10).describe("Number of results (max 100)"),
+    }),
+    execute: async (env, input) => {
+      let url = input.subreddit
+        ? "https://www.reddit.com/r/" + encodeURIComponent(input.subreddit) + "/search.json?q=" + encodeURIComponent(input.query) + "&limit=" + (input.limit || 10)
+        : "https://www.reddit.com/search.json?q=" + encodeURIComponent(input.query) + "&limit=" + (input.limit || 10);
+      const resp = await fetch(url, { headers: { "User-Agent": "skytron-reddit/1.0" }, signal: AbortSignal.timeout(15000) });
+      if (!resp.ok) return "Reddit API returned " + resp.status;
+      const data = await resp.json();
+      const posts = (data.data?.children || []).slice(0, input.limit || 10).map(p => ({
+        title: p.data.title,
+        author: p.data.author,
+        score: p.data.score,
+        comments: p.data.num_comments,
+        url: "https://reddit.com" + p.data.permalink,
+        subreddit: p.data.subreddit,
+        created: new Date(p.data.created_utc * 1000).toISOString().split("T")[0],
+      }));
+      return JSON.stringify(posts, null, 2);
+    },
+  },
 };
 
 // --- Cron-based agent loop (async) ---
@@ -908,6 +934,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - prompt_edit: Override editable prompt (param: prompt)
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
+- reddit_search: Search Reddit posts (params: query, subreddit?, limit?)
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
@@ -988,6 +1015,7 @@ const SEED_KNOWLEDGE = [
   { k: "tool_resolve_library_id", c: "resolve_library_id(query): searches Context7's library database for a library name and returns matching library IDs. Use before query_docs to find the correct libraryId. Example queries: 'React', 'Next.js', 'Express'.", cat: "tools" },
   { k: "tool_query_docs", c: "query_docs(libraryId, query): gets up-to-date documentation from Context7 for a specific library. libraryId format: /owner/repo (e.g. /reactjs/react.dev, /vercel/next.js). Returns relevant code snippets and documentation. Use for: API docs, usage examples, framework guides.", cat: "tools" },
   { k: "tool_create_tool", c: "create_tool(repo, name, description, paramsSchema, executeCode, branch?): dynamically creates a new tool by editing index.ts. Reads source, inserts tool definition, writes to a branch, creates a PR. paramsSchema is a Zod schema string. executeCode is the tool's execute function body. Use for: extending your capabilities with custom functionality.", cat: "tools" },
+  { k: "tool_reddit_search", c: "reddit_search(query, subreddit?, limit?): searches Reddit's public JSON API without authentication. Query is required. Subreddit is optional to scope search. Limit defaults to 10 (max 100). Returns posts with title, author, score, comments count, and URL. Uses .json endpoint directly on www.reddit.com.", cat: "tools" },
   { k: "behavior_code_modification", c: "When user asks to add a feature to Skytron: do NOT manually rewrite index.ts. Use create_tool tool — it safely inserts the tool definition and creates a PR. Never replace the entire file. Never talk about your plan — just call the first tool immediately.", cat: "behavior" },
 ];
 
