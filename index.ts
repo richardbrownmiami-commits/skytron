@@ -1544,7 +1544,8 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         if (s.results?.length) await processOneStep(env, s.results[0]);
       }
       // Reset stuck agents (running > 2min) back to queued for retry
-      await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND created_at < datetime('now', '-2 minutes')").run();
+      await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run();
+      await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
       // Process one queued sub-agent (secondary, same tick)
       const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
       if (ar.results?.length) {
