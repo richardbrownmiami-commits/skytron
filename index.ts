@@ -647,6 +647,17 @@ const toolDefinitions = {
 async (query, subreddit, limit) => {\n  let url = `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}`;\n  if (subreddit) {\n    url = `https://www.reddit.com/r/${subreddit}/search.json?q=${encodeURIComponent(query)}`;\n  }\n  if (limit) {\n    url += `&limit=${limit}`;\n  }\n  const response = await fetch(url);\n  if (!response.ok) {\n    throw new Error(`Reddit API error: ${response.status}`);\n  }\n  const data = await response.json();\n  return {\n    posts: data.data.children.map(post => ({\n      title: post.data.title,\n      author: post.data.author,\n      score: post.data.score,\n      url: post.data.url,\n      created: post.data.created_utc,\n      selftext: post.data.selftext,\n      numComments: post.data.num_comments\n    })),\n    after: data.data.after,\n    hasNextPage: !!data.data.after\n  };\n}
     },
   },
+
+  reddit_search: {
+    description: "[REMOVED] Reddit search tool disabled - Reddit API requires OAuth authentication, this tool no longer works",
+    schema: z.object({}),
+    execute: async (env, input) => {
+// Reddit search tool removed due to API changes
+// Reddit now requires OAuth authentication via Devvit platform
+// This implementation cannot function with public JSON endpoints anymore
+return { disabled: true, reason: 'Reddit API requires OAuth, public endpoints deprecated' }
+    },
+  },
 };
 
 // --- Cron-based agent loop (async) ---
@@ -924,6 +935,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 - reddit_search: Search Reddit's public API without authentication using the simple .json endpoint pattern (https://www.reddit.com/search.json?q=query). Supports optional subreddit filtering and result limit.
+- reddit_search: [REMOVED] Reddit search tool disabled - Reddit API requires OAuth authentication, this tool no longer works
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
