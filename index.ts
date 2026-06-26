@@ -762,7 +762,6 @@ const toolDefinitions = {
       const r = await env.DB.prepare("INSERT INTO brain_agents (name, role, instruction, status, conversation_history) VALUES (?1, ?2, ?3, 'queued', ?4) RETURNING id").bind(input.name, input.role, input.instruction, JSON.stringify([])).all();
       const id = r.results?.[0]?.id;
       if (!id) return "Failed to spawn agent.";
-      processOneAgentStep(env, r.results[0]).catch(e => console.error("spawn_agent immediate processing error:", e));
       return "Agent spawned. ID: " + id + ". Name: " + input.name + ". Check result with get_agent_result({ id: " + id + " }).";
     },
   },
@@ -928,6 +927,8 @@ async function processOneAgentStep(env, agent) {
     history.push({ role: "user", content: agent.instruction });
   }
   if (agent.status === "done" || agent.status === "error") return;
+  // Mark as running immediately so other ticks don't pick it up
+  await db.prepare("UPDATE brain_agents SET status='running', step=?1, updated_at=datetime('now') WHERE id=?2").bind(agent.step || 0, agent.id).run();
 
   let resp, content;
   for (let retry = 0; retry < 2; retry++) {
@@ -1474,6 +1475,13 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
             await env.DB.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(aid).run();
             await processOneStep(env, { id: aid });
           } catch (e) { console.error("background /think processing error:", e); }
+          // Process any agents spawned during the action (up to 3 per tick)
+          try {
+            const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 3").all();
+            for (const agent of (ar.results || [])) {
+              try { await processOneAgentStep(env, agent); } catch (e2) { console.error("post-action agent error:", e2); }
+            }
+          } catch (e3) { console.error("post-action agent query error:", e3); }
         })());
 
         return json({ action_id: aid, status: "queued", message: "Request queued. Poll /think/result?id=" + aid + " for result." });
@@ -1535,14 +1543,12 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         const s = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
         if (s.results?.length) await processOneStep(env, s.results[0]);
       }
-      // Also process one queued sub-agent (secondary, same tick)
+      // Reset stuck agents (running > 2min) back to queued for retry
+      await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND created_at < datetime('now', '-2 minutes')").run();
+      // Process one queued sub-agent (secondary, same tick)
       const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
       if (ar.results?.length) {
         await processOneAgentStep(env, ar.results[0]);
-      } else {
-        // Also pick up agents stuck in 'running'
-        const as = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
-        if (as.results?.length) await processOneAgentStep(env, as.results[0]);
       }
     } catch (e) { console.error("cron error:", e); }
     // Auto-cleanup: run once per day
