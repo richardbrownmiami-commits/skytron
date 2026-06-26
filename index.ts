@@ -759,7 +759,7 @@ async function processOneStep(env, action) {
     state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
   } else {
     state.modelName = resp.model;
-    try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 500), state.modelName, resp.tokens?.total || 0).run(); } catch {}
+        try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 4000), state.modelName, resp.tokens?.total || 0).run(); } catch {}
 
     const trimmed = content.trim();
     let parsed = tryParseToolCall(trimmed);
@@ -822,8 +822,8 @@ async function processOneStep(env, action) {
 async function finalizeAction(db, actionId, state) {
   if (!state.finalContent) state.finalContent = "[Reached max steps]";
   if (typeof state.finalContent !== "string") state.finalContent = String(state.finalContent);
-  await storeMemory(db, "assistant", state.finalContent.slice(0, 1000), state.conversationId);
-  await db.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(state.finalContent.slice(0, 2000), actionId).run();
+  await storeMemory(db, "assistant", state.finalContent.slice(0, 5000), state.conversationId);
+  await db.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(state.finalContent.slice(0, 5000), actionId).run();
   await deleteAgentState(db, actionId);
 }
 
@@ -1371,7 +1371,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         const llmInput = `[${from || "Creator"}] ${input}`;
         const conversationId = url.searchParams.get("c") || "default";
 
-        await storeMemory(env.DB, "user", llmInput.slice(0, 500), conversationId);
+        await storeMemory(env.DB, "user", llmInput.slice(0, 2000), conversationId);
 
         const r = await env.DB.prepare("INSERT INTO actions (type, status, input) VALUES ('think', 'queued', ?1) RETURNING id").bind(input).all();
         const aid = r.results[0].id;
@@ -1391,7 +1391,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         const recentMem = await getRecentMemory(env.DB, 10, conversationId);
 
         let conversationContext = "";
-        if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 500); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
+        if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 1000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
 
         let knowledgeContext = "";
         try {
@@ -1412,7 +1412,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
             if (recentIds) sql += " AND id NOT IN (" + recentIds + ")";
             sql += " ORDER BY id DESC LIMIT 8";
             const mr = await env.DB.prepare(sql).all();
-            if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES:\n" + mr.results.map(m => { var c = m.content.slice(0, 400); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
+            if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES:\n" + mr.results.map(m => { var c = m.content.slice(0, 1000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
           }
         } catch {}
 
