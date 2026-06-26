@@ -635,6 +635,16 @@ const toolDefinitions = {
     schema: z.object({ libraryId: z.string().describe("Library ID resolved via resolve_library_id (e.g. '/vercel/next.js')"), query: z.string().describe("What you want to know about the library") }),
     execute: async (env, input) => ctx7Docs(env.CONTEXT7_API_KEY, input.libraryId, input.query),
   },
+
+  reddit_search: {
+    description: "Search Reddit posts using Reddit's public JSON API (no authentication needed)",
+    schema: z.object({ query: z.string(), subreddit: z.string().optional(), limit: z.number().optional() }),
+    execute: async (env, input) => {
+const results = await fetch(`https://www.reddit.com${subreddit ? `/r/${subreddit}` : ''}/search.json?q=${encodeURIComponent(query)}&limit=${limit || 10}`).then(r => r.json());
+return results.data ? results.data.children.map(post => post.data) : [];
+
+    },
+  },
 };
 
 // --- Cron-based agent loop (async) ---
@@ -911,6 +921,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - prompt_edit: Override editable prompt (param: prompt)
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
+- reddit_search: Search Reddit posts using Reddit's public JSON API (no authentication needed)
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
