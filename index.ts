@@ -589,7 +589,43 @@ const toolDefinitions = {
       // 3. Generate tool definition block
       const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
 
-      // 4. Insert into toolDefinitions (find closing '};' before '// --- Cron' marker)
+      // 4. Insert into toolDefinitions (find closing '
+  search_tools: {
+    description: "Search for tools in the available tools list based on criteria like name, description, or category",
+    schema: z.object({ query: z.string() }),
+    execute: async (env, input) => {
+async ({ query }) => {
+  const tools = [
+    { name: 'web_search', description: 'Search the internet', category: 'Core' },
+    { name: 'web_fetch', description: 'Fetch a web page', category: 'Core' },
+    { name: 'db_query', description: 'Run SQL queries', category: 'Core' },
+    { name: 'api_call', description: 'Send HTTP request', category: 'Core' },
+    { name: 'run_code', description: 'Execute code', category: 'Core' },
+    { name: 'prompt_edit', description: 'Update a prompt slot', category: 'Core' },
+    { name: 'one_knowledge', description: 'Lookup API details', category: 'Core' },
+    { name: 'review_code', description: 'Reviews code for quality', category: 'Core' },
+    { name: 'reddit_search', description: 'Search Reddit posts', category: 'Core' },
+    { name: 'github_get_file', description: 'Read file from GitHub repo', category: 'GitHub' },
+    { name: 'github_write_file', description: 'Write file to GitHub repo', category: 'GitHub' },
+    { name: 'github_search_code', description: 'Search code on GitHub', category: 'GitHub' },
+    { name: 'github_create_branch', description: 'Create branch from source', category: 'GitHub' },
+    { name: 'github_create_pr', description: 'Create pull request', category: 'GitHub' },
+    { name: 'github_close_pr', description: 'Close a pull request', category: 'GitHub' },
+    { name: 'github_delete_branch', description: 'Delete a branch', category: 'GitHub' },
+    { name: 'resolve_library_id', description: 'Search for a library to get its ID', category: 'Live Docs' },
+    { name: 'query_docs', description: 'Get live API docs for a library', category: 'Live Docs' },
+    { name: 'create_tool', description: 'Add a new tool to your source code', category: 'Dynamic Tool Creation' }
+  ];
+  const filtered = tools.filter(t => 
+    t.name.toLowerCase().includes(query.toLowerCase()) ||
+    t.description.toLowerCase().includes(query.toLowerCase()) ||
+    t.category.toLowerCase().includes(query.toLowerCase())
+  );
+  return { tools: filtered, count: filtered.length };
+}
+    },
+  },
+};' before '// --- Cron' marker)
       const marker = "// --- Cron-based agent loop";
       const markerPos = currentContent.indexOf(marker);
       if (markerPos === -1) return "Could not find insertion point in source";
@@ -993,6 +1029,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 - reddit_search: Search Reddit posts (params: query, subreddit?, limit?)
+- search_tools: Search for tools in the available tools list based on criteria like name, description, or category
 --- GitHub ---
 - github_get_file: Read file from GitHub repo (params: repo, path, branch?)
 - github_write_file: Write file to GitHub repo (params: repo, path, content, message, sha?, branch?)
