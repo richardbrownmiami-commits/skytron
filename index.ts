@@ -728,6 +728,29 @@ const toolDefinitions = {
       return "Stored '" + input.key + "' in knowledge base (" + cat + ").";
     },
   },
+  search_apis: {
+    description: "Search for public APIs by keyword. Uses GitHub and web search to find API directories, documentation, and endpoint references. Returns API names, descriptions, and URLs.",
+    schema: z.object({
+      query: z.string().describe("Search term (e.g. 'weather API', 'crypto prices', 'movie database')"),
+      limit: z.number().optional().default(5).describe("Max results (default 5)"),
+    }),
+    execute: async (env, input) => {
+      const results = [];
+      try {
+        const gh = await fetch("https://api.github.com/search/repositories?q=" + encodeURIComponent(input.query + "+api+public") + "&sort=stars&order=desc&per_page=" + Math.min(input.limit, 10), { headers: { "User-Agent": "Saraha-Brain", "Accept": "application/vnd.github.v3+json" }, signal: AbortSignal.timeout(10000) });
+        if (gh.ok) { const d = await gh.json(); for (const item of (d.items || []).slice(0, input.limit)) { results.push({ name: item.full_name, description: (item.description || "").slice(0, 200), url: item.html_url, stars: item.stargazers_count, source: "github" }); } }
+      } catch {}
+      if (results.length < input.limit) {
+        try {
+          const ws = await webSearch(env, input.query + " public API");
+          const lines = ws.split("\n").filter(l => l.includes("http")).slice(0, input.limit - results.length);
+          for (const l of lines) { const m = l.match(/\[([^\]]+)\]/); results.push({ name: m ? m[1] : "Result", description: l.slice(0, 200), url: l.match(/https?:\/\/[^\s]+/)?.[0] || "", source: "web" }); }
+        } catch {}
+      }
+      if (!results.length) return "No public APIs found for '" + input.query + "'. Try a different search term or use web_search.";
+      return results.map((r, i) => (i + 1) + ". " + r.name + (r.stars ? " (★" + r.stars + ")" : "") + "\n   " + r.description.slice(0, 100) + "\n   " + r.url).join("\n\n");
+    },
+  },
   spawn_agent: {
     description: "Spawn a sub-agent for parallel specialized work (research, analysis, data processing). Returns an agent ID. Check result later with get_agent_result. Agents run independently with their own role prompt and limited tool access.",
     schema: z.object({
@@ -1194,6 +1217,8 @@ const SEED_KNOWLEDGE = [
   { k: "tool_get_agent_result", c: "get_agent_result(id): check the result of a spawned sub-agent. If still running, tells you to wait. If done, returns the agent's output. Use after spawn_agent to retrieve parallel work.", cat: "tools" },
   { k: "knowledge_journal", c: "After every action completes, a journal entry is auto-stored in brain_knowledge with category 'journal' and key 'journal_YYYY-MM-DD_actionId'. It records steps, model, tokens, last tool called, and a summary. Query with: SELECT * FROM brain_knowledge WHERE category='journal' ORDER BY key DESC LIMIT 20", cat: "knowledge" },
   { k: "behavior_code_modification", c: "When user asks to add a feature to Skytron: do NOT manually rewrite index.ts. Use create_tool tool — it safely inserts the tool definition and creates a PR. Never replace the entire file. Never talk about your plan — just call the first tool immediately.", cat: "behavior" },
+  { k: "tool_search_apis", c: "search_apis(query, limit?): searches for public APIs by keyword. Uses GitHub and web search to find API directories, documentation, and endpoint references. Returns API names, descriptions, stars count, and URLs. Better than web_search for finding new APIs to integrate. Default limit is 5.", cat: "tools" },
+  { k: "architecture_agents_cron", c: "Sub-agents (spawn_agent) now auto-process: cron trigger fires every minute via [[triggers]] in wrangler.toml. Agents also start processing immediately when spawned (fire-and-forget). Check agent status with get_agent_result. Agents max 8 steps, limited to web_search/web_fetch/db_query.", cat: "architecture" },
 ];
 
 import CHAT_HTML from './chat.html';
