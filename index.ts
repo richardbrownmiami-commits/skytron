@@ -1497,7 +1497,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
     // --- Manual trigger for agent processing (debug) ---
     if (url.pathname === "/__cron_agent" && req.method === "GET") {
-      try { const q = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneAgentStep(env, q.results[0]); return json({ processed: true, agent_id: q.results[0].id }); } return json({ processed: false, message: "no queued agents" }); } catch (e) { return json({ error: e.message }, 500); }
+      try { await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run(); await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run(); const q = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneAgentStep(env, q.results[0]); return json({ processed: true, agent_id: q.results[0].id }); } return json({ processed: false, message: "no queued agents" }); } catch (e) { return json({ error: e.message }, 500); }
     }
 
     // --- Agent API endpoints ---
