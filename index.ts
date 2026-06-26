@@ -711,6 +711,20 @@ const toolDefinitions = {
       return JSON.stringify(posts, null, 2);
     },
   },
+  learn: {
+    description: "Store information in long-term knowledge (brain_knowledge). Use for: saving important facts, lessons from mistakes, decisions made, work completed. Query later with db_query on brain_knowledge table.",
+    schema: z.object({
+      key: z.string().describe("Unique identifier (e.g. 'lesson_create_tool_422', 'fix_truncation_2026_06_26')"),
+      content: z.string().describe("The information to remember (up to 2000 chars)"),
+      category: z.string().optional().describe("Category: 'lesson', 'journal', 'decision', or leave blank for 'general'"),
+    }),
+    execute: async (env, input) => {
+      const cat = input.category || "general";
+      await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'learned')").bind(input.key, input.content, cat).run();
+      try { await indexKnowledgeForSearch(env, input.key, input.content, cat); } catch {}
+      return "Stored '" + input.key + "' in knowledge base (" + cat + ").";
+    },
+  },
 };
 
 // --- Cron-based agent loop (async) ---
@@ -824,6 +838,15 @@ async function finalizeAction(db, actionId, state) {
   if (typeof state.finalContent !== "string") state.finalContent = String(state.finalContent);
   await storeMemory(db, "assistant", state.finalContent.slice(0, 5000), state.conversationId);
   await db.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(state.finalContent.slice(0, 5000), actionId).run();
+  // Auto-learn: store journal entry
+  try {
+    const date = new Date().toISOString().split("T")[0];
+    const lastTool = state.lastToolCall ? state.lastToolCall.split(":")[0] : "none";
+    const summary = (state.finalContent || "").slice(0, 300).replace(/\n/g, " ");
+    const key = "journal_" + date + "_" + actionId;
+    const content = "Step " + state.step + " | Model: " + (state.modelName || "?") + " | Tokens: " + (state.totalTokens || 0) + " | Last tool: " + lastTool + " | Repeat: " + (state.repeatCount || 0) + " | " + summary;
+    await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'learned')").bind(key, content.slice(0, 2000)).run();
+  } catch (e) { console.error("journal write error:", e); }
   await deleteAgentState(db, actionId);
 }
 
@@ -991,6 +1014,7 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - run_code: Execute code (params: language, code)
 - prompt_edit: Update a prompt slot or global override (params: prompt, slot? = default/coding/search/review/chat)
 - one_knowledge: Lookup API details from encyclopedia (params: platform, action?, query?)
+- learn: Store a fact/lesson in long-term knowledge (params: key, content, category?)
 - review_code: Reviews code for quality, bugs, and best practices (params: repo, file_path OR code, pr_number?)
 - reddit_search: Search Reddit posts (params: query, subreddit?, limit?)
 --- GitHub ---
@@ -1077,6 +1101,8 @@ const SEED_KNOWLEDGE = [
   { k: "tool_query_docs", c: "query_docs(libraryId, query): gets up-to-date documentation from Context7 for a specific library. libraryId format: /owner/repo (e.g. /reactjs/react.dev, /vercel/next.js). Returns relevant code snippets and documentation. Use for: API docs, usage examples, framework guides.", cat: "tools" },
   { k: "tool_create_tool", c: "create_tool(repo, name, description, paramsSchema, executeCode, branch?): dynamically creates a new tool by editing index.ts. Reads source, inserts tool definition, writes to a branch, creates a PR. paramsSchema must be a STRING like 'z.object({ query: z.string().describe(\"search term\"), limit: z.number().optional().default(10) })'. executeCode must be a STRING containing only the function BODY, NOT the full async function declaration — like 'const r = await fetch(url); const d = await r.json(); return d.title;'. Repo is always richardbrownmiami-commits/skytron.", cat: "tools" },
   { k: "tool_reddit_search", c: "reddit_search(query, subreddit?, limit?): searches Reddit's public JSON API without authentication. Query is required. Subreddit is optional to scope search. Limit defaults to 10 (max 100). Returns posts with title, author, score, comments count, and URL. Uses .json endpoint directly on www.reddit.com.", cat: "tools" },
+  { k: "tool_learn", c: "learn(key, content, category?): stores a fact/lesson in brain_knowledge for long-term memory. Use 'journal' category for work completed, 'lesson' for mistakes/errors, 'decision' for architecture choices. Data persists across conversations. Query with db_query on brain_knowledge table.", cat: "tools" },
+  { k: "knowledge_journal", c: "After every action completes, a journal entry is auto-stored in brain_knowledge with category 'journal' and key 'journal_YYYY-MM-DD_actionId'. It records steps, model, tokens, last tool called, and a summary. Query with: SELECT * FROM brain_knowledge WHERE category='journal' ORDER BY key DESC LIMIT 20", cat: "knowledge" },
   { k: "behavior_code_modification", c: "When user asks to add a feature to Skytron: do NOT manually rewrite index.ts. Use create_tool tool — it safely inserts the tool definition and creates a PR. Never replace the entire file. Never talk about your plan — just call the first tool immediately.", cat: "behavior" },
 ];
 
@@ -1468,7 +1494,23 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       const s = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
       if (s.results?.length) {
         await processOneStep(env, s.results[0]);
+        return;
       }
     } catch (e) { console.error("cron error:", e); }
+    // Auto-cleanup: run once per day
+    try {
+      const lastClean = await env.DB.prepare("SELECT value FROM identity WHERE key='last_cleanup_date'").all();
+      const today = new Date().toISOString().split("T")[0];
+      if (lastClean.results?.[0]?.value !== today) {
+        // Delete memories older than 7 days, keep minimum 200 most recent
+        const deleted = await env.DB.prepare("DELETE FROM brain_memory WHERE id NOT IN (SELECT id FROM brain_memory ORDER BY id DESC LIMIT 200) AND created_at < datetime('now', '-7 days')").run();
+        // Trim old logs: keep last 1000
+        const logTrim = await env.DB.prepare("DELETE FROM brain_logs WHERE id NOT IN (SELECT id FROM brain_logs ORDER BY id DESC LIMIT 1000)").run();
+        // Trim old completed actions (keep last 500)
+        const actTrim = await env.DB.prepare("DELETE FROM actions WHERE status='done' AND id NOT IN (SELECT id FROM actions WHERE status='done' ORDER BY id DESC LIMIT 500)").run();
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_cleanup_date',?1,datetime('now'))").bind(today).run();
+        console.error("Cleanup: removed " + (deleted.meta?.changes||0) + " old memories, " + (logTrim.meta?.changes||0) + " logs, " + (actTrim.meta?.changes||0) + " actions");
+      }
+    } catch (e) { console.error("cleanup error:", e); }
   },
 };
