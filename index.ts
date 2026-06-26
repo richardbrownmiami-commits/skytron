@@ -852,6 +852,10 @@ async function processOneStep(env, action) {
           state.repeatCount = 0; // Reset to prevent triple-fail force-stop — reflection counts as new attempt
           state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nBefore your next action, audit:\n1. ERROR ANALYSIS: What specific error occurred? Why?\n2. ASSUMPTION CHECK: What assumption might be wrong?\n3. PATH VALIDATION: Same tool fixed? Different tool? Direct answer?\n4. ENERGY & FOCUS: Am I stuck in a loop? Time to summarize?\n\nAfter this audit, output your next action." });
         }
+        // Success audit: every other step, reflect on what worked
+        if (result && !result.startsWith("[TOOL ERROR:") && state.step > 0 && state.step % 2 === 0) {
+          state.fullHistory.push({ role: "user", content: "[SUCCESS AUDIT]\nQuick review:\n1. Did this result solve the problem or just complete a step?\n2. What worked well in this approach?\n3. Should this pattern be stored via learn?\n\nIf complete, answer in plain text. Otherwise continue." });
+        }
       }
       state.totalTokens += resp.tokens?.total || 0;
       state.step++;

@@ -17,6 +17,17 @@
 
 # Latest Changes (2026-06-26)
 
+## Sub-Agents: spawn_agent + get_agent_result (commit 7defe46)
+- New `brain_agents` D1 table: id, name, role, instruction, status, result, conversation_history, step, model, tokens.
+- `spawn_agent(name, role, instruction)` tool: creates a sub-agent with its own system prompt and task, returns agent ID.
+- `get_agent_result(id)` tool: polls agent status/result. Returns "still running" with step count, or the final output.
+- `processOneAgentStep(env, agent)` function: simplified agent loop (max 8 steps, 2 LLM retries, limited to web_search/web_fetch/db_query tools).
+- `scheduled` handler processes both one action AND one agent per tick (interleaved, not sequential).
+- API endpoints: `GET /brain/agents`, `GET /brain/agents/:id`.
+- Agents tab in chat UI showing name, status, role, steps, tokens.
+- SEED_KNOWLEDGE entries for `tool_spawn_agent` and `tool_get_agent_result`.
+- SCHEMA_VERSION bumped to '9'.
+
 ## Modular Prompt Slots (commit a25a625..026ff11)
 - Added `PROMPT_SLOTS` constant: 5 task-specific prompts (default/coding/search/review/chat).
 - `detectTaskType(input)` regex-based detection routes user input to the correct slot.
