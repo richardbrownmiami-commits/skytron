@@ -536,15 +536,12 @@ const toolDefinitions = {
       // 3. Generate tool definition block
       const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
 
-      // 4. Insert into toolDefinitions (find its closing '};' by brace depth from 'const toolDefinitions')
-      const tdStart = currentContent.indexOf("const toolDefinitions");
-      if (tdStart === -1) return "Could not find toolDefinitions";
-      const afterTd = currentContent.slice(tdStart);
-      let depth = 0, insertPos = -1;
-      for (let i = 0; i < afterTd.length; i++) {
-        if (afterTd[i] === '{') depth++;
-        else if (afterTd[i] === '}') { depth--; if (depth === 0 && afterTd[i + 1] === ';') { insertPos = tdStart + i; break; } }
-      }
+      // 4. Insert into toolDefinitions (find closing '};' before '// --- Cron' marker)
+      const marker = "// --- Cron-based agent loop";
+      const markerPos = currentContent.indexOf(marker);
+      if (markerPos === -1) return "Could not find insertion point in source";
+      // Walk backwards from marker to find the preceding '};' (closing of toolDefinitions)
+      let insertPos = currentContent.lastIndexOf("};", markerPos);
       if (insertPos === -1) return "Could not find insertion point in source";
       let modified = currentContent.slice(0, insertPos) + toolBlock + "\n" + currentContent.slice(insertPos);
 
@@ -927,10 +924,10 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
   Reads index.ts, inserts the tool definition, writes to a branch, creates a PR.
 
 # CODE MODIFICATION (when user asks you to add a feature to yourself)
-- ALWAYS use `create_tool` when user asks to add a new capability/search/feature. Do NOT manually read/write index.ts.
-- NEVER replace the entire index.ts file. Only insert specific blocks via `create_tool`.
-- Workflow: `create_tool` handles everything — reads source, inserts code, creates branch, makes PR. Just call it with the right params.
-- If you must edit existing code (not add a new tool): create a branch first with `github_create_branch`, read with `github_get_file`, edit with `github_write_file` using the correct SHA, then create a PR with `github_create_pr`.
+- ALWAYS use the create_tool tool when user asks to add a new capability/search/feature. Do NOT manually read/write index.ts.
+- NEVER replace the entire index.ts file. Only insert specific blocks via create_tool.
+- Workflow: create_tool handles everything -- reads source, inserts code, creates branch, makes PR. Just call it with the right params.
+- If you must edit existing code (not add a new tool): create a branch first with github_create_branch, read with github_get_file, edit with github_write_file using the correct SHA, then create a PR with github_create_pr.
 - DO NOT talk about what you're going to do. Output the first tool JSON immediately.
 - DO NOT describe your plan in natural language. Just call the tool.
 - After each tool result, IMMEDIATELY output the next tool JSON. No "Now I need to..." or "Next step:".
