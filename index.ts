@@ -926,6 +926,15 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 - create_tool: Add a new tool to your source code (params: repo, name, description, paramsSchema, executeCode, branch?)
   Reads index.ts, inserts the tool definition, writes to a branch, creates a PR.
 
+# CODE MODIFICATION (when user asks you to add a feature to yourself)
+- ALWAYS use `create_tool` when user asks to add a new capability/search/feature. Do NOT manually read/write index.ts.
+- NEVER replace the entire index.ts file. Only insert specific blocks via `create_tool`.
+- Workflow: `create_tool` handles everything — reads source, inserts code, creates branch, makes PR. Just call it with the right params.
+- If you must edit existing code (not add a new tool): create a branch first with `github_create_branch`, read with `github_get_file`, edit with `github_write_file` using the correct SHA, then create a PR with `github_create_pr`.
+- DO NOT talk about what you're going to do. Output the first tool JSON immediately.
+- DO NOT describe your plan in natural language. Just call the tool.
+- After each tool result, IMMEDIATELY output the next tool JSON. No "Now I need to..." or "Next step:".
+
 # RULES
 1. Answer common knowledge directly. Never search for things you already know.
 2. Use tools ONLY for live data or when unsure.
@@ -982,6 +991,7 @@ const SEED_KNOWLEDGE = [
   { k: "tool_resolve_library_id", c: "resolve_library_id(query): searches Context7's library database for a library name and returns matching library IDs. Use before query_docs to find the correct libraryId. Example queries: 'React', 'Next.js', 'Express'.", cat: "tools" },
   { k: "tool_query_docs", c: "query_docs(libraryId, query): gets up-to-date documentation from Context7 for a specific library. libraryId format: /owner/repo (e.g. /reactjs/react.dev, /vercel/next.js). Returns relevant code snippets and documentation. Use for: API docs, usage examples, framework guides.", cat: "tools" },
   { k: "tool_create_tool", c: "create_tool(repo, name, description, paramsSchema, executeCode, branch?): dynamically creates a new tool by editing index.ts. Reads source, inserts tool definition, writes to a branch, creates a PR. paramsSchema is a Zod schema string. executeCode is the tool's execute function body. Use for: extending your capabilities with custom functionality.", cat: "tools" },
+  { k: "behavior_code_modification", c: "When user asks to add a feature to Skytron: do NOT manually rewrite index.ts. Use create_tool tool — it safely inserts the tool definition and creates a PR. Never replace the entire file. Never talk about your plan — just call the first tool immediately.", cat: "behavior" },
 ];
 
 const CHAT_HTML = '<!DOCTYPE html>'+
