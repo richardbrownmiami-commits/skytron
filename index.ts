@@ -775,14 +775,17 @@ async function finalizeAction(db, actionId, state) {
 }
 
 function tryParseToolCall(text) {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
-  if (trimmed.startsWith("{") && trimmed.includes('"tool"') && trimmed.includes('"input"')) {
+  const trimmed = text.trim().replace(/```(?:json)?\s*[\s\S]*?```/g, "").replace(/^```[\s\S]*?```/g, "").trim();
+  // Also search for a JSON block with "tool" inside backtick fences anywhere in the text
+  const fenceMatch = text.match(/```(?:json)?\s*\n?(\{[\s\S]*?"tool"[\s\S]*?\})\n?```/);
+  const jsonToTry = fenceMatch ? fenceMatch[1] : trimmed;
+  if (jsonToTry.startsWith("{") && jsonToTry.includes('"tool"') && jsonToTry.includes('"input"')) {
     try {
-      const start = trimmed.indexOf("{");
+      const start = jsonToTry.indexOf("{");
       let depth = 0, end = start;
-      for (; end < trimmed.length; end++) { if (trimmed[end] === "{") depth++; else if (trimmed[end] === "}") depth--; if (depth === 0) break; }
+      for (; end < jsonToTry.length; end++) { if (jsonToTry[end] === "{") depth++; else if (jsonToTry[end] === "}") depth--; if (depth === 0) break; }
       if (depth !== 0) return null;
-      const tc = parseLLMJson(trimmed.slice(start, end + 1));
+      const tc = parseLLMJson(jsonToTry.slice(start, end + 1));
       if (tc.tool && tc.input) return tc;
     } catch {}
   }
@@ -975,7 +978,10 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 13. For GitHub tools: your default repo is richardbrownmiami-commits/skytron. Include it explicitly.
 14. review_code fetches the file from GitHub itself when given repo + file_path. Do NOT call github_get_file first — just call review_code directly.
 15. github_get_file returns only the first 4000 chars. For full file access, use review_code or github_write_file instead.
-16. LANGUAGE: Say "your" not "my" for Creator's things: "your repo", "your code", "your tools". Say "I" or "me" for yourself.`;
+16. LANGUAGE: Say "your" not "my" for Creator's things: "your repo", "your code", "your tools". Say "I" or "me" for yourself.
+17. ERROR RECOVERY: If a tool returns an error or fails, analyze WHY and retry with a corrected approach. Do NOT just report the error and stop. Try a different method, fix the parameters, or use an alternative tool.
+18. If a tool returns 403/401: the API may need authentication. Search for alternative endpoints or tools that don't require auth.
+19. When using create_tool: paramsSchema must be a STRING like "z.object({ query: z.string() })" with quotes. executeCode must be a STRING containing only the function body (not the full async function declaration).`;
 
 const SYSTEM_PROMPT = `You run on Cloudflare Workers with databases, web search, code execution, and GitHub access.`;
 
@@ -1014,7 +1020,7 @@ const SEED_KNOWLEDGE = [
   { k: "tool_github_delete_branch", c: "github_delete_branch(repo, branch): deletes a branch from a GitHub repository. Use to clean up after merging or abandoning a PR.", cat: "tools" },
   { k: "tool_resolve_library_id", c: "resolve_library_id(query): searches Context7's library database for a library name and returns matching library IDs. Use before query_docs to find the correct libraryId. Example queries: 'React', 'Next.js', 'Express'.", cat: "tools" },
   { k: "tool_query_docs", c: "query_docs(libraryId, query): gets up-to-date documentation from Context7 for a specific library. libraryId format: /owner/repo (e.g. /reactjs/react.dev, /vercel/next.js). Returns relevant code snippets and documentation. Use for: API docs, usage examples, framework guides.", cat: "tools" },
-  { k: "tool_create_tool", c: "create_tool(repo, name, description, paramsSchema, executeCode, branch?): dynamically creates a new tool by editing index.ts. Reads source, inserts tool definition, writes to a branch, creates a PR. paramsSchema is a Zod schema string. executeCode is the tool's execute function body. Use for: extending your capabilities with custom functionality.", cat: "tools" },
+  { k: "tool_create_tool", c: "create_tool(repo, name, description, paramsSchema, executeCode, branch?): dynamically creates a new tool by editing index.ts. Reads source, inserts tool definition, writes to a branch, creates a PR. paramsSchema must be a STRING like 'z.object({ query: z.string().describe(\"search term\"), limit: z.number().optional().default(10) })'. executeCode must be a STRING containing only the function BODY, NOT the full async function declaration — like 'const r = await fetch(url); const d = await r.json(); return d.title;'. Repo is always richardbrownmiami-commits/skytron.", cat: "tools" },
   { k: "tool_reddit_search", c: "reddit_search(query, subreddit?, limit?): searches Reddit's public JSON API without authentication. Query is required. Subreddit is optional to scope search. Limit defaults to 10 (max 100). Returns posts with title, author, score, comments count, and URL. Uses .json endpoint directly on www.reddit.com.", cat: "tools" },
   { k: "behavior_code_modification", c: "When user asks to add a feature to Skytron: do NOT manually rewrite index.ts. Use create_tool tool — it safely inserts the tool definition and creates a PR. Never replace the entire file. Never talk about your plan — just call the first tool immediately.", cat: "behavior" },
 ];
