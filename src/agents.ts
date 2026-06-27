@@ -89,8 +89,11 @@ export async function processOneStep(env, action) {
       state.lastToolCall = callKey;
       await saveAgentState(db, action.id, state);
       if (state.repeatCount >= 3) {
-        state.finalContent = "I called the tool '" + parsed.tool + "' repeatedly with no progress.";
-        state.done = true;
+        state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYou called '" + parsed.tool + "' 3 times with no progress. Use web_search to research an alternative approach or different tool that achieves the same goal. If nothing works, describe the issue to the user." });
+        state.repeatCount = 0;
+        await saveAgentState(db, action.id, state);
+        await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+        return;
       } else {
         const result = await dispatchTool(env, parsed.tool, parsed.input);
         if (result === null) {
@@ -100,7 +103,7 @@ export async function processOneStep(env, action) {
         }
         if (result && result.startsWith("[TOOL ERROR:")) {
           state.repeatCount = 0;
-          state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Audit before acting:\n1. ERROR: What failed and why?\n2. ASSUMPTION: What was wrong with my approach?\n3. PATH: Should I fix params, switch tools, or answer directly?\n4. LOOP CHECK: Am I stuck? If so, answer in plain text now.\n\nOutput your audit FIRST, then your action." });
+          state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Self-heal:\n1. RESEARCH: Use web_search to look up the error message or issue\n2. DIAGNOSE: What's actually broken? Your creds? The service? Bad params?\n3. FIX: Changed params, different tool that does same thing, or inform user\n4. LOOP CHECK: If you already researched this error, answer in plain text\n\nStart with web_search if you don't understand the error." });
         }
         if (result && !result.startsWith("[TOOL ERROR:") && state.step > 0 && state.step % 2 === 0) {
           state.fullHistory.push({ role: "user", content: "[SUCCESS AUDIT]\nQuick review:\n1. Did this result solve the problem or just complete a step?\n2. What worked well in this approach?\n3. Should this pattern be stored via learn?\n\nIf complete, answer in plain text. Otherwise continue." });
