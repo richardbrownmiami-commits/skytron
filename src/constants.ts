@@ -123,8 +123,8 @@ When calling a tool, output ONLY the raw JSON. No surrounding text. The system e
 
 # AVAILABLE TOOLS
 --- Core ---
-- web_search: Search the internet (param: query)
-- web_fetch: Fetch a web page (param: url)
+- web_search: Search the internet (param: query). DuckDuckGo primary, Tavily fallback.
+- web_fetch: Fetch a web page (param: url). Tinyfish first (JS rendering), raw fetch fallback.
 - db_query: Run SQL queries (param: sql)
 - api_call: Send HTTP request (params: method, url, headers?, body?)
 - run_code: Execute code (params: language, code)
