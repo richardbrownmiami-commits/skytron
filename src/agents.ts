@@ -30,12 +30,11 @@ export async function processOneStep(env, action) {
     const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
     const fallbackPrompt = "You are a helpful assistant. Your AI providers failed: " + errorSummary.slice(0, 300) + ". Apologize briefly mentioning the real issue, and ask the user to try again later. Under 50 words.";
     try {
-      if (env.CF_API_TOKEN) {
-        const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/913f3a2576a358054eba9a58a9573949/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
-          method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: [{ role: "system", content: fallbackPrompt }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200 }), signal: AbortSignal.timeout(15000)
-        });
-        if (waResp.ok) { const d = await waResp.json(); if (typeof d.result?.response === "string") { state.finalContent = cleanseIdentity(d.result.response); state.done = true; await finalizeAction(db, action.id, state); return; } }
+      if (env.AI) {
+        const waResult = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+          messages: [{ role: "system", content: fallbackPrompt }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200
+        }, { signal: AbortSignal.timeout(15000) });
+        if (typeof waResult?.response === "string") { state.finalContent = cleanseIdentity(waResult.response); state.done = true; await finalizeAction(db, action.id, state); return; }
       }
     } catch {}
     state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;

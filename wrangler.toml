@@ -16,6 +16,9 @@ binding = "BUDDHI_DWAR"
 service = "buddhi-dwar"
 environment = "production"
 
+[[ai]]
+binding = "AI"
+
 [[triggers]]
 type = "cron"
 pattern = "*/1 * * * *"

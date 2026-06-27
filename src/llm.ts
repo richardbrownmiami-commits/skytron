@@ -1,5 +1,4 @@
 // LLM gateway: calls BUDDHI_DWAR (primary) with 5 providers + 10s timeout each. Falls back to Workers AI 70B on failure. Model-agnostic — no rejection by model name.
-import { CF_AI } from './constants';
 
 export async function callLLM(env, body, sessionId) {
   if (!env.BUDDHI_DWAR) return null;
@@ -21,18 +20,13 @@ export async function callLLM(env, body, sessionId) {
   } catch (e) {
     errors.push("BUDDHI_DWAR: " + (e.message || "timeout"));
   }
-  // Last resort: Workers AI free model via CF API
-  if (env.CF_API_TOKEN) {
+  // Last resort: Workers AI via native binding
+  if (env.AI) {
     try {
-      const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
-        method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: body.messages, max_tokens: 2000 }), signal: AbortSignal.timeout(60000)
-      });
-      if (waResp.ok) {
-        const waData = await waResp.json();
-        const waContent = waData.result?.response;
-        if (typeof waContent === "string") return { content: waContent, model: "workers-ai/llama-3.3-70b", tokens: { total: 0 } };
-      }
+      const waResult = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+        messages: body.messages, max_tokens: 2000
+      }, { signal: AbortSignal.timeout(60000) });
+      if (typeof waResult?.response === "string") return { content: waResult.response, model: "workers-ai/llama-3.3-70b", tokens: { total: 0 } };
     } catch {}
   }
   return { content: null, errors, model: "none", tokens: { total: 0 } };
