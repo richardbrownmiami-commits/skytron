@@ -23,14 +23,14 @@ export async function callLLM(env, body, sessionId) {
   // Last resort: Workers AI free model via CF API
   if (env.CF_API_TOKEN) {
     try {
-      const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
+      const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
         method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: body.messages, max_tokens: 1000 }), signal: AbortSignal.timeout(60000)
+        body: JSON.stringify({ messages: body.messages, max_tokens: 2000 }), signal: AbortSignal.timeout(60000)
       });
       if (waResp.ok) {
         const waData = await waResp.json();
         const waContent = waData.result?.response;
-        if (typeof waContent === "string") return { content: waContent, model: "workers-ai/llama-3.1-8b", tokens: { total: 0 } };
+        if (typeof waContent === "string") return { content: waContent, model: "workers-ai/llama-3.3-70b", tokens: { total: 0 } };
       }
     } catch {}
   }

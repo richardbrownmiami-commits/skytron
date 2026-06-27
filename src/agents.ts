@@ -24,7 +24,7 @@ export async function processOneStep(env, action) {
     const fallbackPrompt = "You are a helpful assistant. Your AI providers failed: " + errorSummary.slice(0, 300) + ". Apologize briefly mentioning the real issue, and ask the user to try again later. Under 50 words.";
     try {
       if (env.CF_API_TOKEN) {
-        const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/913f3a2576a358054eba9a58a9573949/ai/run/@cf/meta/llama-3.1-8b-instruct", {
+        const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/913f3a2576a358054eba9a58a9573949/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
           method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
           body: JSON.stringify({ messages: [{ role: "system", content: fallbackPrompt }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200 }), signal: AbortSignal.timeout(15000)
         });

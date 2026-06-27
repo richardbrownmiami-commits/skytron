@@ -462,11 +462,11 @@ export const toolDefinitions = {
       }
       if (env.CF_API_TOKEN) {
         try {
-          const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.1-8b-instruct", {
+          const waResp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
             method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
             body: JSON.stringify({ messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }), signal: AbortSignal.timeout(60000)
           });
-          if (waResp.ok) { const d = await waResp.json(); if (typeof d.result?.response === "string") return "Review of " + input.file_path + " (Workers AI):\n\n" + d.result.response; }
+          if (waResp.ok) { const d = await waResp.json(); if (typeof d.result?.response === "string") return "Review of " + input.file_path + " (Workers AI 70B):\n\n" + d.result.response; }
         } catch {}
       }
       return "All review providers failed. Unable to complete code review.";

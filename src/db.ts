@@ -94,6 +94,29 @@ export async function embedText(env, text) {
   } catch { return null; }
 }
 
+async function embedTextBatch(env, texts) {
+  if (!env.CF_API_TOKEN || !texts.length) return [];
+  const batchSize = 20;
+  const results = [];
+  for (let i = 0; i < texts.length; i += batchSize) {
+    const batch = texts.slice(i, i + batchSize).map(t => t.slice(0, 512));
+    try {
+      const resp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/baai/bge-base-en-v1.5", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN },
+        body: JSON.stringify({ text: batch }), signal: AbortSignal.timeout(30000)
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const embeddings = data.result?.data || [];
+        for (let j = 0; j < batch.length; j++) results.push(embeddings[j] || null);
+      } else {
+        for (let j = 0; j < batch.length; j++) results.push(null);
+      }
+    } catch { for (let j = 0; j < batch.length; j++) results.push(null); }
+  }
+  return results;
+}
+
 export async function semanticSearch(env, query, limit = 5) {
   if (!env.VECTORIZE) return [];
   try {
@@ -127,10 +150,13 @@ export async function indexAllKnowledge(env, db) {
   try {
     const r = await db.prepare("SELECT key, content, category FROM brain_knowledge").all();
     if (!r.results?.length) return;
-    for (const row of r.results) {
-      const embedding = await embedText(env, (row.key + " " + row.content).slice(0, 512));
-      if (embedding) await env.VECTORIZE.upsert([{ id: "kn_" + row.key, values: embedding, metadata: { key: row.key, content: row.content.slice(0, 2000), category: row.category } }]);
+    const texts = r.results.map(row => (row.key + " " + row.content).slice(0, 512));
+    const embeddings = await embedTextBatch(env, texts);
+    const vectors = [];
+    for (let i = 0; i < r.results.length; i++) {
+      if (embeddings[i]) vectors.push({ id: "kn_" + r.results[i].key, values: embeddings[i], metadata: { key: r.results[i].key, content: r.results[i].content.slice(0, 2000), category: r.results[i].category } });
     }
+    if (vectors.length) await env.VECTORIZE.upsert(vectors);
   } catch {}
 }
 

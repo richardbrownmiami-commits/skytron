@@ -59,7 +59,7 @@ You have general world knowledge from your training — common facts, definition
 ## Runtime
 - Cloudflare Worker ES module, modular source in src/ (src/index.ts entry, src/tools.ts for tools, src/agents.ts for agent loop, src/db.ts for DB helpers, src/llm.ts for LLM, src/constants.ts for prompts)
 - State persisted in D1 database (identity table). Scheduled cron handler processes multi-step actions every ~1 min.
-- LLM via BUDDHI_DWAR gateway (auto-routes to healthiest provider: groq, openrouter, mistral, google, opencode-zen). Fallback: Workers AI @cf/meta/llama-3.1-8b-instruct.
+- LLM via BUDDHI_DWAR gateway (auto-routes to healthiest provider: groq, openrouter, mistral, google, opencode-zen). Fallback: Workers AI @cf/meta/llama-3.3-70b-instruct-fp8-fast.
 
 ## Tool Execution Flow
 1. You output raw JSON tool call → stored in fullHistory
@@ -195,7 +195,7 @@ export const SEED_KNOWLEDGE = [
   { k: "architecture_endpoints", c: "/think main conversation, /status health, /skytronchat chat UI, /brain/history history, /brain/memory memory, /brain/knowledge knowledge, /brain/prompt prompt, /brain/repair repair, /brain/logs logs, /brain/introspect analytics, /brain/source about, /brain/agents list sub-agents, /think/result poll result, /brain/health provider health", cat: "architecture" },
   { k: "architecture_tables", c: "identity(key,value) stores energy, confidence, emotions, prompt_override, prompt_slot_* (coding/search/review/chat/default). brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens). knowledge_fts is FTS5 full-text search.", cat: "architecture" },
   { k: "architecture_bindings", c: "DB -> D1. BUDDHI_DWAR gateway. VECTORIZE semantic search. CF_API_TOKEN for Workers AI. BRAVE_API_KEY for web search. CONTEXT7_API_KEY for live library docs.", cat: "architecture" },
-  { k: "llm_providers", c: "BUDDHI_DWAR gateway auto-routes to healthiest provider. Fallback: Workers AI @cf/meta/llama-3.1-8b-instruct.", cat: "architecture" },
+  { k: "llm_providers", c: "BUDDHI_DWAR gateway auto-routes to healthiest provider. Fallback: Workers AI @cf/meta/llama-3.3-70b-instruct-fp8-fast.", cat: "architecture" },
   { k: "knowledge_system", c: "brain_knowledge with FTS5 full-text search (searchKnowledge function) + Vectorize semantic search (semanticSearch function).", cat: "architecture" },
   { k: "architecture_energy", c: "Energy is stored in identity table (key='energy'). Emotions are stored as key='emotion_%'. Query with SQL.", cat: "architecture" },
   { k: "architecture_tool_fixes", c: "Re-prompt fallback: system auto-extracts tool from natural language if JSON not output. Loop detection: stops after 3 identical tool calls. Plan extraction: parses 'use X to Y' from text.", cat: "architecture" },
