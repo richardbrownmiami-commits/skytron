@@ -12,61 +12,7 @@
 
 # Known Issues
 
-- **BUDDHI_DWAR KV limit**: All 5 proxied providers (groq/openrouter/mistral/google/opencode-zen) fail with `"gateway error: KV put() limit exceeded for the day."` when BUDDHI_DWAR's Cloudflare KV daily write limit is hit. Workers AI fallback (`@cf/meta/llama-3.1-8b-instruct`) is used instead. In `callLLM`, 5 providers are tried in order (groq, openrouter, mistral, google, opencode-zen), each with a 10s timeout.
-- **No cron trigger** (FIXED 2026-06-27): Added `[[triggers]]` cron pattern `*/1 * * * *` to `wrangler.toml`. The `scheduled` handler now auto-fires every minute.
-- **Agent processing reliability**: Agents used fire-and-forget in `spawn_agent.execute` which got killed when `ctx.waitUntil` completed. Now agents are processed in `/think`'s post-action `ctx.waitUntil` and via cron/scheduled handler.
-
-# Latest Changes (2026-06-27)
-
-## Agent Processing Reliability Fixes (commits 1af6fc8..a9c81f9)
-- Removed unreliable fire-and-forget from `spawn_agent.execute` — agents now rely on cron/scheduled processing.
-- Added agent processing in `/think`'s `ctx.waitUntil` after the main action completes (up to 3 agents per tick).
-- `processOneAgentStep` now sets `status='running'`, `step`, `updated_at` immediately at call start to prevent dual-processing by parallel cron ticks.
-- Cron scheduled handler resets agents stuck in `running` >2min back to `queued` before picking the next agent.
-- Same stuck-agent recovery added to `__cron_agent` debug endpoint.
-- Agents flow through queue: `queued → running → done/error` — one per tick. LLM call speed remains bottleneck during BUDDHI_DWAR KV limit.
-
-# Latest Changes (2026-06-26)
-
-## Sub-Agents: spawn_agent + get_agent_result (commit 7defe46)
-- New `brain_agents` D1 table: id, name, role, instruction, status, result, conversation_history, step, model, tokens.
-- `spawn_agent(name, role, instruction)` tool: creates a sub-agent with its own system prompt and task, returns agent ID.
-- `get_agent_result(id)` tool: polls agent status/result. Returns "still running" with step count, or the final output.
-- `processOneAgentStep(env, agent)` function: simplified agent loop (max 8 steps, 2 LLM retries, limited to web_search/web_fetch/db_query tools).
-- `scheduled` handler processes both one action AND one agent per tick (interleaved, not sequential).
-- API endpoints: `GET /brain/agents`, `GET /brain/agents/:id`.
-- Agents tab in chat UI showing name, status, role, steps, tokens.
-- SEED_KNOWLEDGE entries for `tool_spawn_agent` and `tool_get_agent_result`.
-- SCHEMA_VERSION bumped to '9'.
-
-## Modular Prompt Slots (commit a25a625..026ff11)
-- Added `PROMPT_SLOTS` constant: 5 task-specific prompts (default/coding/search/review/chat).
-- `detectTaskType(input)` regex-based detection routes user input to the correct slot.
-- `getPromptSlot(db, slot)` reads from D1 `prompt_slot_*` keys, falls back to constants.
-- `prompt_edit` tool accepts optional `slot` param (default/coding/search/review/chat).
-- `/think` endpoint detects task type and injects `[TASK: {type}]` marker + slot content.
-- New endpoints: `GET /brain/prompt/slots`, `GET /brain/prompt` shows all slots.
-- Backward compatible: if no slot is set, uses `prompt_override` or `SYSTEM_PROMPT`.
-
-## Chat UI: Thoughts Behind Toggle (commit ec7fec2)
-- Replaced animated thinking bubble (bouncing dots + inline status) with `<details>` collapsible element.
-- Shows "⚙ Processing..." while working, "✓ Done" when finished.
-- Click to expand and see step-by-step tool call history.
-- CSS classes: `.thinking`, `.th-body`, `.th-step`, `.th-tool`, `.th-status`.
-
-## Fixed Response Truncation (commit 68fca00)
-- `brain_logs.content`: 500 → 4000 chars
-- `brain_memory.content` (assistant): 1000 → 5000 chars
-- `actions.result`: 2000 → 5000 chars
-- `brain_memory.content` (user input): 500 → 2000 chars
-- Conversation context previews: 500/400 → 1000 chars
-
-## Learn Tool + Auto-Journal + Cleanup (commit ab140ad)
-- Added `learn` tool: stores key+content into `brain_knowledge` for long-term memory.
-- `finalizeAction` now auto-writes a journal entry (`journal_YYYY-MM-DD_actionId`) on every action completion.
-- `scheduled` handler runs daily cleanup: deletes memories older than 7 days (keeps min 200), trims logs to 1000, actions to 500.
-- SEED_KNOWLEDGE entries added for `tool_learn` and `knowledge_journal`.
-
-## Identity Reinforcement (commit 78304ad)
-- Updated HARDCODED_CORE identity: explicitly states "never call yourself an AI, assistant, bot, or model."
-- Describes Skytron as "evolved beyond traditional AI, a hitech brain" to prevent hallucinating "AI assistant" label.
+- **BUDDHI_DWAR KV limit**: All 5 proxied providers (groq/openrouter/mistral/google/opencode-zen) fail with `"gateway error: KV put() limit exceeded for the day."` when BUDDHI_DWAR's Cloudflare KV daily write limit is hit. Workers AI fallback (`@cf/meta/llama-3.1-8b-instruct`) is used instead. In `callLLM`, 5 providers are tried in order (groq, openrouter, mistral, google, opencode-zen), each with a 10s timeout. When KV limit is hit, model observed to be `north-mini-code-free` (Workers AI default).
+- **Agent stuck recovery verified**: Agent ID 6 was stuck in `running` for 5+ hours with `updated_at` at `05:42:43`. `__cron_agent` debug endpoint successfully reset it to `queued` and completed it. Works as designed.
+- **/brain/usage proxy fails**: Returns "failed to fetch usage" — BUDDHI_DWAR analytics endpoint issue, not Skytron code.
+- **/brain/vectorize POST 30s+ timeout**: Expected for 100+ embeddings. Runs fine given enough time.
