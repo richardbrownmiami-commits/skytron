@@ -40,7 +40,7 @@ export async function processOneStep(env, action) {
     let parsed = tryParseToolCall(trimmed);
     const repromptCount = state.repromptCount || 0;
     const analysisPattern = /^(the user (is|wants|asked|says|keeps)|looking at|from the conversation|based on my|according to|i should|let me|in the conversation|so (the|what)|this (is about|appears|seems)|the conversation)/i;
-    if (!parsed && repromptCount < 1 && analysisPattern.test(trimmed) && trimmed.length > 100) {
+    if (!parsed && repromptCount < 3 && analysisPattern.test(trimmed) && trimmed.length > 80) {
       state.repromptCount = (state.repromptCount || 0) + 1;
       state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
       state.fullHistory.push({ role: "user", content: "[SYSTEM: Stop analyzing. That was your internal scratchpad, not a response. Output ONLY either a direct answer to the user or a raw JSON tool call. No self-narration, no conversation summary, no third-person. Just respond.]" });
