@@ -81,12 +81,21 @@ export async function processOneStep(env, action) {
     if (parsed) {
       state.fullHistory.push({ role: "assistant", content: JSON.stringify(parsed) });
       const callKey = parsed.tool + ":" + JSON.stringify(parsed.input);
+      const alreadyDispatched = state.lastDispatchedKey === callKey;
       if (state.lastToolCall === callKey) {
         state.repeatCount = (state.repeatCount || 0) + 1;
       } else {
         state.repeatCount = 0;
       }
       state.lastToolCall = callKey;
+      if (alreadyDispatched) {
+        state.fullHistory.push({ role: "user", content: "[SYSTEM: You already called " + parsed.tool + " with those params. The result is already in the history. Read it and answer the user in plain English. DO NOT call any more tools.]" });
+        state.repeatCount = 0;
+        state.step++;
+        await saveAgentState(db, action.id, state);
+        await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+        return;
+      }
       await saveAgentState(db, action.id, state);
       if (state.repeatCount >= 3) {
         state.fullHistory.push({ role: "user", content: "[SYSTEM: You called '" + parsed.tool + "' 3 times with the same params. The tool already succeeded. Now SUMMARIZE the result in plain English. DO NOT output tool JSON. DO NOT repeat the tool call. Answer the user directly.]" });
@@ -97,6 +106,7 @@ export async function processOneStep(env, action) {
         return;
       } else {
         const result = await dispatchTool(env, parsed.tool, parsed.input);
+        state.lastDispatchedKey = callKey;
         if (result === null) {
           state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
         } else {
