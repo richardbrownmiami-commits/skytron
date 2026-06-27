@@ -16,7 +16,7 @@ binding = "BUDDHI_DWAR"
 service = "buddhi-dwar"
 environment = "production"
 
-[[ai]]
+[ai]
 binding = "AI"
 
 [[triggers]]
