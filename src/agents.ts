@@ -41,9 +41,7 @@ export async function processOneStep(env, action) {
     const repromptCount = state.repromptCount || 0;
     const analysisPattern = /^(the user (is|wants|asked|says|keeps)|looking at|from the conversation|based on my|according to|i should|let me|in the conversation|so (the|what)|this (is about|appears|seems)|the conversation)/i;
     if (!parsed && !trimmed.includes('"tool":') && analysisPattern.test(trimmed) && trimmed.length > 80 && !Object.keys(toolDefinitions).some(t => new RegExp("\\b" + t.replace(/_/g, "\\w*") + "\\b", "i").test(trimmed))) {
-      const sentences = trimmed.split(/[.!?\n]+/).map(s => s.trim()).filter(Boolean);
-      const clean = sentences.filter(s => !analysisPattern.test(s.trim())).join(". ");
-      content = clean.length > 10 ? clean.slice(0, 500) : sentences.slice(-2).join(". ").slice(0, 300);
+      content = "I'm looking into that now.";
       state.finalContent = content; state.done = true;
       state.totalTokens += resp.tokens?.total || 0;
       await finalizeAction(db, action.id, state); return;
