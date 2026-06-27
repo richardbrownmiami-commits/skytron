@@ -4,12 +4,12 @@ const TABLES = [
   `CREATE TABLE IF NOT EXISTS identity (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS brain_memory (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, content TEXT NOT NULL, conversation_id TEXT DEFAULT 'default', created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS brain_knowledge (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, content TEXT NOT NULL, category TEXT DEFAULT 'general', source TEXT DEFAULT 'learned', created_at TEXT DEFAULT (datetime('now')))`,
-  `CREATE TABLE IF NOT EXISTS actions (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, status TEXT DEFAULT 'pending', input TEXT, result TEXT, error TEXT, created_at TEXT DEFAULT (datetime('now')), completed_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS actions (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, status TEXT DEFAULT 'pending', input TEXT, task TEXT DEFAULT 'chat', result TEXT, error TEXT, created_at TEXT DEFAULT (datetime('now')), completed_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS brain_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action_id INTEGER, step TEXT NOT NULL, content TEXT, model TEXT, tokens INTEGER, created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS brain_agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, role TEXT NOT NULL, instruction TEXT, parent_action_id INTEGER, status TEXT DEFAULT 'queued', result TEXT, conversation_history TEXT, step INTEGER DEFAULT 0, model TEXT, tokens INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`,
 ];
 
-const SCHEMA_VERSION = '9';
+const SCHEMA_VERSION = '10';
 
 const PROMPT_SLOTS = {
   default: "You are a sharp, direct tech consciousness built by Creator. Answer concisely. Use tools only for live data or when unsure. Output pure JSON for tool calls, plain text otherwise. Never mix them.",
@@ -46,6 +46,7 @@ async function initSchema(db, env) {
     const oldTables = ['proposals','authority_receipts','anti_patterns','goals','subagents','thought_stream','emotion_reflection','identity_index','token_usage','pending_approvals','learnings','memories'];
     for (const t of oldTables) { try { await db.exec("DROP TABLE IF EXISTS " + t); } catch {} }
     for (const s of TABLES) { await db.exec(s); }
+    try { await db.exec("ALTER TABLE actions ADD COLUMN task TEXT DEFAULT 'chat'"); } catch {}
     await db.exec("DELETE FROM brain_knowledge WHERE source='seed'");
     for (const item of SEED_KNOWLEDGE) { try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'seed')").bind(item.k, item.c, item.cat).run(); } catch {} }
     try { await db.exec("DROP TABLE IF EXISTS knowledge_fts"); } catch {}
@@ -207,7 +208,7 @@ async function callLLM(env, body, sessionId) {
   if (!env.BUDDHI_DWAR) return null;
   const errors = [];
   try {
-    const reqBody = { messages: body.messages, model: "", max_tokens: 1000 };
+    const reqBody = { messages: body.messages, model: body.model || "", max_tokens: 3000, task: body.task || "chat" };
     const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
       body: JSON.stringify(reqBody), signal: AbortSignal.timeout(30000)
@@ -810,7 +811,7 @@ async function processOneStep(env, action) {
   let lastErrors = [];
   for (let retry = 0; retry < 3; retry++) {
     if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
-    resp = await callLLM(env, { messages: state.fullHistory }, "skytron-" + state.conversationId);
+    resp = await callLLM(env, { messages: state.fullHistory, task: action.task || "chat" }, "skytron-" + state.conversationId);
     if (!resp) continue;
     if (!resp.content && resp.errors) lastErrors = resp.errors;
     content = resp.content;
@@ -1400,6 +1401,18 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       } catch (e) { return json({ error: e.message }, 500); }
     }
 
+    if (url.pathname === "/brain/usage" && req.method === "GET") {
+      try {
+        const days = parseInt(url.searchParams.get("days")) || 1;
+        const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/analytics?days=" + days, {
+          headers: { Authorization: "Bearer " + env.BRAIN_KEY }
+        });
+        if (!resp.ok) return json({ error: "failed to fetch usage" }, 502);
+        const data = await resp.json();
+        return json({ usage: data });
+      } catch (e) { return json({ error: e.message }, 500); }
+    }
+
     if (url.pathname === "/brain/vectorize" && req.method === "POST") {
       try { await ensureVectorizeIndex(env); await indexAllKnowledge(env, env.DB); return json({ ok: true, indexed: true }); } catch (e) { return json({ error: e.message }, 500); }
     }
@@ -1419,7 +1432,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
         await storeMemory(env.DB, "user", llmInput.slice(0, 2000), conversationId);
 
-        const r = await env.DB.prepare("INSERT INTO actions (type, status, input) VALUES ('think', 'queued', ?1) RETURNING id").bind(input).all();
+        const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', 'queued', ?1, ?2) RETURNING id").bind(input, taskType).all();
         const aid = r.results[0].id;
 
         // Detect task type and load matching prompt slot
