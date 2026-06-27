@@ -1513,6 +1513,12 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       if (!r.results?.length) return json({ error: "not found" }, 404);
       return json(r.results[0]);
     }
+    if (url.pathname.startsWith("/brain/agents/") && req.method === "DELETE") {
+      const id = parseInt(url.pathname.split("/").pop()) || 0;
+      if (!id) return json({ error: "id required" }, 400);
+      const r = await env.DB.prepare("DELETE FROM brain_agents WHERE id=?1").bind(id).run();
+      return json({ deleted: (r.meta?.changes || 0) > 0 });
+    }
 
     // --- Poll /think/result ---
     if (url.pathname === "/think/result" && req.method === "GET") {
