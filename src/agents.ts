@@ -54,7 +54,7 @@ export async function processOneStep(env, action) {
       }
     }
     if (parsed) {
-      state.fullHistory.push({ role: "assistant", content: trimmed });
+      state.fullHistory.push({ role: "assistant", content: JSON.stringify(parsed) });
       const callKey = parsed.tool + ":" + JSON.stringify(parsed.input);
       if (state.lastToolCall === callKey) {
         state.repeatCount = (state.repeatCount || 0) + 1;
