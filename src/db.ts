@@ -1,0 +1,146 @@
+import { SCHEMA_VERSION, TABLES, PROMPT_SLOTS, SEED_KNOWLEDGE, CF_AI } from './constants';
+
+export async function initSchema(db, env) {
+  try {
+    const v = await db.prepare("SELECT value FROM identity WHERE key='schema_version'").all();
+    if (v.results[0]?.value === SCHEMA_VERSION) return;
+    const oldTables = ['proposals','authority_receipts','anti_patterns','goals','subagents','thought_stream','emotion_reflection','identity_index','token_usage','pending_approvals','learnings','memories'];
+    for (const t of oldTables) { try { await db.exec("DROP TABLE IF EXISTS " + t); } catch {} }
+    for (const s of TABLES) { await db.exec(s); }
+    try { await db.exec("ALTER TABLE actions ADD COLUMN task TEXT DEFAULT 'chat'"); } catch {}
+    await db.exec("DELETE FROM brain_knowledge WHERE source='seed'");
+    for (const item of SEED_KNOWLEDGE) { try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'seed')").bind(item.k, item.c, item.cat).run(); } catch {} }
+    try { await db.exec("DROP TABLE IF EXISTS knowledge_fts"); } catch {}
+    await db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(key, content, category)");
+    try { await db.exec("INSERT INTO knowledge_fts SELECT key, content, category FROM brain_knowledge"); } catch {}
+    await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('schema_version',?1,datetime('now'))").bind(SCHEMA_VERSION).run();
+    await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('energy','100',datetime('now'))").run();
+    try { await db.prepare("DELETE FROM identity WHERE key='prompt_override' AND value='null'").run(); } catch {}
+    try { await db.prepare("DELETE FROM identity WHERE key='prompt_override' AND (value='' OR value IS NULL)").run(); } catch {}
+    for (const [slot, content] of Object.entries(PROMPT_SLOTS)) {
+      try { await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('prompt_slot_' || ?1, ?2, datetime('now'))").bind(slot, content).run(); } catch {}
+    }
+    try { await ensureVectorizeIndex(env); } catch {}
+    try { await indexAllKnowledge(env, db); } catch {}
+  } catch (e) { console.error("initSchema:", e); }
+}
+
+export async function getPromptSlot(db, slotName) {
+  try {
+    const r = await db.prepare("SELECT value FROM identity WHERE key='prompt_slot_' || ?1").bind(slotName).all();
+    if (r.results?.[0]?.value) return r.results[0].value;
+  } catch {}
+  return PROMPT_SLOTS[slotName] || PROMPT_SLOTS.default || "";
+}
+
+export function detectTaskType(input) {
+  const lower = (input || "").toLowerCase();
+  if (/\b(create_tool|add\b.*\btool|new (tool|command|feature)|write\b.*\b(file|code)|write_file|edit\b|refactor|fix\b.*\b(bug|issue)|pull request|pr\b|branch|commit|push\b|deploy|github_.*)/.test(lower)) return "coding";
+  if (/search|lookup|find\b|what is the |how (does|do|to)|current\b|latest\b|news\b|weather\b|price\b|stock\b|define\b|meaning\b|documentation/.test(lower) && !lower.includes("edit") && !lower.includes("fix ") && !lower.includes("pr ") && !lower.includes("branch")) return "search";
+  if (/\b(review\b|check\b|\bcode\b.*\breview\b|audit\b|inspect\b)/.test(lower) && !/\b(create|write|edit|fix|github_)/.test(lower)) return "review";
+  return "chat";
+}
+
+export async function getEmotions(db) {
+  const rows = await db.prepare("SELECT key, value FROM identity WHERE key LIKE 'emotion_%'").all();
+  const result = { energetic: 5, intelligent: 5, happy: 5, bad: 0 };
+  for (const r of rows.results) { const key = r.key.replace('emotion_', ''); if (key in result) result[key] = Math.min(parseInt(r.value) || result[key], 10); }
+  return result;
+}
+
+export async function getState(db) {
+  const rows = await db.prepare("SELECT key, value FROM identity WHERE key IN ('energy','confidence') OR key LIKE 'emotion_%'").all();
+  const emotions = { energetic: 5, intelligent: 5, happy: 5, bad: 0 };
+  for (const r of rows.results) { const key = r.key.replace("emotion_", ""); if (key in emotions) emotions[key] = Math.min(parseInt(r.value) || emotions[key], 10); }
+  const reg = { energy: 100, confidence: 50 };
+  for (const r of rows.results) { if (r.key === "energy") reg.energy = parseFloat(r.value) || 100; if (r.key === "confidence") reg.confidence = parseFloat(r.value) || 50; }
+  return { emotions, reg };
+}
+
+export function describeMood(emotions, energy) {
+  if (energy > 70 && emotions.energetic >= 6) return "Energy high, mind sharp.";
+  if (energy > 40) return "Steady and focused.";
+  return "Running low, but operational.";
+}
+
+export async function storeMemory(db, role, content, conversationId = "default") {
+  try { await db.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES (?1, ?2, ?3)").bind(role, content, conversationId).run(); } catch {}
+}
+
+export async function getRecentMemory(db, limit = 10, conversationId = "default") {
+  try { const r = await db.prepare("SELECT id, role, content, created_at FROM brain_memory WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2").bind(conversationId, limit).all(); return r.results ? r.results.reverse() : []; } catch { return []; }
+}
+
+export async function searchKnowledge(db, query, limit = 5) {
+  try {
+    const words = (query || "").replace(/[^\w\s-]/g, " ").trim().split(/[\s]+/).filter(Boolean).flatMap(t => t.split("-")).filter(Boolean).map(t => t + "*").join(" ");
+    if (!words) return [];
+    const r = await db.prepare("SELECT key, content, category FROM knowledge_fts WHERE knowledge_fts MATCH ?1 ORDER BY rank LIMIT ?2").bind(words, limit).all();
+    if (r.results?.length) return r.results;
+    const safe = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
+    const fallback = await db.prepare("SELECT key, content, category FROM brain_knowledge WHERE content LIKE ?1 OR key LIKE ?1 LIMIT ?2").bind("%" + safe + "%", limit).all();
+    return fallback.results || [];
+  } catch { return []; }
+}
+
+export async function embedText(env, text) {
+  if (!env.CF_API_TOKEN) return null;
+  try {
+    const resp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/run/@cf/baai/bge-base-en-v1.5", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN },
+      body: JSON.stringify({ text: [text.slice(0, 512)] }), signal: AbortSignal.timeout(10000)
+    });
+    if (!resp.ok) return null; const data = await resp.json(); return data.result?.data?.[0] || null;
+  } catch { return null; }
+}
+
+export async function semanticSearch(env, query, limit = 5) {
+  if (!env.VECTORIZE) return [];
+  try {
+    const embedding = await embedText(env, query);
+    if (!embedding) return [];
+    const results = await env.VECTORIZE.query(embedding, { topK: limit, returnValues: false, returnMetadata: true });
+    return (results?.matches || []).filter(m => m.score > 0.5).map(m => ({ key: m.metadata?.key || "", content: m.metadata?.content || "", category: m.metadata?.category || "", score: m.score }));
+  } catch { return []; }
+}
+
+export async function ensureVectorizeIndex(env) {
+  if (!env.VECTORIZE || !env.CF_API_TOKEN) return;
+  try { await env.VECTORIZE.describe(); } catch {
+    await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/vectorize/v2/indexes", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN },
+      body: JSON.stringify({ name: "saraha-brain-memory", description: "Skytron semantic memory", config: { dimensions: 768, metric: "cosine" } })
+    });
+  }
+}
+
+export async function indexKnowledgeForSearch(env, key, content, category) {
+  if (!env.VECTORIZE) return;
+  try {
+    const embedding = await embedText(env, (key + " " + content).slice(0, 512));
+    if (embedding) await env.VECTORIZE.upsert([{ id: "kn_" + key, values: embedding, metadata: { key, content: content.slice(0, 2000), category } }]);
+  } catch {}
+}
+
+export async function indexAllKnowledge(env, db) {
+  if (!env.VECTORIZE) return;
+  try {
+    const r = await db.prepare("SELECT key, content, category FROM brain_knowledge").all();
+    if (!r.results?.length) return;
+    for (const row of r.results) {
+      const embedding = await embedText(env, (row.key + " " + row.content).slice(0, 512));
+      if (embedding) await env.VECTORIZE.upsert([{ id: "kn_" + row.key, values: embedding, metadata: { key: row.key, content: row.content.slice(0, 2000), category: row.category } }]);
+    }
+  } catch {}
+}
+
+export async function saveAgentState(db, actionId, state) {
+  await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('agent_state_' || ?1, ?2, datetime('now'))").bind(String(actionId), JSON.stringify(state)).run();
+}
+export async function loadAgentState(db, actionId) {
+  const r = await db.prepare("SELECT value FROM identity WHERE key='agent_state_' || ?1").bind(String(actionId)).all();
+  return r.results?.[0]?.value ? JSON.parse(r.results[0].value) : null;
+}
+export async function deleteAgentState(db, actionId) {
+  await db.prepare("DELETE FROM identity WHERE key='agent_state_' || ?1").bind(String(actionId)).run();
+}

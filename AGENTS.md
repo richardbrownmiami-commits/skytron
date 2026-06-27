@@ -7,7 +7,7 @@
 # Deployment
 
 - All deployments go through GitHub — commit & push to `main`, GitHub Actions auto-deploys via `cloudflare/wrangler-action`.
-- Do NOT run `wrangler deploy` locally. Local builds with `npx esbuild index.ts --bundle --format=esm --outfile=dist\worker.js` are for verification only.
+- Do NOT run `wrangler deploy` locally. Local builds with `npx esbuild src/index.ts --bundle --format=esm --outfile=dist\worker.js --loader:.html=text` are for verification only.
 - After pushing, wait ~30s for GH Actions deploy, then test against the live worker URL.
 
 # Known Issues
