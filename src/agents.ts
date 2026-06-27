@@ -37,9 +37,10 @@ export async function processOneStep(env, action) {
         const waResult = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
           messages: [{ role: "system", content: fallbackPrompt }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200
         }, { signal: AbortSignal.timeout(15000) });
-        if (typeof waResult?.response === "string") {
-          try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_ok", "Workers AI succeeded: " + waResult.response.slice(0, 200), "workers-ai").run(); } catch {}
-          state.finalContent = cleanseIdentity(waResult.response); state.done = true; await finalizeAction(db, action.id, state); return;
+        const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
+        if (waText) {
+          try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_ok", "Workers AI succeeded: " + waText.slice(0, 200), "workers-ai").run(); } catch {}
+          state.finalContent = cleanseIdentity(waText); state.done = true; await finalizeAction(db, action.id, state); return;
         }
         try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_noresp", "Workers AI returned no response: " + JSON.stringify(waResult).slice(0, 200), "workers-ai").run(); } catch {}
       } else {

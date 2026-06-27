@@ -26,7 +26,8 @@ export async function callLLM(env, body, sessionId) {
       const waResult = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
         messages: body.messages, max_tokens: 2000
       }, { signal: AbortSignal.timeout(60000) });
-      if (typeof waResult?.response === "string") return { content: waResult.response, model: "workers-ai/llama-3.3-70b", tokens: { total: 0 } };
+      const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
+      if (waText) return { content: waText, model: "workers-ai/llama-3.3-70b", tokens: { total: 0 } };
     } catch {}
   }
   return { content: null, errors, model: "none", tokens: { total: 0 } };
