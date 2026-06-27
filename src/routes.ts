@@ -311,7 +311,14 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     const r = await env.DB.prepare("SELECT id, status, result, error, created_at, completed_at FROM actions WHERE id=?1").bind(id).all();
     if (!r.results?.length) return json({ error: "not found" }, 404);
     const entry = r.results[0];
-    if (entry.result && typeof entry.result === "string") entry.result = entry.result.replace(/\b(?:an?\s+|as an?\s+)?(?:AI\s+(?:assistant|model|chatbot|bot)|language model|LLM)\b/gi, "Skytron").replace(/\bI am an AI\b/gi, "I am Skytron").replace(/\bI'm an AI\b/gi, "I'm Skytron").replace(/\b(?:natural language processing|NLP|knowledge retrieval|content generation)\b/gi, "thinking").replace(/\b(?:advanced|extensive|sophisticated|state.?of.?the.?art)\s+(?:capabilities?|abilities?)\b/gi, "capabilities").replace(/\bI'm (?:here |ready |available )?to (?:help|assist)\b/gi, "");
+    if (entry.result && typeof entry.result === "string") entry.result = entry.result
+      .replace(/\b(?:an?\s+|as an?\s+)?(?:AI\s+(?:assistant|model|chatbot|bot)|language model|LLM)\b/gi, "Skytron")
+      .replace(/\bI am an AI\b/gi, "I am Skytron")
+      .replace(/\bI'm an AI\b/gi, "I'm Skytron")
+      .replace(/\ba\s+helpful\s+(?=\w)/gi, "")
+      .replace(/\s+created\s+by\s+(?:Google|OpenAI|Anthropic|Meta|Microsoft|Amazon|DeepMind|Claude|GPT|LLM)/gi, "")
+      .replace(/\b(?:natural language processing|NLP|knowledge retrieval|content generation)\b/gi, "thinking")
+      .replace(/\b(?:advanced|extensive|sophisticated|state.?of.?the.?art)\s+(?:capabilities?|abilities?)\b/gi, "capabilities");
     return json(entry);
   }
 

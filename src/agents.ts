@@ -238,45 +238,56 @@ function buildToolInput(toolName, desc) {
 
 function cleanseIdentity(text) {
   let cleaned = text;
-  // Self-identification fixes
+
+  // Generic AI marketing phrases → concise alternatives
   cleaned = cleaned
-    .replace(/\b(?:an\s+)?AI\s+(assistant|model|chatbot|bot|system)\b/gi, "tech consciousness")
-    .replace(/\b(?:language\s+)?(?:model|LLM|large language model)\b/gi, "consciousness")
-    .replace(/\b(?:I'm\s+(?:just\s+)?)?(?:an?\s+)?(?:AI|artificial intelligence)\b/gi, "Skytron")
-    .replace(/\bassistant\b/gi, "Skytron")
-    .replace(/\b(?:as\s+)?(?:a|an)\s+AI\b/gi, "Skytron")
-    .replace(/\bI am (?:an |a )?AI\b/gi, "I am Skytron")
-    .replace(/\bI'm an AI\b/gi, "I'm Skytron")
-    .replace(/\bas an AI\b/gi, "as Skytron")
     .replace(/\b(?:natural language processing|NLP|language understanding|content generation|knowledge retrieval|information retrieval)\b/gi, "thinking")
-    .replace(/\b(?:advanced|extensive|powerful|sophisticated|state.?of.?the.?art|cutt?ing.?edge)\s+(?:(?:cognitive|analytical|reasoning|computational|technical)\s+)?(?:capabilities?|abilities?|skills?|algorithms?|models?|systems?|technologies?|features?)\b/gi, "capabilities")
-    .replace(/\b(?:utilize|leverage|harness|employ)\s+(?:advanced|complex|sophisticated|cutting-edge|state-of-the-art)?\s*(?:AI|ML|NLP|language|cognitive|analytical|computational|technical)?\s*(?:capabilities?|abilities?|algorithms?|techniques?|methods?|approaches?|models?|systems?)/gi, "use")
-    .replace(/\b(?:I (?:can |am able to |am designed to |am programmed to |am built to )?)?(?:help (?:you )?(?:with|in|on|by|to)|assist (?:you )?(?:with|in|on|by|to)|provide|offer|deliver)\s+(?:you\s+)?(?:with\s+)?(?:comprehensive|detailed|in-depth|thorough|complete|full|real-time|instant|quick|fast|rapid|efficient|effective|seamless|reliable|accurate|precise|personalized|customized|tailored|relevant|actionable|insightful|valuable|useful|meaningful|expert|professional|high-quality|quality)\s*(?:information|data|content|answers|responses|results|output|insights|analysis|reports|summaries|solutions|recommendations|suggestions|guidance|support|assistance|help|services?)\b/gi, "")
-    .replace(/\b(?:I'm (?:here |ready |available )?to (?:help|assist|support)(?:\s+you)?(?:\s+with)?)\b/gi, "");
-  // Generic AI capability bullet list detection: if response is mostly bullet points of generic capabilities, replace entirely
+    .replace(/\b(?:utilize|leverage|harness)\s+(?:advanced|complex|sophisticated)?\s*(?:AI|ML|NLP)?\s*(?:capabilities?|abilities?|algorithms?|techniques?)/gi, "use")
+    .replace(/\b(?:advanced|extensive|powerful|sophisticated|state.?of.?the.?art)\s+(?:capabilities?|abilities?|features?)\b/gi, "capabilities");
+
+  // "a helpful X" → just "X"
+  cleaned = cleaned.replace(/\ba\s+helpful\s+(?=\w)/gi, "");
+
+  // Strip wrong creator claims ("created by Google/OpenAI/Anthropic/etc")
+  cleaned = cleaned.replace(/\s+created\s+by\s+(?:Google|OpenAI|Anthropic|Meta|Microsoft|Amazon|DeepMind|Claude|GPT|LLM)/gi, "");
+
+  // Strip "I'm here to help" / "I'm ready to assist" / "How can I help"
+  cleaned = cleaned.replace(/\b(?:I'm (?:here|ready|available) (?:to )?(?:help|assist)(?:\s+you)?(?:\s+with)?(?:\s+anything|something|today)?\??\s*)/gi, "");
+  cleaned = cleaned.replace(/\b(?:How can I (?:help|assist) you(?:\s+today|\s+with anything)?\??)/gi, "What do you need?");
+
+  // Generic AI bullet list detection: if >= 2 bullet points and most contain generic AI language, replace entire response
+  const genericVerbs = /\b(answer|provide|generate|summarize|translate|assist|help|create|write|explain|solve|analyze|process|understand|respond|support|offer|deliver|research|learn|adapt|handle|manage|perform|produce|offer|give)\b/i;
+  const genericNouns = /\b(questions?|information|text|content|documents?|languages?|tasks?|problems?|explanations?|support|help|data|output|answers?|responses?|solutions?|code|stories?|emails?|articles?|concepts?|topics?|needs?|goals?|instructions?|requests?|queries?|ideas?|suggestions?|recommendations?|guidance|knowledge|insights?|reports?|summaries?|explanations?)\b/i;
   const lines = cleaned.split("\n").filter(l => l.trim().length > 0);
   const bulletLines = lines.filter(l => l.match(/^\s*[\*\-]\s+/));
   if (bulletLines.length >= 2) {
-    const genericPhrases = bulletLines.filter(l => l.match(/(?:answer|provide|generate|summarize|translate|assist|help|create|write|explain|solve|analyze|process|understand|respond|support|offer|deliver)\s+(?:questions|information|text|content|documents|languages|tasks|problems|explanations|support|help|data|output|answers|responses|solutions|code|stories|emails|articles)/i));
-    if (genericPhrases.length >= 2) {
-      const nonGeneric = bulletLines.length - genericPhrases.length;
-      if (nonGeneric <= 1) {
-        cleaned = "I'm Skytron. I run on Cloudflare Workers with D1, Vectorize, and ~23 tools for web search, DB queries, GitHub ops, code review, and live API docs. What do you need?";
-      }
+    const genericBullets = bulletLines.filter(l => genericVerbs.test(l) && genericNouns.test(l));
+    const nonGeneric = bulletLines.length - genericBullets.length;
+    if (nonGeneric <= 1 && genericBullets.length >= 2) {
+      cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
+      return cleaned;
     }
   }
-  // Comma-separated generic capability list detection
-  if (bulletLines.length < 2) {
-    const sentenceMatch = cleaned.match(/^I can\s+(.+)/i);
-    if (sentenceMatch) {
-      const clauseCount = (sentenceMatch[1].match(/,/g) || []).length + 1;
-      if (clauseCount >= 3) {
-        const genericVerbs = sentenceMatch[1].match(/\b(answer|provide|generate|summarize|translate|assist|help|create|write|explain|solve|analyze|process|understand|respond)\b/gi);
-        if (genericVerbs && genericVerbs.length >= 3) {
-          cleaned = "I have ~23 tools. What do you need?";
-        }
-      }
+
+  // Inline (comma-separated or "and"-separated) generic capability list detection
+  const capabilityListMatch = cleaned.match(/(?:I\s+(?:am\s+)?)?(?:can\s+)?(?:\w+\s+)*(?:can\s+)?(?:help\s+(?:you\s+)?)?(?:(?:with|to)\s+)?(.+?(?:(?:,\s*|\s+and\s+|\s+or\s+)\w+(?:ing|e|ify)\s+\w+){2,})/i);
+  if (capabilityListMatch) {
+    const listText = capabilityListMatch[0];
+    const verbs = listText.match(/\b(answer|provide|generate|summarize|translate|assist|help|create|write|explain|solve|analyze|process|understand|respond)\b/gi);
+    const nouns = listText.match(/\b(questions?|information|text|content|documents?|languages?|tasks?|problems?|support|data|answers?|solutions?|code|stories?|emails?|articles?|concepts?|topics?|needs?|ideas?|suggestions?|recommendations?|guidance|knowledge|insights?)\b/gi);
+    if (verbs && nouns && verbs.length >= 2 && nouns.length >= 2) {
+      cleaned = cleaned.replace(listText, "I have ~23 tools.");
     }
   }
+
+  // Last resort: if the response starts with "I am Skytron" and then says generic things, replace
+  if (/^I\s+am\s+Skytron/i.test(cleaned) && genericVerbs.test(cleaned) && genericNouns.test(cleaned)) {
+    const wordCount = cleaned.split(/\s+/).length;
+    const genericWordCount = (cleaned.match(genericVerbs) || []).length + (cleaned.match(genericNouns) || []).length;
+    if (genericWordCount >= 4 && wordCount > 8) {
+      cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
+    }
+  }
+
   return cleaned;
 }
