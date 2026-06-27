@@ -42,8 +42,7 @@ export async function processOneStep(env, action) {
     const analysisPattern = /^(the user (is|wants|asked|says|keeps)|looking at|from the conversation|based on my|according to|i should|let me|in the conversation|so (the|what)|this (is about|appears|seems)|the conversation)/i;
     if (!parsed && repromptCount < 3 && analysisPattern.test(trimmed) && trimmed.length > 80) {
       state.repromptCount = (state.repromptCount || 0) + 1;
-      state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
-      state.fullHistory.push({ role: "user", content: "[SYSTEM: Stop analyzing. That was your internal scratchpad, not a response. Output ONLY either a direct answer to the user or a raw JSON tool call. No self-narration, no conversation summary, no third-person. Just respond.]" });
+      state.fullHistory.push({ role: "user", content: "[HARD STOP] You just wrote internal analysis. DELETE IT. Respond NOW with ONLY: a direct 1-2 sentence answer, or a raw JSON tool call. NO 'The user...' NO 'Looking at...' NO 'I should...' NO third person. ZERO analysis. GO." });
       await saveAgentState(db, action.id, state);
       await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
       return;
