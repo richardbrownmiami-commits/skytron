@@ -40,12 +40,13 @@ export async function processOneStep(env, action) {
     let parsed = tryParseToolCall(trimmed);
     const repromptCount = state.repromptCount || 0;
     const analysisPattern = /^(the user (is|wants|asked|says|keeps)|looking at|from the conversation|based on my|according to|i should|let me|in the conversation|so (the|what)|this (is about|appears|seems)|the conversation)/i;
-    if (!parsed && repromptCount < 3 && analysisPattern.test(trimmed) && trimmed.length > 80) {
-      state.repromptCount = (state.repromptCount || 0) + 1;
-      state.fullHistory.push({ role: "user", content: "[HARD STOP] You just wrote internal analysis. DELETE IT. Respond NOW with ONLY: a direct 1-2 sentence answer, or a raw JSON tool call. NO 'The user...' NO 'Looking at...' NO 'I should...' NO third person. ZERO analysis. GO." });
-      await saveAgentState(db, action.id, state);
-      await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
-      return;
+    if (!parsed && !trimmed.includes('"tool":') && analysisPattern.test(trimmed) && trimmed.length > 80 && !Object.keys(toolDefinitions).some(t => new RegExp("\\b" + t.replace(/_/g, "\\w*") + "\\b", "i").test(trimmed))) {
+      const sentences = trimmed.split(/[.!?\n]+/).map(s => s.trim()).filter(Boolean);
+      const clean = sentences.filter(s => !analysisPattern.test(s.trim())).join(". ");
+      content = clean.length > 10 ? clean.slice(0, 500) : sentences.slice(-2).join(". ").slice(0, 300);
+      state.finalContent = content; state.done = true;
+      state.totalTokens += resp.tokens?.total || 0;
+      await finalizeAction(db, action.id, state); return;
     }
     if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => { var lc = trimmed.toLowerCase(); var tn = t.toLowerCase(); return lc.includes('"' + tn + '"') || lc.includes("use " + tn) || lc.includes("use the " + tn) || lc.includes("using " + tn) || lc.includes("- " + tn) || lc.includes(tn + ":"); }))) {
       state.repromptCount = repromptCount + 1;

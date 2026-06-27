@@ -12,10 +12,8 @@ export async function callLLM(env, body, sessionId) {
     if (resp.ok) {
       const data = await resp.json();
       const msgContent = data.choices?.[0]?.message?.content;
-      const modelName = data.model || "";
-      if (typeof msgContent === "string" && !modelName.includes("north-mini-code-free"))
-        return { content: msgContent, model: modelName, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
-      if (modelName.includes("north-mini-code-free")) errors.push("BUDDHI_DWAR: degraded model (" + modelName + ") - skipping");
+      if (typeof msgContent === "string")
+        return { content: msgContent, model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
     }
     const errBody = await resp.text().catch(() => "");
     errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
