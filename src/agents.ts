@@ -89,8 +89,9 @@ export async function processOneStep(env, action) {
       state.lastToolCall = callKey;
       await saveAgentState(db, action.id, state);
       if (state.repeatCount >= 3) {
-        state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYou called '" + parsed.tool + "' 3 times with no progress. Use web_search to research an alternative approach or different tool that achieves the same goal. If nothing works, describe the issue to the user." });
+        state.fullHistory.push({ role: "user", content: "[SYSTEM: You called '" + parsed.tool + "' 3 times with the same params. The tool already succeeded. Now SUMMARIZE the result in plain English. DO NOT output tool JSON. DO NOT repeat the tool call. Answer the user directly.]" });
         state.repeatCount = 0;
+        state.step++;
         await saveAgentState(db, action.id, state);
         await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
         return;
@@ -105,8 +106,8 @@ export async function processOneStep(env, action) {
           state.repeatCount = 0;
           state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Self-heal:\n1. RESEARCH: Use web_search to look up the error message or issue\n2. DIAGNOSE: What's actually broken? Your creds? The service? Bad params?\n3. FIX: Changed params, different tool that does same thing, or inform user\n4. LOOP CHECK: If you already researched this error, answer in plain text\n\nStart with web_search if you don't understand the error." });
         }
-        if (result && !result.startsWith("[TOOL ERROR:") && state.step > 0 && state.step % 2 === 0) {
-          state.fullHistory.push({ role: "user", content: "[SUCCESS AUDIT]\nQuick review:\n1. Did this result solve the problem or just complete a step?\n2. What worked well in this approach?\n3. Should this pattern be stored via learn?\n\nIf complete, answer in plain text. Otherwise continue." });
+        if (result && !result.startsWith("[TOOL ERROR:")) {
+          state.fullHistory.push({ role: "user", content: state.step === 0 ? "[CONSUME RESULT]\nRead the tool result above and answer the user in plain English. Do not call another tool unless the result was clearly insufficient." : "[CHECK]\n1. Is the user's request fully answered? If yes, respond in plain text.\n2. Need more info? Call the next tool. One at a time." });
         }
       }
       state.totalTokens += resp.tokens?.total || 0;
