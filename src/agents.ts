@@ -39,6 +39,15 @@ export async function processOneStep(env, action) {
     const trimmed = content.trim();
     let parsed = tryParseToolCall(trimmed);
     const repromptCount = state.repromptCount || 0;
+    const analysisPattern = /^(the user (is|wants|asked|says|keeps)|looking at|from the conversation|based on my|according to|i should|let me|in the conversation|so (the|what)|this (is about|appears|seems)|the conversation)/i;
+    if (!parsed && repromptCount < 1 && analysisPattern.test(trimmed) && trimmed.length > 100) {
+      state.repromptCount = (state.repromptCount || 0) + 1;
+      state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
+      state.fullHistory.push({ role: "user", content: "[SYSTEM: Stop analyzing. That was your internal scratchpad, not a response. Output ONLY either a direct answer to the user or a raw JSON tool call. No self-narration, no conversation summary, no third-person. Just respond.]" });
+      await saveAgentState(db, action.id, state);
+      await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+      return;
+    }
     if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => { var lc = trimmed.toLowerCase(); var tn = t.toLowerCase(); return lc.includes('"' + tn + '"') || lc.includes("use " + tn) || lc.includes("use the " + tn) || lc.includes("using " + tn) || lc.includes("- " + tn) || lc.includes(tn + ":"); }))) {
       state.repromptCount = repromptCount + 1;
       const extracted = extractToolFromPlan(trimmed);
