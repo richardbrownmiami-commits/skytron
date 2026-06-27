@@ -3,7 +3,6 @@ import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
-import { handleScheduled } from './scheduler';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
@@ -276,8 +275,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   }
 
   if (url.pathname === "/__cron" && req.method === "GET") {
-    try { await handleScheduled(null, env); } catch (e) { return json({ error: e.message }, 500); }
-    return json({ processed: true, message: "cron tick executed" });
+    try { await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run(); const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); } return json({ processed: false, message: "no queued actions" }); } catch (e) { return json({ error: e.message }, 500); }
   }
 
   if (url.pathname === "/__cron_agent" && req.method === "GET") {
