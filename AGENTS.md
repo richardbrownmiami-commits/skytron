@@ -13,7 +13,18 @@
 # Known Issues
 
 - **BUDDHI_DWAR KV limit**: All 5 proxied providers (groq/openrouter/mistral/google/opencode-zen) fail with `"gateway error: KV put() limit exceeded for the day."` when BUDDHI_DWAR's Cloudflare KV daily write limit is hit. Workers AI fallback (`@cf/meta/llama-3.1-8b-instruct`) is used instead. In `callLLM`, 5 providers are tried in order (groq, openrouter, mistral, google, opencode-zen), each with a 10s timeout.
-- **No cron trigger** (FIXED 2026-06-27): Added `[[triggers]]` cron pattern `*/1 * * * *` to `wrangler.toml`. The `scheduled` handler now auto-fires every minute. Also added immediate fire-and-forget processing in `spawn_agent` execute so agents don't need to wait for cron.
+- **No cron trigger** (FIXED 2026-06-27): Added `[[triggers]]` cron pattern `*/1 * * * *` to `wrangler.toml`. The `scheduled` handler now auto-fires every minute.
+- **Agent processing reliability**: Agents used fire-and-forget in `spawn_agent.execute` which got killed when `ctx.waitUntil` completed. Now agents are processed in `/think`'s post-action `ctx.waitUntil` and via cron/scheduled handler.
+
+# Latest Changes (2026-06-27)
+
+## Agent Processing Reliability Fixes (commits 1af6fc8..a9c81f9)
+- Removed unreliable fire-and-forget from `spawn_agent.execute` — agents now rely on cron/scheduled processing.
+- Added agent processing in `/think`'s `ctx.waitUntil` after the main action completes (up to 3 agents per tick).
+- `processOneAgentStep` now sets `status='running'`, `step`, `updated_at` immediately at call start to prevent dual-processing by parallel cron ticks.
+- Cron scheduled handler resets agents stuck in `running` >2min back to `queued` before picking the next agent.
+- Same stuck-agent recovery added to `__cron_agent` debug endpoint.
+- Agents flow through queue: `queued → running → done/error` — one per tick. LLM call speed remains bottleneck during BUDDHI_DWAR KV limit.
 
 # Latest Changes (2026-06-26)
 
