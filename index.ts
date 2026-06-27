@@ -1519,6 +1519,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       const r = await env.DB.prepare("DELETE FROM brain_agents WHERE id=?1").bind(id).run();
       return json({ deleted: (r.meta?.changes || 0) > 0 });
     }
+    if (url.pathname === "/brain/agents" && req.method === "DELETE") {
+      const r = await env.DB.prepare("DELETE FROM brain_agents WHERE status IN ('done','error')").run();
+      return json({ deleted: r.meta?.changes || 0 });
+    }
 
     // --- Poll /think/result ---
     if (url.pathname === "/think/result" && req.method === "GET") {
@@ -1569,8 +1573,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         const logTrim = await env.DB.prepare("DELETE FROM brain_logs WHERE id NOT IN (SELECT id FROM brain_logs ORDER BY id DESC LIMIT 1000)").run();
         // Trim old completed actions (keep last 500)
         const actTrim = await env.DB.prepare("DELETE FROM actions WHERE status='done' AND id NOT IN (SELECT id FROM actions WHERE status='done' ORDER BY id DESC LIMIT 500)").run();
+        // Trim old agents: keep last 50 done/error
+        const agentTrim = await env.DB.prepare("DELETE FROM brain_agents WHERE status IN ('done','error') AND id NOT IN (SELECT id FROM brain_agents WHERE status IN ('done','error') ORDER BY id DESC LIMIT 50)").run();
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_cleanup_date',?1,datetime('now'))").bind(today).run();
-        console.error("Cleanup: removed " + (deleted.meta?.changes||0) + " old memories, " + (logTrim.meta?.changes||0) + " logs, " + (actTrim.meta?.changes||0) + " actions");
+        console.error("Cleanup: removed " + (deleted.meta?.changes||0) + " old memories, " + (logTrim.meta?.changes||0) + " logs, " + (actTrim.meta?.changes||0) + " actions, " + (agentTrim.meta?.changes||0) + " agents");
       }
     } catch (e) { console.error("cleanup error:", e); }
   },
