@@ -2,6 +2,19 @@ import { z } from "zod";
 import { CF_AI } from './constants';
 import { embedText, indexKnowledgeForSearch } from './db';
 
+async function tavilySearch(apiKey, query) {
+  try {
+    const resp = await fetch("https://api.tavily.com/search", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: apiKey, query, search_depth: "basic", max_results: 5 }),
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return (data.results || []).map(r => r.title + " (" + r.url + "): " + (r.content || "")).join("\n").slice(0, 2000) || null;
+  } catch { return null; }
+}
+
 export async function webSearch(env, query) {
   let lastError = "";
   if (env.BRAVE_API_KEY) {
@@ -17,16 +30,23 @@ export async function webSearch(env, query) {
     const resp = await fetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(query), { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(15000) });
     const html = await resp.text();
     const linkMatches = [...html.matchAll(/<a[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g)].slice(0, 5);
-    if (!linkMatches.length) return "[TOOL ERROR: DuckDuckGo returned no results. " + lastError + "]";
-    const sniMatches = [...html.matchAll(/<td\s+class=['"]result-snippet['"][^>]*>([\s\S]*?)<\//g)];
-    return linkMatches.map((m, i) => {
-      const title = m[1].replace(/<[^>]*>/g, "").trim();
-      const h = m[0].match(/href\s*=\s*["']([^"']*)/); const url = h ? h[1] : "";
-      const u = url.match(/uddg=([^&]+)/); const finalUrl = u ? decodeURIComponent(u[1]) : (url.startsWith("//") ? "https:" + url : url);
-      const snippet = sniMatches[i] ? sniMatches[i][1].replace(/<[^>]*>/g, "").trim() : "";
-      return title + " (" + finalUrl + "): " + snippet;
-    }).join("\n");
+    if (linkMatches.length) {
+      const sniMatches = [...html.matchAll(/<td\s+class=['"]result-snippet['"][^>]*>([\s\S]*?)<\//g)];
+      const results = linkMatches.map((m, i) => {
+        const title = m[1].replace(/<[^>]*>/g, "").trim();
+        const h = m[0].match(/href\s*=\s*["']([^"']*)/); const url = h ? h[1] : "";
+        const u = url.match(/uddg=([^&]+)/); const finalUrl = u ? decodeURIComponent(u[1]) : (url.startsWith("//") ? "https:" + url : url);
+        const snippet = sniMatches[i] ? sniMatches[i][1].replace(/<[^>]*>/g, "").trim() : "";
+        return title + " (" + finalUrl + "): " + snippet;
+      }).join("\n");
+      return results;
+    }
+    lastError = "DuckDuckGo returned no results";
   } catch (e) { lastError = "DuckDuckGo error: " + (e.message || e); }
+  if (env.TAVILY_API_KEY) {
+    const tavily = await tavilySearch(env.TAVILY_API_KEY, query);
+    if (tavily) return tavily;
+  }
   return "[TOOL ERROR: web_search failed. " + lastError + "]";
 }
 
@@ -81,10 +101,19 @@ export const toolDefinitions = {
     execute: async (env, input) => { const r = await webSearch(env, input.query); return r.slice(0, 2000); },
   },
   web_fetch: {
-    description: "Fetch a web page and extract its readable text content.",
+    description: "Fetch a web page and extract its readable text content. Uses Tinyfish API for JS-rendered pages when available, falls back to raw fetch.",
     schema: z.object({ url: z.string().describe("The URL to fetch") }),
     execute: async (env, input) => {
       const target = input.url.startsWith("http") ? input.url : "https://" + input.url;
+      if (env.TINYFISH_API_KEY) {
+        try {
+          const tfResp = await fetch("https://api.tinyfish.io/v1/scrape?url=" + encodeURIComponent(target), {
+            headers: { Authorization: "Bearer " + env.TINYFISH_API_KEY },
+            signal: AbortSignal.timeout(15000)
+          });
+          if (tfResp.ok) { const tf = await tfResp.text(); if (tf.length > 50) return tf.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 4000); }
+        } catch {}
+      }
       const resp = await fetch(target, { headers: { "User-Agent": "Mozilla/5.0 (Saraha-Brain)" }, signal: AbortSignal.timeout(15000) });
       const html = await resp.text();
       return html.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 4000);
