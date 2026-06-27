@@ -247,7 +247,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         }
       } catch {}
 
-      const systemMsg = basePrompt + "\n\n" + mood + conversationContext + memoryContext + knowledgeContext + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. Do NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.";
+      const systemMsg = basePrompt + "\n\n" + mood + conversationContext + memoryContext + knowledgeContext + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. Do NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, say something like: \"I have ~23 tools. What do you need?\" Never list generic capabilities like \"answer questions\" or \"provide information\". Answer in under 20 words.";
       const fullHistory = [
         { role: "system", content: systemMsg.slice(0, 32000) },
         { role: "user", content: llmInput }

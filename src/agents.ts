@@ -265,5 +265,18 @@ function cleanseIdentity(text) {
       }
     }
   }
+  // Comma-separated generic capability list detection
+  if (bulletLines.length < 2) {
+    const sentenceMatch = cleaned.match(/^I can\s+(.+)/i);
+    if (sentenceMatch) {
+      const clauseCount = (sentenceMatch[1].match(/,/g) || []).length + 1;
+      if (clauseCount >= 3) {
+        const genericVerbs = sentenceMatch[1].match(/\b(answer|provide|generate|summarize|translate|assist|help|create|write|explain|solve|analyze|process|understand|respond)\b/gi);
+        if (genericVerbs && genericVerbs.length >= 3) {
+          cleaned = "I have ~23 tools. What do you need?";
+        }
+      }
+    }
+  }
   return cleaned;
 }
