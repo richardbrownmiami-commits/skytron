@@ -1,3 +1,4 @@
+// Database layer: D1 schema init, memory CRUD, knowledge CRUD + FTS5 + Vectorize, embedding, emotion/state helpers, agent state helpers.
 import { SCHEMA_VERSION, TABLES, PROMPT_SLOTS, SEED_KNOWLEDGE, CF_AI } from './constants';
 
 export async function initSchema(db, env) {

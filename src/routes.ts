@@ -1,3 +1,4 @@
+// Route handlers for all endpoints: /think (main conversation, POST), /think/result (poll), /skytronchat (UI), /brain/* (memory/knowledge/logs/agents/source/introspect/prompt), /status, /__cron.
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
@@ -309,7 +310,9 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     if (!id) return json({ error: "id required" }, 400);
     const r = await env.DB.prepare("SELECT id, status, result, error, created_at, completed_at FROM actions WHERE id=?1").bind(id).all();
     if (!r.results?.length) return json({ error: "not found" }, 404);
-    return json(r.results[0]);
+    const entry = r.results[0];
+    if (entry.result && typeof entry.result === "string") entry.result = entry.result.replace(/\b(?:an?\s+|as an?\s+)?(?:AI\s+(?:assistant|model|chatbot|bot)|language model|LLM)\b/gi, "Skytron").replace(/\bI am an AI\b/gi, "I am Skytron").replace(/\bI'm an AI\b/gi, "I'm Skytron").replace(/\b(?:natural language processing|NLP|knowledge retrieval|content generation)\b/gi, "thinking").replace(/\b(?:advanced|extensive|sophisticated|state.?of.?the.?art)\s+(?:capabilities?|abilities?)\b/gi, "capabilities").replace(/\bI'm (?:here |ready |available )?to (?:help|assist)\b/gi, "");
+    return json(entry);
   }
 
   if (url.pathname === "/think/latest" && req.method === "GET") {

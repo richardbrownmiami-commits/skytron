@@ -1,3 +1,4 @@
+// Cron scheduler: runs every minute via [[triggers]]. Processes 1 action + 1 agent step per tick. Handles daily cleanup.
 import { initSchema } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 

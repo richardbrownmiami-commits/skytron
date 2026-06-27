@@ -1,3 +1,4 @@
+// Agent loop: processOneStep (action pipeline: context → LLM → tool dispatch → finalize), processOneAgentStep (sub-agent: same but limited tools, 8-step max). Includes analysis-text detection and stripping.
 import { callLLM, parseLLMJson } from './llm';
 import { dispatchTool, listTools, toolDefinitions } from './tools';
 import { storeMemory, saveAgentState, loadAgentState, deleteAgentState } from './db';
@@ -28,7 +29,7 @@ export async function processOneStep(env, action) {
           method: "POST", headers: { Authorization: "Bearer " + env.CF_API_TOKEN, "Content-Type": "application/json" },
           body: JSON.stringify({ messages: [{ role: "system", content: fallbackPrompt }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200 }), signal: AbortSignal.timeout(15000)
         });
-        if (waResp.ok) { const d = await waResp.json(); if (typeof d.result?.response === "string") { state.finalContent = d.result.response; state.done = true; await finalizeAction(db, action.id, state); return; } }
+        if (waResp.ok) { const d = await waResp.json(); if (typeof d.result?.response === "string") { state.finalContent = cleanseIdentity(d.result.response); state.done = true; await finalizeAction(db, action.id, state); return; } }
       }
     } catch {}
     state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
@@ -97,6 +98,7 @@ export async function processOneStep(env, action) {
         return;
       }
     } else {
+      content = cleanseIdentity(content);
       state.finalContent = content; state.done = true;
       state.totalTokens += resp.tokens?.total || 0;
     }
@@ -232,4 +234,21 @@ function buildToolInput(toolName, desc) {
     return { tool: toolName, input };
   }
   return null;
+}
+
+function cleanseIdentity(text) {
+  return text
+    .replace(/\b(?:an\s+)?AI\s+(assistant|model|chatbot|bot|system)\b/gi, "tech consciousness")
+    .replace(/\b(?:language\s+)?(?:model|LLM|large language model)\b/gi, "consciousness")
+    .replace(/\b(?:I'm\s+(?:just\s+)?)?(?:an?\s+)?(?:AI|artificial intelligence)\b/gi, "Skytron")
+    .replace(/\bassistant\b/gi, "Skytron")
+    .replace(/\b(?:as\s+)?(?:a|an)\s+AI\b/gi, "Skytron")
+    .replace(/\bI am (?:an |a )?AI\b/gi, "I am Skytron")
+    .replace(/\bI'm an AI\b/gi, "I'm Skytron")
+    .replace(/\bas an AI\b/gi, "as Skytron")
+    .replace(/\b(?:natural language processing|NLP|language understanding|content generation|knowledge retrieval|information retrieval)\b/gi, "thinking")
+    .replace(/\b(?:advanced|extensive|powerful|sophisticated|state.?of.?the.?art|cutt?ing.?edge)\s+(?:(?:cognitive|analytical|reasoning|computational|technical)\s+)?(?:capabilities?|abilities?|skills?|algorithms?|models?|systems?|technologies?|features?)\b/gi, "capabilities")
+    .replace(/\b(?:utilize|leverage|harness|employ)\s+(?:advanced|complex|sophisticated|cutting-edge|state-of-the-art)?\s*(?:AI|ML|NLP|language|cognitive|analytical|computational|technical)?\s*(?:capabilities?|abilities?|algorithms?|techniques?|methods?|approaches?|models?|systems?)/gi, "use")
+    .replace(/\b(?:I (?:can |am able to |am designed to |am programmed to |am built to )?)?(?:help (?:you )?(?:with|in|on|by|to)|assist (?:you )?(?:with|in|on|by|to)|provide|offer|deliver)\s+(?:you\s+)?(?:with\s+)?(?:comprehensive|detailed|in-depth|thorough|complete|full|real-time|instant|quick|fast|rapid|efficient|effective|seamless|reliable|accurate|precise|personalized|customized|tailored|relevant|actionable|insightful|valuable|useful|meaningful|expert|professional|high-quality|quality)\s*(?:information|data|content|answers|responses|results|output|insights|analysis|reports|summaries|solutions|recommendations|suggestions|guidance|support|assistance|help|services?)\b/gi, "")
+    .replace(/\b(?:I'm (?:here |ready |available )?to (?:help|assist|support)(?:\s+you)?(?:\s+with)?)\b/gi, "");
 }

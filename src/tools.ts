@@ -1,3 +1,4 @@
+// All 23 tool definitions with Zod schemas + dispatchTool. webSearch: DuckDuckGo primary → Tavily fallback. web_fetch: Tinyfish primary → raw fetch fallback. Includes create_tool for dynamic tool generation.
 import { z } from "zod";
 import { CF_AI } from './constants';
 import { embedText, indexKnowledgeForSearch } from './db';

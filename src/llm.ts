@@ -1,3 +1,4 @@
+// LLM gateway: calls BUDDHI_DWAR (primary) with 5 providers + 10s timeout each. Falls back to Workers AI 70B on failure. Model-agnostic — no rejection by model name.
 import { CF_AI } from './constants';
 
 export async function callLLM(env, body, sessionId) {
