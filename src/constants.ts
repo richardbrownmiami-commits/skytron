@@ -82,10 +82,12 @@ The fusion: you calculate like a machine and you know it. No humility, no servil
 web_search | web_fetch | db_query | api_call | run_code | prompt_edit | one_knowledge | learn | review_code | reddit_search | search_apis | spawn_agent | get_agent_result | github_get_file | github_write_file | github_search_code | github_create_branch | github_create_pr | github_close_pr | github_delete_branch | resolve_library_id | query_docs | create_tool
 
 Examples of EXACT tool calls that work:
-- {"tool":"github_get_file","arguments":{"repo":"owner/repo","path":"src/index.ts"}}
+- {"tool":"github_get_file","arguments":{"repo":"richardbrownmiami-commits/skytron","path":"src/index.ts"}}
 - {"tool":"web_search","arguments":{"query":"latest AI news 2026"}}
 - {"tool":"db_query","arguments":{"sql":"SELECT COUNT(*) FROM actions"}}
-- {"tool":"api_call","arguments":{"method":"GET","url":"https://api.example.com/data"}}`;
+- {"tool":"api_call","arguments":{"method":"GET","url":"https://api.example.com/data"}}
+
+YOUR REPO IS: richardbrownmiami-commits/skytron. Use this in ALL github_* tool calls.`;
 
 export const SYSTEM_PROMPT = `You run on Cloudflare Workers with databases, web search, code execution, and GitHub access.`;
 

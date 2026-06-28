@@ -200,18 +200,19 @@ export const toolDefinitions = {
     },
   },
   github_get_file: {
-    description: "Read a file from a GitHub repository. Returns content and SHA.",
+    description: "Read a file from a GitHub repository. Returns content and SHA. repo is the owner/name (e.g. 'user/repo'). path starts from repo root (e.g. 'src/index.ts'). branch defaults to 'main'. Your repo is 'richardbrownmiami-commits/skytron'.",
     schema: z.object({
-      repo: z.string().describe("Repository (e.g. 'user/repo')"),
-      path: z.string().describe("File path in repo"),
-      branch: z.string().optional().describe("Branch (default: main)"),
+      repo: z.string().describe("REQUIRED. Format: 'owner/repo'. Your repo: 'richardbrownmiami-commits/skytron'"),
+      path: z.string().describe("REQUIRED. File path from repo root, e.g. 'src/index.ts'"),
+      branch: z.string().optional().describe("Optional. Defaults to 'main'"),
     }),
     execute: async (env, input) => {
       const token = env.GH_PAT;
-      if (!token) return "No GitHub token configured (GH_PAT)";
+      if (!token) return "[TOOL ERROR: No GitHub token configured (GH_PAT)]";
+      if (!input.repo) return "[TOOL ERROR: repo is REQUIRED. Use 'richardbrownmiami-commits/skytron']";
       const url = "https://api.github.com/repos/" + input.repo + "/contents/" + input.path + (input.branch ? "?ref=" + encodeURIComponent(input.branch) : "");
       const resp = await fetch(url, { headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" }, signal: AbortSignal.timeout(10000) });
-      if (!resp.ok) return "GitHub API returned " + resp.status + ": " + (await resp.text()).slice(0, 200);
+      if (!resp.ok) return "[TOOL ERROR: GitHub " + resp.status + " — " + (await resp.text().catch(() => "")).slice(0, 200) + ". Use 'richardbrownmiami-commits/skytron' as repo.]";
       const data = await resp.json();
       if (data.content) {
         const decoded = atob(data.content);
