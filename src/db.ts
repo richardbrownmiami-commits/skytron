@@ -156,17 +156,23 @@ export async function indexKnowledgeForSearch(env, key, content, category) {
 }
 
 export async function indexAllKnowledge(env, db) {
-  if (!env.VECTORIZE) return;
   try {
     const r = await db.prepare("SELECT key, content, category FROM brain_knowledge").all();
     if (!r.results?.length) return;
     const texts = r.results.map(row => (row.key + " " + row.content).slice(0, 512));
     const embeddings = await embedTextBatch(env, texts);
-    const vectors = [];
     for (let i = 0; i < r.results.length; i++) {
-      if (embeddings[i]) vectors.push({ id: "kn_" + r.results[i].key, values: embeddings[i], metadata: { key: r.results[i].key, content: r.results[i].content.slice(0, 2000), category: r.results[i].category } });
+      if (embeddings[i]) {
+        try { await db.prepare("INSERT OR REPLACE INTO brain_vectors (ref_key, embedding, category) VALUES (?1, ?2, ?3)").bind(r.results[i].key, JSON.stringify(embeddings[i]), r.results[i].category).run(); } catch {}
+      }
     }
-    if (vectors.length) await env.VECTORIZE.upsert(vectors);
+    if (env.VECTORIZE) {
+      const vectors = [];
+      for (let i = 0; i < r.results.length; i++) {
+        if (embeddings[i]) vectors.push({ id: "kn_" + r.results[i].key, values: embeddings[i], metadata: { key: r.results[i].key, content: r.results[i].content.slice(0, 2000), category: r.results[i].category } });
+      }
+      if (vectors.length) await env.VECTORIZE.upsert(vectors);
+    }
   } catch {}
 }
 
