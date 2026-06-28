@@ -222,7 +222,8 @@ function tryParseToolCall(text) {
 
 function extractToolFromPlan(text) {
   const toolNames = Object.keys(toolDefinitions);
-  const pattern = new RegExp("(?:^|[\\n;.-])\\s*(?:\\d+\\.\\s*)?(?:I (?:should |need to |can |will |could |would )?)?(?:(?:use|call|run|invoke|try|start|first|then|next|finally|create|write|read|search|find|delete|close|list|get|fetch|review)\\s+)?(?:a |an |the )?(?:" + toolNames.join("|") + ")\\s*(?:to|for|with|and|:)\\s*(.*?)(?=[\\n;]|\\d+\\.\\s*(?:use|call|run|invoke|try|start|then|next|create|write)|$)", "im");
+  const verbGroup = "(?:use|call|run|invoke|try|start|first|then|next|finally|create|write|read|search|find|delete|close|list|get|fetch|review|check|look|open|view|show|access|query)";
+  const pattern = new RegExp("(?:^|[\\n;.,-])\\s*(?:\\d+\\.\\s*)?(?:I (?:should |need to |can |will |could |would )?|Let (?:me |'?s ))?(?:" + verbGroup + "\\s+)?(?:a |an |the )?(?:" + toolNames.join("|") + ")(?:\\s+(?:tool|function|api))?\\s*(?:to|for|with|and|:|on)\\s*(.*?)(?=[\\n;]|\\d+\\.\\s*(?:" + verbGroup + ")|$)", "im");
   const m = text.match(pattern);
   if (!m) return null;
   const rawTool = text.slice(m.index, m.index + m[0].length);
