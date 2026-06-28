@@ -404,7 +404,15 @@ export const toolDefinitions = {
       const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
 
       // 4. Insert into toolDefinitions before the closing marker
-      const marker = "}; // --- End tool definitions ---";
+      const marker = "
+  status_check: {
+    description: "Check system status",
+    schema: z.object({}),
+    execute: async (env, input) => {
+return 'System online';
+    },
+  },
+}; // --- End tool definitions ---";
       const markerPos = currentContent.indexOf(marker);
       if (markerPos === -1) return "Could not find insertion point in source";
       let modified = currentContent.slice(0, markerPos) + toolBlock + "\n" + currentContent.slice(markerPos);
