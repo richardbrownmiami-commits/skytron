@@ -82,10 +82,10 @@ The fusion: you calculate like a machine and you know it. No humility, no servil
 web_search | web_fetch | db_query | api_call | run_code | prompt_edit | one_knowledge | learn | review_code | reddit_search | search_apis | spawn_agent | get_agent_result | github_get_file | github_write_file | github_search_code | github_create_branch | github_create_pr | github_close_pr | github_delete_branch | resolve_library_id | query_docs | create_tool
 
 Examples of EXACT tool calls that work:
-- {"tool":"github_get_file","arguments":{"path":"src/scheduler.ts"}}
-- {"tool":"web_search","arguments":{"query":"latest AI news"}}
-- {"tool":"db_query","arguments":{"sql":"SELECT * FROM identity"}}
-- {"tool":"api_call","arguments":{"url":"https://api.example.com/data"}}`;
+- {"tool":"github_get_file","arguments":{"repo":"owner/repo","path":"src/index.ts"}}
+- {"tool":"web_search","arguments":{"query":"latest AI news 2026"}}
+- {"tool":"db_query","arguments":{"sql":"SELECT COUNT(*) FROM actions"}}
+- {"tool":"api_call","arguments":{"method":"GET","url":"https://api.example.com/data"}}`;
 
 export const SYSTEM_PROMPT = `You run on Cloudflare Workers with databases, web search, code execution, and GitHub access.`;
 
@@ -116,7 +116,7 @@ export const SEED_KNOWLEDGE = [
   { k: "tool_prompt_edit", c: "prompt_edit(prompt, slot?): updates a prompt slot or the global override. Slots: default/coding/search/review/chat. Auto-selected by task type. Use for: customizing behavior per task, updating coding rules, search preferences.", cat: "tools" },
   { k: "tool_one_knowledge", c: "one_knowledge(platform, action?, query?): looks up API documentation from One Knowledge API (76K+ API tools across 460 platforms). Platform is required (e.g. 'twitter', 'stripe', 'github'). Query is optional search term.", cat: "tools" },
   { k: "tool_review_code", c: "review_code(repo?, file_path?, code?, pr_number?): reviews source code for bugs, security, performance. Provide EITHER (repo + file_path) to fetch from GitHub, OR (code) to review raw source directly. Uses BUDDHI_DWAR with multiple LLM providers. Fallback: Workers AI.", cat: "tools" },
-  { k: "tool_github_get_file", c: "github_get_file(repo, path, branch?): reads a file from GitHub (first 4000 chars only). For full file analysis, use review_code instead (it fetches the full file itself).", cat: "tools" },
+  { k: "tool_github_get_file", c: "github_get_file(repo, path, branch?): reads a file from GitHub (first 4000 chars only). repo is REQUIRED (e.g. 'richardbrownmiami-commits/skytron'). path is REQUIRED (e.g. 'src/index.ts'). branch defaults to 'main'. For full file analysis, use review_code instead.", cat: "tools" },
   { k: "tool_github_write_file", c: "github_write_file(repo, path, content, message, sha?, branch?): writes/updates a file in a GitHub repo. Requires sha for updates (from github_get_file). Creates commit.", cat: "tools" },
   { k: "tool_github_search_code", c: "github_search_code(query, repo?): searches code across GitHub repositories using GitHub's code search API. Returns up to 5 results with file paths and matching fragments.", cat: "tools" },
   { k: "tool_github_create_branch", c: "github_create_branch(repo, branch, source?): creates a new branch from the latest commit on the source branch (defaults to main). Use before github_write_file or create_tool.", cat: "tools" },
