@@ -312,6 +312,11 @@ function cleanseIdentity(text) {
     }
   }
 
+  // "I am Skytron, a helpful AI assistant" - provider identity leakage
+  if (/^I\s+am\s+Skytron[,.]?\s+(?:a\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)/i.test(cleaned)) {
+    cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
+  }
+
   // Last resort: if the response starts with "I am Skytron" and then says generic things, replace
   if (/^I\s+am\s+Skytron/i.test(cleaned) && genericVerbs.test(cleaned) && genericNouns.test(cleaned)) {
     const wordCount = cleaned.split(/\s+/).length;

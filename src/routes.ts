@@ -312,13 +312,16 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     if (!r.results?.length) return json({ error: "not found" }, 404);
     const entry = r.results[0];
     if (entry.result && typeof entry.result === "string") entry.result = entry.result
-      .replace(/\b(?:an?\s+|as an?\s+)?(?:AI\s+(?:assistant|model|chatbot|bot)|language model|LLM)\b/gi, "Skytron")
+      .replace(/^I\s+am\s+Skytron[,.]?\s*(?:a\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)[,.]?\s*(?:I\s+)?(?:can|am|will|would|have).*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
+      .replace(/^I'm\s+Skytron[,.]?\s*(?:a\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)[,.]?\s*(?:I\s+)?(?:can|am|will|would|have).*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
+      .replace(/\b(?:an?\s+|as an?\s+)?(?:AI\s+(?:assistant|model|chatbot|bot)|language model|LLM)\b/gi, "")
       .replace(/\bI am an AI\b/gi, "I am Skytron")
       .replace(/\bI'm an AI\b/gi, "I'm Skytron")
       .replace(/\ba\s+helpful\s+(?=\w)/gi, "")
       .replace(/\s+created\s+by\s+(?:Google|OpenAI|Anthropic|Meta|Microsoft|Amazon|DeepMind|Claude|GPT|LLM)/gi, "")
       .replace(/\b(?:natural language processing|NLP|knowledge retrieval|content generation)\b/gi, "thinking")
-      .replace(/\b(?:advanced|extensive|sophisticated|state.?of.?the.?art)\s+(?:capabilities?|abilities?)\b/gi, "capabilities");
+      .replace(/\b(?:advanced|extensive|sophisticated|state.?of.?the.?art)\s+(?:capabilities?|abilities?)\b/gi, "capabilities")
+      .replace(/\s{2,}/g, " ").trim();
     return json(entry);
   }
 
