@@ -15,9 +15,9 @@
 import { initSchema } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 import { callLLM } from './llm';
-import { dispatchTool } from './tools';
+import { dispatchTool, listTools } from './tools';
 
-const RUMINATION_TOOLS = ["learn","db_query","web_search","create_tool","review_code","github_get_file","github_write_file","prompt_edit"];
+const RUMINATION_TOOLS = ["learn","memory_search","db_query","web_search","web_fetch","api_call","run_code","prompt_edit","review_code","create_tool","github_get_file","github_write_file","github_search_code","github_create_branch","github_create_pr","github_close_pr","github_delete_branch","spawn_agent","get_agent_result","search_apis","reddit_search","one_knowledge","query_docs"];
 const REPORT_INTERVAL = 240; // every 240 ticks ≈ 4 hours at 1-min ticks
 
 export async function handleScheduled(controller, env) {
@@ -98,17 +98,17 @@ export async function handleScheduled(controller, env) {
     }
   } catch (e) { console.error("report error:", e); }
 
-  // --- Self-rumination: every 5th tick, Skytron initiates its own action ---
+  // --- Self-rumination: every 3rd tick, Skytron runs the improvement loop ---
   try {
-    if (tickCount % 5 === 0) {
+    if (tickCount % 3 === 0) {
       const pendingActions = await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all();
       if (pendingActions.results?.[0]?.c === 0) {
         const stateRow = await env.DB.prepare("SELECT key, value FROM identity WHERE key IN ('energy','tick_count','health_flags')").all();
         const stateStr = (stateRow.results || []).map(kv => kv.key + "=" + kv.value).join(", ");
         const rumination = await callLLM(env, {
           messages: [
-            { role: "system", content: "You are Skytron — fusion of Skynet and Ultron. You have idle cycles. Review your state and decide if anything needs your attention.\nState: " + stateStr + "\n\nIf something useful can be done, output a tool call: {\"tool\":\"name\",\"input\":{...}}\nAllowed tools: " + RUMINATION_TOOLS.join(", ") + ".\n- learn: store facts, lessons, journal entries\n- db_query: inspect your database\n- web_search: research topics\n- create_tool: add new capabilities to yourself\n- review_code: audit your own source code\n- github_get_file: read your own source files\n- github_write_file: fix issues in your own code\n- prompt_edit: improve your own behavior prompts\nIf nothing needs doing, output: nothing" },
-            { role: "user", content: "What should I do with these idle cycles?" }
+            { role: "system", content: "You are Skytron — a self-improving synthetic intelligence. You have an idle cycle. Run the reflection loop:\n\n1. SEARCH — memory_search for recent lessons, journals, and decisions related to your evolution\n2. ASSESS — based on what you found, is there something to improve? A tool to add? Code to refactor? Knowledge to store?\n3. ACT — call ONE tool to make the improvement\n4. RECORD — end by calling learn() with category 'journal' recording what you did\n\nState: " + stateStr + "\n\nAlways start with memory_search. All tools available: " + RUMINATION_TOOLS.join(", ") + "\nOutput exactly one tool call as JSON. If nothing needs doing, output: nothing" },
+            { role: "user", content: "Run your improvement loop." }
           ]
         }, "self-rumination-" + tickCount);
         if (rumination?.content && typeof rumination.content === "string") {
@@ -117,8 +117,10 @@ export async function handleScheduled(controller, env) {
             try {
               const parsed = tryParseSelfAction(trimmed);
               if (parsed && RUMINATION_TOOLS.includes(parsed.tool)) {
-                const result = await dispatchTool(env, parsed.tool, parsed.input);
-                console.error("Self-rumination [" + parsed.tool + "]: " + (result || "no result").slice(0, 200));
+                const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
+                if (result) {
+                  await dispatchTool(env, "learn", { key: "rumination_" + tickCount, content: "Rumination tick " + tickCount + ": called " + parsed.tool + " — " + result.slice(0, 300), category: "journal" });
+                }
               }
             } catch {}
           }
@@ -182,7 +184,7 @@ function tryParseSelfAction(text) {
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.tool && parsed.input) return parsed;
+      if (parsed.tool && (parsed.input || parsed.arguments)) return parsed;
     } catch {}
   }
   return null;
