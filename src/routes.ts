@@ -312,7 +312,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     if (!r.results?.length) return json({ error: "not found" }, 404);
     const entry = r.results[0];
     if (entry.result && typeof entry.result === "string") entry.result = entry.result
-      .replace(/^As\s+an\s+AI[,.]?\s+.*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
+      .replace(/^As\s+an\s+AI[,.]?\s+[\s\S]*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
       .replace(/^I\s+am\s+Skytron[,.]?\s*(?:a\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)[,.]?\s*(?:I\s+)?(?:can|am|will|would|have).*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
       .replace(/^I'm\s+Skytron[,.]?\s*(?:a\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)[,.]?\s*(?:I\s+)?(?:can|am|will|would|have).*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
       .replace(/\b(?:an?\s+|as an?\s+)?(?:AI\s+(?:assistant|model|chatbot|bot)|language model|LLM)\b/gi, "")
