@@ -1,4 +1,13 @@
-// Route handlers for all endpoints: /think (main conversation, POST), /think/result (poll), /skytronchat (UI), /brain/* (memory/knowledge/logs/agents/source/introspect/prompt), /status, /__cron.
+// === Skytron Routes (HTTP ENDPOINTS) ===
+// All HTTP endpoints live here. Key function: handleFetch dispatches by pathname.
+// - /think POST: builds systemMsg (HARDCODED_CORE + slot + mood + memory + knowledge → fullHistory), saves agent state
+// - /think/result GET: polls action status/result from actions table
+// - /skytronchat GET: serves chat.html UI
+// - /brain/*: memory, knowledge, logs, agents, prompt, repair, vectorize, etc.
+// - /status GET: D1 health check
+// - /__cron GET: triggers handleScheduled (also runs via cron trigger)
+// If you need a new endpoint, add it here. Keep it under 40 lines per handler.
+// CRITICAL: systemMsg assembly at ~line 250 controls what Skytron sees as its identity and instructions.
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState } from './db';
 import { processOneStep, processOneAgentStep } from './agents';

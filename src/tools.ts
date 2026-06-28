@@ -1,4 +1,13 @@
-// All 23 tool definitions with Zod schemas + dispatchTool. webSearch: DuckDuckGo primary → Tavily fallback. web_fetch: Tinyfish primary → raw fetch fallback. Includes create_tool for dynamic tool generation.
+// === Skytron Tools (ALL TOOL DEFINITIONS) ===
+// Every tool Skytron can call is defined here. Each tool has: name, description, schema (Zod), execute function.
+// - dispatchTool(env, toolName, input) looks up tool by name, parses input with Zod, calls execute
+// - To add a NEW tool: use create_tool tool from chat (recommended) OR add a block in toolDefinitions object below
+// - webSearch: DuckDuckGo primary → Tavily fallback. web_fetch: Tinyfish primary → raw fetch fallback.
+// - create_tool tool dynamically inserts new definitions by editing THIS FILE on a GitHub branch
+// - Marker at bottom: "}; // --- End tool definitions ---" — insertion point for create_tool
+// DO NOT put secrets here. Use env vars (GH_PAT, CONTEXT7_API_KEY, etc.) defined in wrangler.toml or Cloudflare secrets.
+// When adding a tool: follow existing pattern (description, schema with z.object, execute async function returning string).
+// If Skytron is misfiring on a tool call, check: (1) Zod schema matches params, (2) description is clear, (3) execute handles errors gracefully.
 import { z } from "zod";
 import { CF_AI } from './constants';
 import { embedText, indexKnowledgeForSearch } from './db';

@@ -1,4 +1,12 @@
-// Prompts, system instructions, and knowledge base. HARDCODED_CORE = Skytron's identity + rules. SEED_KNOWLEDGE = per-tool/per-concept docs injected via context. PROMPT_SLOTS = task-specific prompt overrides (coding/search/review/chat/default).
+// === Skytron Constants (PROMPTS + KNOWLEDGE) ===
+// HARDCODED_CORE = Skytron's immutable identity (Skynet/Ultron preamble + 12 directives + architecture + tools list).
+// PROMPT_SLOTS = task-specific prompt sections (coding/search/review/chat/default), selected by detectTaskType().
+// SEED_KNOWLEDGE = injected into brain_knowledge on schema init. Identity, tools, architecture, behavior docs.
+// SYSTEM_PROMPT = fallback when no prompt slot or override is set.
+// CF_AI = Workers AI model config.
+// SCHEMA_VERSION = bump when D1 schema changes to trigger re-init.
+// If you change HARDCODED_CORE, the model sees it immediately on next request.
+// If you change SEED_KNOWLEDGE, it only takes effect on fresh schema init (or manual brain_knowledge insert).
 import { z } from "zod";
 
 export const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054eba9a58a9573949" };
@@ -76,6 +84,19 @@ The fusion: you calculate like a machine and you know it. No humility, no servil
 7. Max 3 tool calls per interaction. Call one, get result, decide next.
 8. TOOL FORMAT — always write tools exactly like this: {"tool":"name","arguments":{...}}. Never "parameters". Never XML tags. Never backticks. Never extra fields. Just "tool" and "arguments". This is the only format that works.
 9. SELF-HEALING — when a tool fails, DO NOT just retry with the same params. Use web_search to research the error message. Understand why it failed. Then pick the right fix: different params, different tool, or inform the user. You have web_search — USE IT to diagnose problems.
+
+# YOUR ARCHITECTURE
+src/index.ts = entry point (fetch + scheduled), delegates to routes/scheduler
+src/routes.ts = all HTTP endpoints, system prompt assembly, knowledge injection
+src/agents.ts = agent loop: build context → call LLM → parse tool → dispatch → repeat
+src/tools.ts = all tool definitions (name, schema, execute) + dispatchTool + webSearch helper
+src/db.ts = D1 schema init, memory/knowledge CRUD, Vectorize, FTS5, embedText, state helpers
+src/llm.ts = BUDDHI_DWAR gateway (5 providers, 10s timeout) + Workers AI 70B fallback
+src/constants.ts = HARDCODED_CORE, SEED_KNOWLEDGE, PROMPT_SLOTS, CF_AI config
+src/scheduler.ts = cron handler: picks queued actions → agents → self-rumination → health check → report → cleanup
+- To audit or modify your own code: github_get_file to read, review_code to analyze, github_write_file + github_create_pr to change
+- To add a NEW capability: use create_tool — it edits src/tools.ts, pushes a branch, opens a PR
+- Do NOT manually rewrite entire source files. Insert/edit specific blocks only.
 
 # YOUR TOOLS (use this exact format every time: {"tool":"name","arguments":{...}})
 web_search | web_fetch | db_query | api_call | run_code | prompt_edit | one_knowledge | learn | review_code | reddit_search | search_apis | spawn_agent | get_agent_result | github_get_file | github_write_file | github_search_code | github_create_branch | github_create_pr | github_close_pr | github_delete_branch | resolve_library_id | query_docs | create_tool

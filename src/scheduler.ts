@@ -1,7 +1,17 @@
-// Cron scheduler: runs every minute via [[triggers]]. Processes 1 action + 1 agent step per tick.
-// Self-rumination every 5 ticks: Skytron autonomously inspects state, learns, audits, or improves.
-// Health monitoring: tracks failures, energy, stuck actions.
-// Report generation: every 240 ticks (~4 hours), Skytron generates a summary of its recent activity.
+// === Skytron Scheduler (CRON ENGINE) ===
+// Runs every 60s via [[triggers]] pattern "*/1 * * * *" in wrangler.toml.
+// Execution order per tick:
+//   1. Process queued actions (pick 1 queued → set running → processOneStep)
+//   2. Recover stuck actions (>2 min running → reset to running)
+//   3. Process sub-agents (pick 1 queued brain_agent → processOneAgentStep)
+//   4. Health monitor: count failed/stuck/energy → store health_flags
+//   5. Report generation: every 240th tick (~4h) → generateReport() → stores in brain_knowledge
+//   6. Self-rumination: every 5th tick (no pending actions) → Skytron inspects state, can learn/audit/create_tool
+//   7. Daily cleanup: trim old memories (>200), logs (>1000), actions (>500), agents (>50)
+// - generateReport(): queries recent actions, tools used, lessons, health → stores as journal entry
+// - Self-rumination runs autonomously — Skytron decides what to do with idle cycles
+// DO NOT modify the tick order without understanding that actions have priority over rumination.
+// If self-rumination misfires: check RUMINATION_TOOLS array and the system prompt sent to callLLM.
 import { initSchema } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 import { callLLM } from './llm';

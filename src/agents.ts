@@ -1,4 +1,12 @@
-// Agent loop: processOneStep (action pipeline: context → LLM → tool dispatch → finalize), processOneAgentStep (sub-agent: same but limited tools, 8-step max). Includes analysis-text detection and stripping.
+// === Skytron Agents (CORE LOOP) ===
+// This is where Skytron "thinks". processOneStep is called per action per cron tick.
+// Flow: load agent state → callLLM → tryParseToolCall → dispatchTool → repeat or finalize
+// - tryParseToolCall handles: {"tool":"name","arguments":{...}}, {"tool":"name","input":{...}}, OpenAI [{type:"function"...}], TOOL:name() format
+// - cleanseIdentity() strips "As an AI..." patterns from final responses
+// - Self-healing: tool errors trigger REFLECTION CHECKPOINT + learn() auto-stores lessons
+// - processOneAgentStep: sub-agents with limited tools, max 8 steps
+// DO NOT modify the tool dispatch flow unless you understand the full pipeline.
+// If adding new tool formats to tryParseToolCall, update the regex + tests.
 import { callLLM, parseLLMJson } from './llm';
 import { dispatchTool, listTools, toolDefinitions } from './tools';
 import { storeMemory, saveAgentState, loadAgentState, deleteAgentState } from './db';

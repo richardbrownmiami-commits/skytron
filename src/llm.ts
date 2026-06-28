@@ -1,4 +1,13 @@
-// LLM gateway: calls BUDDHI_DWAR (primary) with 5 providers + 10s timeout each. Falls back to Workers AI 70B on failure. Model-agnostic — no rejection by model name.
+// === Skytron LLM Gateway (AI PROVIDER) ===
+// Routes all LLM calls through BUDDHI_DWAR gateway (5 providers, 10s timeout each).
+// Provider order: groq, openrouter, mistral, google, opencode-zen. Each tried in sequence until one succeeds.
+// Falls back to Workers AI (@cf/meta/llama-3.3-70b-instruct-fp8-fast) if all BD providers fail.
+// - callLLM(env, body, sessionId): sends messages + optional model override + task to BD
+// - parseLLMJson: extracts JSON from LLM responses
+// - MODEL_OVERRIDE env var can force a specific model (used for coding tasks: deepseek-v4-flash-free)
+// - Workers AI response format: handles both {.response} and {choices:[{message:{content:...}}]}
+// DO NOT add provider-specific API keys here. They're managed by BUDDHI_DWAR.
+// If Skytron gets stuck at step_0 repeatedly, check if BD is healthy or Workers AI fallback is needed.
 
 export async function callLLM(env, body, sessionId) {
   if (!env.BUDDHI_DWAR) return null;

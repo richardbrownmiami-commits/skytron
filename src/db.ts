@@ -1,4 +1,13 @@
-// Database layer: D1 schema init, memory CRUD, knowledge CRUD + FTS5 + Vectorize, embedding, emotion/state helpers, agent state helpers.
+// === Skytron Database (STORAGE LAYER) ===
+// All D1, Vectorize, and embedding operations live here.
+// - initSchema: creates tables (identity, brain_memory, brain_knowledge, actions, brain_logs, brain_agents, knowledge_fts)
+// - memory CRUD: storeMemory, getRecentMemory, memorySearch
+// - knowledge CRUD: searchKnowledge (FTS5), semanticSearch (Vectorize), indexKnowledgeForSearch
+// - State helpers: saveAgentState, loadAgentState, deleteAgentState, getState, describeMood
+// - getPromptSlot, detectTaskType: used by routes.ts to build system prompt
+// - SEED_KNOWLEDGE is seeded during initSchema into brain_knowledge table
+// DO NOT modify initSchema unless you know SQLite D1 schema constraints.
+// When adding a new table: add CREATE TABLE to initSchema + bump SCHEMA_VERSION.
 import { SCHEMA_VERSION, TABLES, PROMPT_SLOTS, SEED_KNOWLEDGE, CF_AI } from './constants';
 
 export async function initSchema(db, env) {
