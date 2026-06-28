@@ -90,12 +90,16 @@ export async function ctx7Docs(apiKey, libraryId, query) {
   } catch (e) { return "Context7 docs error: " + e.message; }
 }
 
+function toolTimeoutRace(ms) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error("tool timeout after " + ms + "ms")), ms));
+}
+
 export async function dispatchTool(env, toolName, input) {
   const def = toolDefinitions[toolName];
   if (def) {
     try {
       const parsed = def.schema.parse(input);
-      const result = await def.execute(env, parsed);
+      const result = await Promise.race([def.execute(env, parsed), toolTimeoutRace(15000)]);
       return typeof result === "string" ? result : JSON.stringify(result);
     } catch (e) { return "[TOOL ERROR: " + (e.message || String(e)) + "]"; }
   }
