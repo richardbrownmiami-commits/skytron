@@ -364,8 +364,8 @@ function cleanseIdentity(text) {
     cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
   }
 
-  // "I am Skytron, a helpful AI assistant" - provider identity leakage
-  if (/^I\s+am\s+Skytron[,.]?\s+(?:a\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)/i.test(cleaned)) {
+  // "I am Skytron, a / an AI assistant" - provider identity leakage
+  if (/^I\s+am\s+Skytron[,.]?\s+(?:an?\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)/i.test(cleaned)) {
     cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
   }
 
