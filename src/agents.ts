@@ -93,7 +93,7 @@ export async function processOneStep(env, action) {
         state.repeatCount = 0;
         state.step++;
         await saveAgentState(db, action.id, state);
-        await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+        await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
         return;
       }
       await saveAgentState(db, action.id, state);
@@ -102,7 +102,7 @@ export async function processOneStep(env, action) {
         state.repeatCount = 0;
         state.step++;
         await saveAgentState(db, action.id, state);
-        await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+        await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
         return;
       } else {
         const result = await dispatchTool(env, parsed.tool, parsed.input);
@@ -125,7 +125,7 @@ export async function processOneStep(env, action) {
       if (state.step >= 15) { state.finalContent = "[Reached max steps]"; state.done = true; }
       await saveAgentState(db, action.id, state);
       if (!state.done) {
-        await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+        await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
         return;
       }
     } else {

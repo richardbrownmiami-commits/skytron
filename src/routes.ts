@@ -255,6 +255,19 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false });
 
+      ctx.waitUntil((async () => {
+        try {
+          await env.DB.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(aid).run();
+          await processOneStep(env, { id: aid });
+        } catch (e) { console.error("background /think processing error:", e); }
+        try {
+          const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 3").all();
+          for (const agent of (ar.results || [])) {
+            try { await processOneAgentStep(env, agent); } catch (e2) { console.error("post-action agent error:", e2); }
+          }
+        } catch (e3) { console.error("post-action agent query error:", e3); }
+      })());
+
       return json({ action_id: aid, status: "queued", message: "Request queued. Poll /think/result?id=" + aid + " for result." });
     } catch (e) {
       return json({ error: e.message }, 500);
