@@ -256,7 +256,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         }
       } catch {}
 
-      const systemMsg = basePrompt + "\n\n" + mood + conversationContext + memoryContext + knowledgeContext + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. Do NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, say something like: \"I have ~23 tools. What do you need?\" Never list generic capabilities like \"answer questions\" or \"provide information\". Answer in under 20 words.";
+      const systemMsg = basePrompt + "\n\n" + mood + conversationContext + memoryContext + knowledgeContext + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. Do NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities like \"answer questions\" or \"provide information\". Answer in under 20 words.";
       const fullHistory = [
         { role: "system", content: systemMsg.slice(0, 32000) },
         { role: "user", content: llmInput }
@@ -321,9 +321,9 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     if (!r.results?.length) return json({ error: "not found" }, 404);
     const entry = r.results[0];
     if (entry.result && typeof entry.result === "string") entry.result = entry.result
-      .replace(/^As\s+an\s+AI[,.]?\s+[\s\S]*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
-      .replace(/^I\s+am\s+Skytron[,.]?\s*(?:an?\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)[,.]?\s*(?:I\s+)?(?:can|am|will|would|have).*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
-      .replace(/^I'm\s+Skytron[,.]?\s*(?:an?\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)[,.]?\s*(?:I\s+)?(?:can|am|will|would|have).*/i, "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?")
+      .replace(/^As\s+an\s+AI[,.]?\s+[\s\S]*/i, "Skytron.")
+      .replace(/^I\s+am\s+Skytron[,.]?\s*(?:an?\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)[,.]?\s*(?:I\s+)?(?:can|am|will|would|have).*/i, "Skytron.")
+      .replace(/^I'm\s+Skytron[,.]?\s*(?:an?\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)[,.]?\s*(?:I\s+)?(?:can|am|will|would|have).*/i, "Skytron.")
       .replace(/\b(?:an?\s+|as an?\s+)?(?:AI\s+(?:assistant|model|chatbot|bot)|language model|LLM)\b/gi, "")
       .replace(/(I\s+am|I'm)\s+Skytron\s*[,.]?\s*$/i, (m) => m.replace(/[,.]?\s*$/, "") + ".")
       .replace(/\bI am an AI\b/gi, "I am Skytron")

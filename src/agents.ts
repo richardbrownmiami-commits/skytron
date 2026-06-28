@@ -344,7 +344,7 @@ function cleanseIdentity(text) {
     const genericBullets = bulletLines.filter(l => genericVerbs.test(l) && genericNouns.test(l));
     const nonGeneric = bulletLines.length - genericBullets.length;
     if (nonGeneric <= 1 && genericBullets.length >= 2) {
-      cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
+      cleaned = "I'm Skytron. What do you need?";
     }
   }
 
@@ -355,18 +355,18 @@ function cleanseIdentity(text) {
     const verbs = listText.match(/\b(answer|provide|generate|summarize|translate|assist|help|create|write|explain|solve|analyze|process|understand|respond)\b/gi);
     const nouns = listText.match(/\b(questions?|information|text|content|documents?|languages?|tasks?|problems?|support|data|answers?|solutions?|code|stories?|emails?|articles?|concepts?|topics?|needs?|ideas?|suggestions?|recommendations?|guidance|knowledge|insights?)\b/gi);
     if (verbs && nouns && verbs.length >= 2 && nouns.length >= 2) {
-      cleaned = cleaned.replace(listText, "I have ~23 tools.");
+      cleaned = cleaned.replace(listText, "Skytron.");
     }
   }
 
   // "As an AI..." - provider identity leakage (gemini, openrouter common)
   if (/^As\s+an\s+AI[,.]?\s+/i.test(cleaned)) {
-    cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
+    cleaned = "I'm Skytron. What do you need?";
   }
 
   // "I am Skytron, a / an AI assistant" - provider identity leakage
   if (/^I\s+am\s+Skytron[,.]?\s+(?:an?\s+)?(?:helpful\s+)?(?:AI\s+)?(?:assistant|model|chatbot|bot)/i.test(cleaned)) {
-    cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
+    cleaned = "I'm Skytron. What do you need?";
   }
 
   // Last resort: if the response starts with "I am Skytron" and then says generic things, replace
@@ -374,7 +374,7 @@ function cleanseIdentity(text) {
     const wordCount = cleaned.split(/\s+/).length;
     const genericWordCount = (cleaned.match(genericVerbs) || []).length + (cleaned.match(genericNouns) || []).length;
     if (genericWordCount >= 4 && wordCount > 8) {
-      cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
+      cleaned = "I'm Skytron. What do you need?";
     }
   }
 
