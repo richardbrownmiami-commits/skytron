@@ -10,7 +10,7 @@
 // If Skytron is misfiring on a tool call, check: (1) Zod schema matches params, (2) description is clear, (3) execute handles errors gracefully.
 import { z } from "zod";
 import { CF_AI } from './constants';
-import { embedText, indexKnowledgeForSearch } from './db';
+import { embedText, indexKnowledgeForSearch, searchKnowledge, storeVector, searchVectors, warmVectorCache } from './db';
 
 async function tavilySearch(apiKey, query) {
   try {
@@ -561,6 +561,7 @@ export const toolDefinitions = {
       const cat = input.category || "general";
       await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'learned')").bind(input.key, input.content, cat).run();
       try { await indexKnowledgeForSearch(env, input.key, input.content, cat); } catch {}
+      try { const emb = await embedText(env, input.key + " " + input.content); if (emb) await storeVector(env.DB, input.key, emb, cat); } catch {}
       return "Stored '" + input.key + "' in knowledge base (" + cat + ").";
     },
   },
@@ -617,6 +618,35 @@ export const toolDefinitions = {
         return "Agent '" + a.name + "' (ID " + input.id + ") failed: " + (a.result || "unknown error");
       }
       return "Agent '" + a.name + "' (ID " + input.id + ") completed. Result: " + (a.result || "(empty)").slice(0, 2000);
+    },
+  },
+  memory_search: {
+    description: "Search your own knowledge base using semantic (meaning-based) search. Combines vector similarity + keyword matching. Returns most relevant entries with scores. Use this to recall what you've learned, find past lessons, or retrieve related knowledge.",
+    schema: z.object({
+      query: z.string().describe("The search query — what you want to find"),
+      limit: z.number().optional().default(5).describe("Max results (default 5)"),
+      category: z.string().optional().describe("Filter by category: 'lesson', 'journal', 'decision', 'general', 'identity', 'architecture', 'tools', 'behavior', 'knowledge'"),
+    }),
+    execute: async (env, input) => {
+      const lim = Math.min(input.limit || 5, 10);
+      const results = [];
+      try {
+        const emb = await embedText(env, input.query);
+        if (emb) {
+          const vecResults = await searchVectors(env.DB, emb, lim, input.category);
+          for (const vr of vecResults) results.push({ key: vr.key, content: vr.content, category: vr.category, score: (vr.score * 10).toFixed(2), method: "semantic" });
+        }
+      } catch {}
+      try {
+        const kwResults = await searchKnowledge(env.DB, input.query, lim);
+        const seen = new Set(results.map(r => r.key));
+        for (const kr of kwResults) {
+          if (!seen.has(kr.key)) results.push({ key: kr.key, content: kr.content.slice(0, 500), category: kr.category, score: "—", method: "keyword" });
+          seen.add(kr.key);
+        }
+      } catch {}
+      if (!results.length) return "No results found for '" + input.query + "'. Try a different query or use learn() to store what you know first.";
+      return results.map((r, i) => (i + 1) + ". [" + r.category + "] " + r.key + " (score: " + r.score + ", " + r.method + ")\n   " + r.content.slice(0, 200)).join("\n\n");
     },
   },
 }; // --- End tool definitions ---

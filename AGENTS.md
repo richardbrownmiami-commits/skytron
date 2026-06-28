@@ -3,6 +3,7 @@
 - Your job is to observe why Skytron fails at tasks and how to improve his prompts/tools so he can do them himself.
 - Only intervene to fix the system (prompts, tools, infrastructure) — never to do the task for him.
 - Take notes on what blocks Skytron from completing tasks.
+- **Speak in normal language** when discussing with the user — like you're explaining to a friend, not writing documentation. No jargon, no code snippets unless asked.
 
 # Deployment
 
@@ -21,6 +22,8 @@
 - **Workers AI 70B fallback**: Upgraded from 8B to 70B (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`). Set via `MODEL_OVERRIDE` env var check in `callLLM` llm.ts.
 - **Tool call format mismatch (Jun 27)**: Action 1458 tried to `github_get_file src/scheduler.ts` but used `parameters` instead of `arguments`, added `owner`/`repo` fields, and wrapped in backticks. The tool dispatch regex (expects `{"tool":"...","arguments":{...}}`) couldn't parse it. All 3 model attempts (openrouter/free + 2x gemini-2.5-flash) stayed at step_0, never executing. Root cause: model doesn't know exact tool JSON schema — needs either schema in system prompt or lenient parsing.
 - **Rogue brace truncating cleanseIdentity (Jun 28)**: Extra `}` at agents.ts:343 truncated `cleanseIdentity`, making "As an AI" detection (and identity replacement) dead code. Actions 1518-1525 showed unmodified "As an AI..." responses. Fixed by removing the extra brace. Now identity leakage is properly caught and replaced.
+- **Recover stuck actions checkpoint fix (Jun 28)**: Old cron recovery just set stuck actions back to `running` and called `processOneStep` again — created duplicate instances fighting over same state. Fixed: kill the frozen copy, inject a checkpoint note in history, re-queue. Fresh tick picks it up and LLM sees "[TASK INTERRUPTED - resume from step N]" with all previous tool results still in fullHistory.
+- **Checkpoint resume still unreliable (Jun 28)**: Even though fullHistory has all previous tool results, the LLM doesn't always honor them — it may still try to re-read files it already read. The LLM's behavior depends on the prompt's interrupt note and the model used. Need a better approach: save tool results to `brain_knowledge` (learn()) as checkpoints so the LLM can query them instead of relying on history.
 
 # Pending to Discuss
 
@@ -34,6 +37,10 @@
 - **Root cause of identity leakage** (Jun 28): A rogue `}` at agents.ts:343 truncated `cleanseIdentity`, making all identity detection and replacement dead code. Fixed by removing the extra brace.
 - **create_tool marker bug (Jun 28)**: `lastIndexOf("};", markerPos)` matched `};` inside string literal `';'` in comment at line 406 instead of the actual closing `};` at line 611. This caused tool blocks to be inserted into the middle of the `create_tool` executor code instead of at the end of `toolDefinitions`. Fixed by changing the end marker from `// --- End tool definitions ---` to `}; // --- End tool definitions ---` and searching for the full string (unique in file).
 - **Live background visual monitor** — need to build standalone HTML dashboard showing real-time action pipeline, tool calls, model switching, and cron loop. No Skytron code changes needed.
+- **Cron quantity**: Currently only 1 cron (`*/1 * * * *`). Need to discuss if we need more crons for different intervals (e.g., a dedicated "heartbeat" cron for stuck actions, a "deep research" cron for long-running tasks).
+- **Better task continuation**: The checkpoint-in-history approach is fragile — LLM may ignore the "[TASK INTERRUPTED]" note and re-read files. Better approach: Save tool results to `brain_knowledge` via `learn()` at each checkpoint, so the LLM can query its own knowledge instead of relying on conversation history being honored. This gives Skytron actual long-term memory of what he learned.
+- **AbortSignal.timeout broken in CF Workers**: Neither `AbortSignal.timeout(N)` nor `Promise.race` with `setTimeout` work for service binding fetches (the service binding blocks the caller's event loop). Only works for external HTTP fetches. Fix applied: BD's `proxyFetch` now has explicit `AbortController` + `setTimeout` with 10s timeout per provider request.
+- **Skytron's self-built memory project**: He wants a `local_memory` tool using sql.js + transformers.js to have persistent, dependency-free storage. Started building (action 1622) but timed out. Needs better continuation mechanism (see above).
 
 # Jun 28 Changes
 
@@ -43,3 +50,8 @@
 - **Failure auto-reflection**: When a tool call errors in `agents.ts`, a lesson is auto-stored via `learn()` with key `lesson_YYYY-MM-DD_tool`.
 - **4-hour report generation**: Every 240 ticks (~4h), `generateReport()` queries recent action stats, lessons learned, tools used, health status, and stores the summary in `brain_knowledge` with category `journal` and key `report_YYYY-MM-DD_tN`.
 - **Personality seed knowledge strengthened**: `identity_self` and `identity_personality` entries rewritten to better convey Skynet/Ultron fusion voice at query time.
+- **BD health check fix**: `/v1/providers/health` was read-only — tested providers but never saved results. Circuit breakers stayed open forever. Fixed to write `cbState="closed"` on success.
+- **BD proxyFetch timeout fix**: Added `AbortController` + `setTimeout` (10s) to `proxyFetch`. Without it, provider calls could hang indefinitely, blocking the caller via service binding.
+- **Skytron dispatchTool timeout fix**: Added `Promise.race` with 15s timeout to `dispatchTool` in `tools.ts` — prevents tool execution from hanging forever.
+- **callLLM timeout fix**: Replaced `AbortSignal.timeout` with `Promise.race` + `setTimeout` in `llm.ts` — prevents service binding fetches from blocking indefinitely.
+- **Scheduler stuck action recovery fix**: Changed from "set back to running and call processOneStep again" (created duplicate instances) to "kill, inject checkpoint note, re-queue, let next tick resume". Preserves fullHistory so LLM can continue from last step. See Known Issues for limitations.

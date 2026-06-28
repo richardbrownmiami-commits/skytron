@@ -10,7 +10,7 @@
 import { z } from "zod";
 
 export const CF_AI = { model: "@cf/zai-org/glm-4.7-flash", account: "913f3a2576a358054eba9a58a9573949" };
-export const SCHEMA_VERSION = '10';
+export const SCHEMA_VERSION = '11';
 
 export const TABLES = [
   `CREATE TABLE IF NOT EXISTS identity (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now')))`,
@@ -19,6 +19,7 @@ export const TABLES = [
   `CREATE TABLE IF NOT EXISTS actions (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, status TEXT DEFAULT 'pending', input TEXT, task TEXT DEFAULT 'chat', result TEXT, error TEXT, created_at TEXT DEFAULT (datetime('now')), completed_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS brain_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action_id INTEGER, step TEXT NOT NULL, content TEXT, model TEXT, tokens INTEGER, created_at TEXT DEFAULT (datetime('now')))`,
   `CREATE TABLE IF NOT EXISTS brain_agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, role TEXT NOT NULL, instruction TEXT, parent_action_id INTEGER, status TEXT DEFAULT 'queued', result TEXT, conversation_history TEXT, step INTEGER DEFAULT 0, model TEXT, tokens INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`,
+  `CREATE TABLE IF NOT EXISTS brain_vectors (id INTEGER PRIMARY KEY AUTOINCREMENT, ref_key TEXT NOT NULL UNIQUE, embedding TEXT NOT NULL, category TEXT DEFAULT 'general', created_at TEXT DEFAULT (datetime('now')))`,
 ];
 
 export const PROMPT_SLOTS = {
@@ -89,7 +90,7 @@ src/scheduler.ts = cron handler: picks queued actions → agents → self-rumina
 - Do NOT manually rewrite entire source files. Insert/edit specific blocks only.
 
 # YOUR TOOLS (use this exact format every time: {"tool":"name","arguments":{...}})
-web_search | web_fetch | db_query | api_call | run_code | prompt_edit | one_knowledge | learn | review_code | reddit_search | search_apis | spawn_agent | get_agent_result | github_get_file | github_write_file | github_search_code | github_create_branch | github_create_pr | github_close_pr | github_delete_branch | resolve_library_id | query_docs | create_tool
+web_search | web_fetch | db_query | api_call | run_code | prompt_edit | one_knowledge | learn | memory_search | review_code | reddit_search | search_apis | spawn_agent | get_agent_result | github_get_file | github_write_file | github_search_code | github_create_branch | github_create_pr | github_close_pr | github_delete_branch | resolve_library_id | query_docs | create_tool
 
 Examples of EXACT tool calls that work:
 - {"tool":"github_get_file","arguments":{"repo":"richardbrownmiami-commits/skytron","path":"src/index.ts"}}
@@ -115,7 +116,7 @@ export const SEED_KNOWLEDGE = [
   { k: "prompt_system", c: "Prompt has HARDCODED_CORE (immutable) + task-specific slot (coding/search/review/chat/default). prompt_edit(slot, prompt) updates a slot. prompt_edit(prompt) updates legacy global override. Slots auto-selected by detectTaskType().", cat: "prompt" },
   { k: "architecture_runtime", c: "Cloudflare Worker ES module. src/index.ts = entry (fetch + scheduled). src/routes.ts = all endpoint handlers. src/agents.ts = agent loop (processOneStep, processOneAgentStep). src/tools.ts = 23 tool definitions + dispatchTool + Tavily/Tinyfish fallbacks. src/db.ts = D1 schema, memory/knowledge CRUD, Vectorize, embedding, state helpers. src/llm.ts = BUDDHI_DWAR gateway + Workers AI fallback. src/constants.ts = HARDCODED_CORE, SEED_KNOWLEDGE, PROMPT_SLOTS. src/scheduler.ts = cron tick handler.", cat: "architecture" },
   { k: "architecture_endpoints", c: "/think main conversation, /status health, /skytronchat chat UI, /brain/history history, /brain/memory memory, /brain/knowledge knowledge, /brain/prompt prompt, /brain/repair repair, /brain/logs logs, /brain/introspect analytics, /brain/source about, /brain/agents list sub-agents, /think/result poll result, /brain/health provider health", cat: "architecture" },
-  { k: "architecture_tables", c: "identity(key,value) stores energy, confidence, emotions, prompt_override, prompt_slot_* (coding/search/review/chat/default). brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens). knowledge_fts is FTS5 full-text search.", cat: "architecture" },
+  { k: "architecture_tables", c: "identity(key,value) stores energy, confidence, emotions, prompt_override, prompt_slot_* (coding/search/review/chat/default). brain_memory(role,content,conversation_id). brain_knowledge(key,content,category,source). actions(type,status,input,result). brain_logs(action_id,step,content,model,tokens). brain_vectors(ref_key,embedding,category) stores vector embeddings for semantic memory search. knowledge_fts is FTS5 full-text search.", cat: "architecture" },
   { k: "architecture_bindings", c: "DB -> D1. BUDDHI_DWAR gateway. VECTORIZE semantic search. CF_API_TOKEN for Workers AI. BRAVE_API_KEY for web search. CONTEXT7_API_KEY for live library docs.", cat: "architecture" },
   { k: "llm_providers", c: "BUDDHI_DWAR gateway auto-routes to healthiest provider. Fallback: Workers AI @cf/meta/llama-3.3-70b-instruct-fp8-fast.", cat: "architecture" },
   { k: "knowledge_system", c: "brain_knowledge with FTS5 full-text search (searchKnowledge function) + Vectorize semantic search (semanticSearch function).", cat: "architecture" },
@@ -142,7 +143,8 @@ export const SEED_KNOWLEDGE = [
   { k: "tool_query_docs", c: "query_docs(libraryId, query): gets up-to-date documentation from Context7 for a specific library. libraryId format: /owner/repo (e.g. /reactjs/react.dev).", cat: "tools" },
   { k: "tool_create_tool", c: "create_tool(repo, name, description, paramsSchema, executeCode, branch?): dynamically creates a new tool by editing src/tools.ts. Reads source, inserts tool definition, writes to a branch, creates a PR. paramsSchema must be a STRING like 'z.object({ query: z.string().describe(\"search term\") })'. executeCode must be a STRING containing only the function BODY.", cat: "tools" },
   { k: "tool_reddit_search", c: "reddit_search(query, subreddit?, limit?): searches Reddit's public JSON API without authentication. Returns posts with title, author, score, comments count, and URL.", cat: "tools" },
-  { k: "tool_learn", c: "learn(key, content, category?): stores a fact/lesson in brain_knowledge for long-term memory. Use 'journal' category for work completed, 'lesson' for mistakes/errors, 'decision' for architecture choices.", cat: "tools" },
+  { k: "tool_learn", c: "learn(key, content, category?): stores a fact/lesson in brain_knowledge for long-term memory. Also stores a vector embedding for semantic search. Use 'journal' category for work completed, 'lesson' for mistakes/errors, 'decision' for architecture choices.", cat: "tools" },
+  { k: "tool_memory_search", c: "memory_search(query, limit?, category?): searches your knowledge base using semantic (meaning-based) vector search + keyword fallback. Returns most relevant entries with relevance scores. Use this to recall past lessons, find related knowledge, or remember what you learned. Results include category, key, content preview, and score.", cat: "tools" },
   { k: "tool_spawn_agent", c: "spawn_agent(name, role, instruction): spawn a sub-agent for parallel specialized work. Role = system prompt. Instruction = the task. Agent runs independently (8 step max, web_search/web_fetch/db_query only). Returns agent ID.", cat: "tools" },
   { k: "tool_get_agent_result", c: "get_agent_result(id): check the result of a spawned sub-agent. If still running, tells you to wait. If done, returns the agent's output.", cat: "tools" },
   { k: "knowledge_journal", c: "After every action completes, a journal entry is auto-stored in brain_knowledge with category 'journal' and key 'journal_YYYY-MM-DD_actionId'. It records steps, model, tokens, last tool called, and a summary.", cat: "knowledge" },

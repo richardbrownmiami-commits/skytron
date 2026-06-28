@@ -170,6 +170,52 @@ export async function indexAllKnowledge(env, db) {
   } catch {}
 }
 
+// --- In-memory vector cache ---
+let vectorCache = null;
+export function cosineSimilarity(a, b) {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; normA += a[i] * a[i]; normB += b[i] * b[i]; }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
+}
+export async function warmVectorCache(db) {
+  try {
+    const r = await db.prepare("SELECT ref_key, embedding, category FROM brain_vectors").all();
+    vectorCache = (r.results || []).map(row => ({ refKey: row.ref_key, embedding: new Float32Array(JSON.parse(row.embedding)), category: row.category }));
+  } catch { vectorCache = []; }
+}
+export async function storeVector(db, refKey, embedding, category = 'general') {
+  try {
+    await db.prepare("INSERT OR REPLACE INTO brain_vectors (ref_key, embedding, category) VALUES (?1, ?2, ?3)").bind(refKey, JSON.stringify(embedding), category).run();
+    if (vectorCache) {
+      const idx = vectorCache.findIndex(v => v.refKey === refKey);
+      const entry = { refKey, embedding: new Float32Array(embedding), category };
+      if (idx >= 0) vectorCache[idx] = entry; else vectorCache.push(entry);
+    }
+  } catch {}
+}
+export async function deleteVector(db, refKey) {
+  try { await db.prepare("DELETE FROM brain_vectors WHERE ref_key=?1").bind(refKey).run(); } catch {}
+  if (vectorCache) vectorCache = vectorCache.filter(v => v.refKey !== refKey);
+}
+export async function searchVectors(db, queryEmbedding, limit = 5, category) {
+  if (!vectorCache) await warmVectorCache(db);
+  if (!vectorCache || !vectorCache.length) return [];
+  const q = new Float32Array(queryEmbedding);
+  const filtered = category ? vectorCache.filter(v => v.category === category) : vectorCache;
+  const scored = filtered.map(v => ({ refKey: v.refKey, category: v.category, score: cosineSimilarity(q, v.embedding) }));
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, limit);
+  if (!top.length) return [];
+  const placeholders = top.map((_, i) => "?" + (i + 1)).join(",");
+  const keys = top.map(t => t.refKey);
+  const r = await db.prepare("SELECT key, content, category FROM brain_knowledge WHERE key IN (" + placeholders + ")").bind(...keys).all();
+  const contentMap = new Map();
+  if (r.results) for (const row of r.results) contentMap.set(row.key, { content: row.content, category: row.category });
+  return top.map(t => ({ key: t.refKey, content: (contentMap.get(t.refKey)?.content || "").slice(0, 500), category: t.category || contentMap.get(t.refKey)?.category || "", score: t.score })).filter(t => t.content);
+}
+// --- End vector cache ---
+
 export async function saveAgentState(db, actionId, state) {
   await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('agent_state_' || ?1, ?2, datetime('now'))").bind(String(actionId), JSON.stringify(state)).run();
 }
