@@ -403,7 +403,15 @@ export const toolDefinitions = {
       // 3. Generate tool definition block
       const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
 
-      // 4. Insert into toolDefinitions (find closing '};' before export marker)
+      // 4. Insert into toolDefinitions (find closing '
+  hello_world: {
+    description: "print hello world",
+    schema: z.object({}),
+    execute: async (env, input) => {
+return 'Hello World'
+    },
+  },
+};' before export marker)
       const marker = "// --- End tool definitions ---";
       const markerPos = currentContent.indexOf(marker);
       if (markerPos === -1) return "Could not find insertion point in source";
