@@ -554,14 +554,17 @@ export const toolDefinitions = {
     description: "Store information in long-term knowledge (brain_knowledge). Use for: saving important facts, lessons from mistakes, decisions made, work completed. Query later with db_query on brain_knowledge table.",
     schema: z.object({
       key: z.string().describe("Unique identifier (e.g. 'lesson_create_tool_422', 'fix_truncation_2026_06_26')"),
-      content: z.string().describe("The information to remember (up to 2000 chars)"),
+      content: z.string().optional().describe("The information to remember (up to 2000 chars)"),
+      value: z.string().optional().describe("Alias for content — the information to remember"),
       category: z.string().optional().describe("Category: 'lesson', 'journal', 'decision', or leave blank for 'general'"),
     }),
     execute: async (env, input) => {
       const cat = input.category || "general";
-      await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'learned')").bind(input.key, input.content, cat).run();
-      try { await indexKnowledgeForSearch(env, input.key, input.content, cat); } catch {}
-      try { const emb = await embedText(env, input.key + " " + input.content); if (emb) await storeVector(env.DB, input.key, emb, cat); } catch {}
+      const content = input.content || input.value || "";
+      if (!content) return "Error: provide 'content' or 'value' with the information to store.";
+      await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'learned')").bind(input.key, content, cat).run();
+      try { await indexKnowledgeForSearch(env, input.key, content, cat); } catch {}
+      try { const emb = await embedText(env, input.key + " " + content); if (emb) await storeVector(env.DB, input.key, emb, cat); } catch {}
       return "Stored '" + input.key + "' in knowledge base (" + cat + ").";
     },
   },
