@@ -209,6 +209,36 @@ function tryParseToolCall(text) {
       if (tc.tool) { if (tc.arguments) { tc.input = tc.arguments; delete tc.arguments; } if (tc.input) return tc; }
     } catch {}
   }
+  // OpenAI function-calling format: [{type:"function",function:{name,description,parameters}}]
+  var oaiMatch = text.match(/\{\s*"type"\s*:\s*"function"\s*,\s*"function"\s*:\s*\{/);
+  if (oaiMatch) {
+    try {
+      var arrStart = text.lastIndexOf("[", oaiMatch.index);
+      if (arrStart === -1) arrStart = oaiMatch.index - 1;
+      var depth = 0, arrEnd = arrStart;
+      for (; arrEnd < text.length; arrEnd++) { var c = text[arrEnd]; if (c === "[" || c === "{") depth++; else if (c === "]" || c === "}") { depth--; if (depth <= 0) break; } }
+      var oaiStr = text.slice(arrStart, arrEnd + 1);
+      var oaiParsed = parseLLMJson(oaiStr);
+      if (oaiParsed && Array.isArray(oaiParsed) && oaiParsed[0]?.type === "function" && oaiParsed[0]?.function?.name) {
+        var fn = oaiParsed[0].function;
+        var zodSchema = "z.object({})";
+        try {
+          var pObj = fn.parameters;
+          if (typeof pObj === "string") pObj = JSON.parse(pObj);
+          if (pObj && pObj.properties) {
+            var zodProps = Object.keys(pObj.properties).map(function(k) {
+              var p = pObj.properties[k], t = p.type || "string", d = (p.description || "").replace(/"/g, '\\"');
+              return k + ": z." + t + "().describe(\"" + d + "\")";
+            }).join(", ");
+            zodSchema = "z.object({ " + zodProps + " })";
+          }
+        } catch {}
+        var d = (fn.description || fn.name || "").replace(/"/g, '\\"');
+        var execCode = "// Generated from OpenAI schema\nreturn JSON.stringify({ message: \"" + d + " - not yet implemented\" });";
+        return { tool: "create_tool", input: { repo: "richardbrownmiami-commits/skytron", name: fn.name, description: (fn.description || fn.name || "").slice(0, 200), paramsSchema: zodSchema, executeCode: execCode } };
+      }
+    } catch {}
+  }
   var m = trimmed.match(/^TOOL:(\w+)\(([\s\S]*?)\)|^TOOL:(\w+):([\s\S]*?)$|^TOOL:(\w+)(?:\s+([\s\S]*?))?\s*$/m);
   if (m) {
     var name = m[1] || m[3] || m[5], args = (m[2] || m[4] || m[6] || "").trim(), input = {};
