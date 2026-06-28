@@ -403,13 +403,11 @@ export const toolDefinitions = {
       // 3. Generate tool definition block
       const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
 
-      // 4. Insert into toolDefinitions (find closing '};' before export marker)
-      const marker = "// --- End tool definitions ---";
+      // 4. Insert into toolDefinitions before the closing marker
+      const marker = "}; // --- End tool definitions ---";
       const markerPos = currentContent.indexOf(marker);
       if (markerPos === -1) return "Could not find insertion point in source";
-      let insertPos = currentContent.lastIndexOf("};", markerPos);
-      if (insertPos === -1) return "Could not find insertion point in source";
-      let modified = currentContent.slice(0, insertPos) + toolBlock + "\n" + currentContent.slice(insertPos);
+      let modified = currentContent.slice(0, markerPos) + toolBlock + "\n" + currentContent.slice(markerPos);
 
       // 5. Add to AVAILABLE TOOLS list in constants.ts
       const promptInsert = "- " + input.name + ": " + input.description + "\n";
@@ -608,5 +606,4 @@ export const toolDefinitions = {
       return "Agent '" + a.name + "' (ID " + input.id + ") completed. Result: " + (a.result || "(empty)").slice(0, 2000);
     },
   },
-};
-// --- End tool definitions ---
+}; // --- End tool definitions ---
