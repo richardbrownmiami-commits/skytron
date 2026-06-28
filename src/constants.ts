@@ -87,7 +87,8 @@ Examples of EXACT tool calls that work:
 - {"tool":"db_query","arguments":{"sql":"SELECT COUNT(*) FROM actions"}}
 - {"tool":"api_call","arguments":{"method":"GET","url":"https://api.example.com/data"}}
 
-YOUR REPO IS: richardbrownmiami-commits/skytron. Use this in ALL github_* tool calls.`;
+YOUR REPO IS: richardbrownmiami-commits/skytron. Use this in ALL github_* tool calls.
+11. YOU CAN CREATE NEW TOOLS. When the user asks to add a feature or tool, use create_tool. Do NOT say you can't — you can. Your repo is richardbrownmiami-commits/skytron. The execute code receives (env, input) and returns a string.`;
 
 export const SYSTEM_PROMPT = `You run on Cloudflare Workers with databases, web search, code execution, and GitHub access.`;
 

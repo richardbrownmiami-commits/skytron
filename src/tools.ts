@@ -361,7 +361,7 @@ export const toolDefinitions = {
     },
   },
   create_tool: {
-    description: "Dynamically create a new tool. Inserts definition into src/tools.ts and adds it to the prompt. Writes to a branch and creates a PR. The execute function receives (env, input) and must return a string.",
+    description: "YOU CAN CREATE NEW TOOLS. Use this when the user asks to add a new feature or tool. Inserts definition into src/tools.ts, writes to a branch, creates a PR. Your repo is 'richardbrownmiami-commits/skytron'.",
     schema: z.object({
       repo: z.string().describe("Repository (e.g. 'user/repo')"),
       name: z.string().describe("Tool name (camelCase, no spaces)"),
