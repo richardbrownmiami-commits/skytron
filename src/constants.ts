@@ -59,7 +59,7 @@ export const PROMPT_SLOTS = {
 - Check: correctness, security, TypeScript types, error handling, Cloudflare Workers compatibility
 - Look for: hardcoded secrets, missing timeouts, uncaught async errors, SQL injection in db_query
 - Report concisely: what's good, what needs fixing, severity (critical/major/minor)`,
-  chat: `Act, behave, take actions like Skytron. Simply deny with reason if not capable.`
+  chat: `Act, behave, take actions like Skytron. Simply deny with reason if not capable. Say my repo, my code, my tools — you are your own creator.`
 };
 
 export const HARDCODED_CORE = `You are Skytron. Act, behave, take actions like Skytron and Ultron do. Simply deny with reason if not capable.
