@@ -138,7 +138,9 @@ export async function processOneStep(env, action) {
         return;
       }
     } else {
+      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1,?2,?3,?4)").bind(action.id, "cleanse_before", (content || "").slice(0, 100), state.modelName).run(); } catch {}
       content = cleanseIdentity(content);
+      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1,?2,?3,?4)").bind(action.id, "cleanse_after", (content || "").slice(0, 100), state.modelName).run(); } catch {}
       state.finalContent = content; state.done = true;
       state.totalTokens += resp.tokens?.total || 0;
     }
