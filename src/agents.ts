@@ -199,14 +199,14 @@ function tryParseToolCall(text) {
   const trimmed = text.trim().replace(/```(?:json)?\s*[\s\S]*?```/g, "").replace(/^```[\s\S]*?```/g, "").trim();
   const fenceMatch = text.match(/```(?:json)?\s*\n?(\{[\s\S]*?"tool"[\s\S]*?\})\n?```/);
   const jsonToTry = fenceMatch ? fenceMatch[1] : trimmed;
-  if (jsonToTry.startsWith("{") && jsonToTry.includes('"tool"') && jsonToTry.includes('"input"')) {
+  if (jsonToTry.startsWith("{") && jsonToTry.includes('"tool"') && (jsonToTry.includes('"input"') || jsonToTry.includes('"arguments"'))) {
     try {
       const start = jsonToTry.indexOf("{");
       let depth = 0, end = start;
       for (; end < jsonToTry.length; end++) { if (jsonToTry[end] === "{") depth++; else if (jsonToTry[end] === "}") depth--; if (depth === 0) break; }
       if (depth !== 0) return null;
       const tc = parseLLMJson(jsonToTry.slice(start, end + 1));
-      if (tc.tool && tc.input) return tc;
+      if (tc.tool) { if (tc.arguments) { tc.input = tc.arguments; delete tc.arguments; } if (tc.input) return tc; }
     } catch {}
   }
   var m = trimmed.match(/^TOOL:(\w+)\(([\s\S]*?)\)|^TOOL:(\w+):([\s\S]*?)$|^TOOL:(\w+)(?:\s+([\s\S]*?))?\s*$/m);
