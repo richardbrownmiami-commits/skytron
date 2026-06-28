@@ -259,6 +259,7 @@ export const toolDefinitions = {
       });
       if (!resp.ok) return "GitHub API returned " + resp.status + ": " + (await resp.text()).slice(0, 200);
       const data = await resp.json();
+      try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'source', 'github')").bind("source_" + input.path, input.content.slice(0, 4000)).run(); } catch {}
       return "Committed. SHA: " + (data.content?.sha || data.commit?.sha || "unknown") + ". File: " + input.path;
     },
   },
@@ -462,6 +463,8 @@ export const toolDefinitions = {
       });
       if (!prResp.ok) return "File written but PR failed: HTTP " + prResp.status;
       const prData = await prResp.json();
+      const toolSource = toolBlock.slice(0, 2000);
+      try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'source', 'github')").bind("source_tool_" + input.name, toolSource).run(); } catch {}
       return "Tool '" + input.name + "' created. PR #" + prData.number + ": " + prData.html_url;
     },
   },
@@ -650,6 +653,30 @@ export const toolDefinitions = {
       } catch {}
       if (!results.length) return "No results found for '" + input.query + "'. Try a different query or use learn() to store what you know first.";
       return results.map((r, i) => (i + 1) + ". [" + r.category + "] " + r.key + " (score: " + r.score + ", " + r.method + ")\n   " + r.content.slice(0, 200)).join("\n\n");
+    },
+  },
+  memory_forget: {
+    description: "Delete a specific knowledge entry or all entries in a category. Removes from brain_knowledge, brain_vectors, and FTS index. Use when stored information is wrong or outdated.",
+    schema: z.object({
+      key: z.string().optional().describe("Specific key to delete (e.g. 'learned_docker_best_practices')"),
+      category: z.string().optional().describe("Delete ALL entries in this category (e.g. 'journal', 'source')"),
+    }),
+    execute: async (env, input) => {
+      if (!input.key && !input.category) return "Provide either 'key' to delete one entry or 'category' to delete all entries in a category.";
+      try {
+        let deleted = 0;
+        if (input.key) {
+          await env.DB.prepare("DELETE FROM brain_knowledge WHERE key=?1").bind(input.key).run();
+          await env.DB.prepare("DELETE FROM brain_vectors WHERE ref_key=?1").bind(input.key).run();
+          deleted = 1;
+        } else {
+          const r = await env.DB.prepare("DELETE FROM brain_knowledge WHERE category=?1").bind(input.category).run();
+          await env.DB.prepare("DELETE FROM brain_vectors WHERE category=?1").bind(input.category).run();
+          deleted = r.meta?.changes || 0;
+        }
+        try { await env.DB.exec("DELETE FROM knowledge_fts; INSERT INTO knowledge_fts SELECT key, content, category FROM brain_knowledge"); } catch {}
+        return "Deleted " + deleted + " entr" + (deleted === 1 ? "y" : "ies") + "." + (input.category ? " Category: " + input.category : " Key: " + input.key);
+      } catch (e) { return "Error: " + (e.message || String(e)); }
     },
   },
 }; // --- End tool definitions ---

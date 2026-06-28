@@ -341,5 +341,69 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     return json(r.results?.[0] ? { action_id: r.results[0].id, status: "running" } : { action_id: null });
   }
 
+  if (url.pathname === "/brain/knowledge" && req.method === "DELETE") {
+    const cat = url.searchParams.get("category");
+    if (!cat) return json({ error: "category param required" }, 400);
+    try {
+      await env.DB.prepare("DELETE FROM brain_knowledge WHERE category=?1").bind(cat).run();
+      await env.DB.prepare("DELETE FROM brain_vectors WHERE category=?1").bind(cat).run();
+      await env.DB.exec("DELETE FROM knowledge_fts; INSERT INTO knowledge_fts SELECT key, content, category FROM brain_knowledge");
+      return json({ ok: true, deleted_category: cat });
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
+  if (url.pathname === "/brain/backfill" && req.method === "POST") {
+    try {
+      const keepCats = ["identity","architecture","tools","auto_learned","lesson","behavior"];
+      const body = await req.json().catch(() => ({}));
+      const catsToDelete = body.delete_categories || [];
+      let deleted = 0;
+      for (const cat of catsToDelete) {
+        const r = await env.DB.prepare("DELETE FROM brain_knowledge WHERE category=?1").bind(cat).run();
+        deleted += r.meta?.changes || 0;
+      }
+      await env.DB.exec("DELETE FROM knowledge_fts; INSERT INTO knowledge_fts SELECT key, content, category FROM brain_knowledge");
+      await env.DB.prepare("DELETE FROM brain_vectors").run();
+      const { indexAllKnowledge } = await import('./db');
+      await indexAllKnowledge(env, env.DB);
+      return json({ ok: true, deleted_entries: deleted, reindexed: true, kept_categories: keepCats });
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
+  if (url.pathname === "/github-webhook" && req.method === "POST") {
+    try {
+      const body = await req.json().catch(() => ({}));
+      const repo = body.repository?.full_name;
+      const ref = body.ref || "";
+      if (!repo || !ref.includes("refs/heads/")) return json({ ok: true, ignored: "not a push event" });
+      const branch = ref.replace("refs/heads/", "");
+      if (branch !== "main") return json({ ok: true, ignored: "not main branch" });
+      const token = env.GH_PAT;
+      if (!token) return json({ error: "no GH_PAT" }, 500);
+      const commits = body.commits || [];
+      const files = new Set();
+      for (const c of commits) { for (const f of c.added || []) files.add(f); for (const f of c.modified || []) files.add(f); for (const f of c.removed || []) files.add(f); }
+      const results = [];
+      for (const file of files) {
+        if (body.commits?.some(c => (c.removed || []).includes(file))) {
+          await env.DB.prepare("DELETE FROM brain_knowledge WHERE key=?1").bind("source_" + file).run();
+          await env.DB.prepare("DELETE FROM knowledge_fts WHERE key=?1").bind("source_" + file).run();
+          results.push({ file, action: "deleted" });
+        } else {
+          const resp = await fetch("https://api.github.com/repos/" + repo + "/contents/" + file + "?ref=" + branch, {
+            headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+            signal: AbortSignal.timeout(10000)
+          });
+          if (!resp.ok) { results.push({ file, action: "fetch_failed" }); continue; }
+          const data = await resp.json();
+          const content = atob(data.content).slice(0, 4000);
+          await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'source', 'github')").bind("source_" + file, content).run();
+          results.push({ file, action: "stored" });
+        }
+      }
+      return json({ ok: true, repo, branch, files_processed: results.length, results });
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
   return json({ error: "not found" }, 404);
 }
