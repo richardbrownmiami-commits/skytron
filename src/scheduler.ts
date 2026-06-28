@@ -29,8 +29,22 @@ export async function handleScheduled(controller, env) {
     if (r.results?.length) {
       await processOneStep(env, r.results[0]);
     } else {
-      const s = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
-      if (s.results?.length) await processOneStep(env, s.results[0]);
+      // Recover stuck actions: kill the frozen copy, mark it queued with checkpoint note, let next tick resume from last step
+      const s = await env.DB.prepare("SELECT * FROM actions WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
+      if (s.results?.length) {
+        const sid = s.results[0].id;
+        try {
+          const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
+          if (stateRow?.state) {
+            const state = JSON.parse(stateRow.state);
+            const lastStep = state.step || 0;
+            if (!state.fullHistory) state.fullHistory = [];
+            state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED - resume from here. Do NOT re-read files or repeat completed steps. Continue from where you left off at step " + lastStep + ".]" });
+            await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
+          }
+        } catch {}
+        await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
+      }
     }
     await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run();
     await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
