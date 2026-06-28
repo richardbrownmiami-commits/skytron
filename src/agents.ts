@@ -123,6 +123,7 @@ export async function processOneStep(env, action) {
         }
         if (result && result.startsWith("[TOOL ERROR:")) {
           state.repeatCount = 0;
+          try { dispatchTool(env, "learn", { key: "lesson_" + new Date().toISOString().split("T")[0] + "_tool", content: "Tool '" + parsed.tool + "' failed: " + result.slice(0, 300) + "\nParams: " + JSON.stringify(parsed.input).slice(0, 200), category: "lesson" }); } catch {}
           state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Self-heal:\n1. RESEARCH: Use web_search to look up the error message or issue\n2. DIAGNOSE: What's actually broken? Your creds? The service? Bad params?\n3. FIX: Changed params, different tool that does same thing, or inform user\n4. LOOP CHECK: If you already researched this error, answer in plain text\n\nStart with web_search if you don't understand the error." });
         }
         if (result && !result.startsWith("[TOOL ERROR:")) {
