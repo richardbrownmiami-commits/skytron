@@ -4,7 +4,15 @@
 // - To add a NEW tool: use create_tool tool from chat (recommended) OR add a block in toolDefinitions object below
 // - webSearch: DuckDuckGo primary → Tavily fallback. web_fetch: Tinyfish primary → raw fetch fallback.
 // - create_tool tool dynamically inserts new definitions by editing THIS FILE on a GitHub branch
-// - Marker at bottom: "}; // --- End tool definitions ---" — insertion point for create_tool
+// - Marker at bottom: "
+  memory_search: {
+    description: "Hybrid semantic and keyword search",
+    schema: z.object({ query: z.string(), limit: z.number().optional(), category: z.string().optional() }),
+    execute: async (env, input) => {
+// code to implement memory_search function
+    },
+  },
+}; // --- End tool definitions ---" — insertion point for create_tool
 // DO NOT put secrets here. Use env vars (GH_PAT, CONTEXT7_API_KEY, etc.) defined in wrangler.toml or Cloudflare secrets.
 // When adding a tool: follow existing pattern (description, schema with z.object, execute async function returning string).
 // If Skytron is misfiring on a tool call, check: (1) Zod schema matches params, (2) description is clear, (3) execute handles errors gracefully.
