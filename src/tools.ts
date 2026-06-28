@@ -12,6 +12,14 @@
 // code to implement memory_search function
     },
   },
+
+  memory_search: {
+    description: "Search the vector knowledge base for relevant context using semantic similarity",
+    schema: z.object({ query: z.string(), topK: z.number().optional() }),
+    execute: async (env, input) => {
+async (input, env) => { const { searchVectors } = await import('./db'); const results = await searchVectors(env, input.query, input.topK || 5); return results.map(r => `[${r.score.toFixed(3)}] ${r.text}`).join('\n---\n') || 'No results found'; }
+    },
+  },
 }; // --- End tool definitions ---" — insertion point for create_tool
 // DO NOT put secrets here. Use env vars (GH_PAT, CONTEXT7_API_KEY, etc.) defined in wrangler.toml or Cloudflare secrets.
 // When adding a tool: follow existing pattern (description, schema with z.object, execute async function returning string).
