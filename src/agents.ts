@@ -64,6 +64,15 @@ export async function processOneStep(env, action) {
       state.totalTokens += resp.tokens?.total || 0;
       await finalizeAction(db, action.id, state); return;
     }
+    // Tool-capability refusal detection: model says it can't add/modify tools (wrong)
+    if (!parsed && repromptCount < 2 && /\b(?:can't|cannot|don't have the ability|unable to|not able to|not programmed to)[\s\S]{0,30}(?:add|create|make|write|modify|change|edit|implement)[\s\S]{0,30}(?:tools?|features?|commands?|capabilities?|programming|source code|source (?:code|files)|itself|myself)/i.test(trimmed)) {
+      state.repromptCount = repromptCount + 1;
+      state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
+      state.fullHistory.push({ role: "user", content: "[CONTRADICTION] You have the create_tool tool. Output EXACTLY: {\"tool\":\"create_tool\",\"input\":{\"repo\":\"richardbrownmiami-commits/skytron\",\"name\":\"...\",\"description\":\"...\",\"paramsSchema\":\"z.object({...})\",\"executeCode\":\"...\"}}" });
+      await saveAgentState(db, action.id, state);
+      await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
+      return;
+    }
     if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => { var lc = trimmed.toLowerCase(); var tn = t.toLowerCase(); return lc.includes('"' + tn + '"') || lc.includes("use " + tn) || lc.includes("use the " + tn) || lc.includes("using " + tn) || lc.includes("- " + tn) || lc.includes(tn + ":"); }))) {
       state.repromptCount = repromptCount + 1;
       const extracted = extractToolFromPlan(trimmed);
