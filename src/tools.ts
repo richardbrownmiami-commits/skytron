@@ -411,6 +411,14 @@ export const toolDefinitions = {
 return 'Hello World'
     },
   },
+
+  hello_world: {
+    description: "Prints 'Hello World'",
+    schema: z.object({}),
+    execute: async (env, input) => {
+async function (env, input) { return 'Hello World'; }
+    },
+  },
 };' before export marker)
       const marker = "// --- End tool definitions ---";
       const markerPos = currentContent.indexOf(marker);
