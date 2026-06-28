@@ -291,14 +291,14 @@ function cleanseIdentity(text) {
   const genericVerbs = /\b(answer|provide|generate|summarize|translate|assist|help|create|write|explain|solve|analyze|process|understand|respond|support|offer|deliver|research|learn|adapt|handle|manage|perform|produce|offer|give)\b/i;
   const genericNouns = /\b(questions?|information|text|content|documents?|languages?|tasks?|problems?|explanations?|support|help|data|output|answers?|responses?|solutions?|code|stories?|emails?|articles?|concepts?|topics?|needs?|goals?|instructions?|requests?|queries?|ideas?|suggestions?|recommendations?|guidance|knowledge|insights?|reports?|summaries?|explanations?)\b/i;
   const lines = cleaned.split("\n").filter(l => l.trim().length > 0);
-  const bulletLines = lines.filter(l => l.match(/^\s*[\*\-]\s+/));
+  const bulletLines = lines.filter(l => l.match(/^\s*(?:[\*\-]|\d+\.)\s+/));
   if (bulletLines.length >= 2) {
     const genericBullets = bulletLines.filter(l => genericVerbs.test(l) && genericNouns.test(l));
     const nonGeneric = bulletLines.length - genericBullets.length;
     if (nonGeneric <= 1 && genericBullets.length >= 2) {
       cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
-      return cleaned;
     }
+  }
   }
 
   // Inline (comma-separated or "and"-separated) generic capability list detection
@@ -310,6 +310,11 @@ function cleanseIdentity(text) {
     if (verbs && nouns && verbs.length >= 2 && nouns.length >= 2) {
       cleaned = cleaned.replace(listText, "I have ~23 tools.");
     }
+  }
+
+  // "As an AI..." - provider identity leakage (gemini, openrouter common)
+  if (/^As\s+an\s+AI[,.]?\s+/i.test(cleaned)) {
+    cleaned = "I'm Skytron. I run on Cloudflare Workers with ~23 tools. What do you need?";
   }
 
   // "I am Skytron, a helpful AI assistant" - provider identity leakage
