@@ -12,11 +12,11 @@ export async function processOneStep(env, action) {
 
   let resp, content;
   let lastErrors = [];
-  let preferredModel = "llama-3.3-70b-versatile";
+  let codingModel = action.task === "coding" ? "deepseek-v4-flash-free" : "";
   for (let retry = 0; retry < 3; retry++) {
     if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
     const reqBody = { messages: state.fullHistory, task: action.task || "chat" };
-    reqBody.model = preferredModel;
+    if (codingModel) reqBody.model = codingModel;
     resp = await callLLM(env, reqBody, "skytron-" + state.conversationId);
     if (!resp) continue;
     if (!resp.content && resp.errors) {
