@@ -23,10 +23,16 @@ const REPORT_INTERVAL = 240; // every 240 ticks ≈ 4 hours at 1-min ticks
 export async function handleScheduled(controller, env) {
   try { await initSchema(env.DB, env); } catch {}
 
-  // --- Process queued actions ---
+  // --- Process queued actions (round-robin) ---
   try {
-    const r = await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1 RETURNING *").all();
+    const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key='last_action_id'").all();
+    const lastId = parseInt(lastIdRow.results?.[0]?.value) || 0;
+    let r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' AND id > ?1 ORDER BY id ASC LIMIT 1) RETURNING *").bind(lastId).all();
+    if (!r.results?.length) {
+      r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' ORDER BY id ASC LIMIT 1) RETURNING *").all();
+    }
     if (r.results?.length) {
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_action_id',?1,datetime('now'))").bind(String(r.results[0].id)).run();
       await processOneStep(env, r.results[0]);
     } else {
       // Recover stuck actions: kill the frozen copy, mark it queued with checkpoint note, let next tick resume from last step
