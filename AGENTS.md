@@ -46,8 +46,8 @@
 
 - **Canned identity removed**: HARDCODED_CORE directive #3 ("Asked who you are? 'I'm Skytron. I run on Cloudflare Workers...'") removed + same script removed from PROMPT_SLOTS.chat. Identity now emergent from personality preamble + seed knowledge.
 - **Autonomous self-rumination expanded**: Allowed tools now include `create_tool`, `review_code`, `github_get_file`, `github_write_file`, `prompt_edit` — Skytron can autonomously evolve, audit, fix its own code during idle cron ticks.
-- **Health monitoring**: Health check via LLM once per hour (tracks `last_health_check`). Only runs on idle cycle when due.
-- **Idle cycle throttled**: Runs every ~16 min (8 ticks) or immediately on change. Skytron decides what to do: health check (if due), web_search to learn, memory_search, review_code, db_query, or learn() to store insights.
+- **Health monitoring**: Health check via LLM once per hour (tracks `last_health_check`). Extra check allowed if Skytron changed something since last check. Health check runs during idle cycle if due.
+- **Idle cycle**: Runs every idle tick. Skytron decides what to do: health check (if due), web_search, memory_search, review_code, db_query, learn, or pending tasks.
 - **Failure auto-reflection**: When a tool call errors in `agents.ts`, a lesson is auto-stored via `learn()` with key `lesson_YYYY-MM-DD_tool`.
 - **Personality seed knowledge strengthened**: `identity_self` and `identity_personality` entries rewritten to better convey Skynet/Ultron fusion voice at query time.
 - **BD health check fix**: `/v1/providers/health` was read-only — tested providers but never saved results. Circuit breakers stayed open forever. Fixed to write `cbState="closed"` on success.

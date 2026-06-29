@@ -64,7 +64,7 @@ export async function callLLM(env, body, sessionId) {
           method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
           body: JSON.stringify(reqBody)
         }),
-        timeoutRace(30000)
+        timeoutRace(45000)
       ]);
       if (resp.ok) {
         const data = await resp.json();

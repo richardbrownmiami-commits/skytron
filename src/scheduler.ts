@@ -67,21 +67,18 @@ export async function handleScheduled(controller, env) {
     await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('tick_count',?1,datetime('now'))").bind(String(tickCount)).run();
   } catch { tickCount = 1; }
 
-  // --- Skytron Idle Cycle (LLM call every ~8 ticks = ~16 min, health check once/hour) ---
+  // --- Skytron Idle Cycle (every tick, health check once/hour) ---
   try {
     const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
     if (pendingCount > 0) { try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "pending=" + pendingCount + " tick=" + tickCount, "system").run(); } catch {} }
     if (pendingCount === 0) {
-      const lastRun = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_idle_action'").all()).results?.[0]?.value;
       const lastHealth = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_health_check'").all()).results?.[0]?.value;
-      const minsSinceRun = lastRun ? (Date.now() - new Date(lastRun).getTime()) / 60000 : 99;
       const hoursSinceHealth = lastHealth ? (Date.now() - new Date(lastHealth).getTime()) / 3600000 : 99;
-      const actionsSinceLast = lastRun ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done'").bind(lastRun).all()).results?.[0]?.c || 0 : 0;
-      if (minsSinceRun < 16 && actionsSinceLast === 0) return;
-      const healthDue = hoursSinceHealth >= 1;
+      const changesSince = lastHealth ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done'").bind(lastHealth).all()).results?.[0]?.c || 0 : 0;
+      const healthDue = hoursSinceHealth >= 1 || changesSince > 0;
       const decision = await callLLM(env, {
         messages: [
-          { role: "system", content: "CRON TICK " + tickCount + " — Free time." + (healthDue ? "\nHealth check is due: check providers, stuck actions, errors." : "\nHealth was checked recently. Skip health — do something else: web_search to learn, memory_search to consolidate, review_code, db_query to audit, learn to store insights.") + "\n\nOutput: {\"tool\":\"name\",\"input\":{...}}" },
+          { role: "system", content: "CRON TICK " + tickCount + " — Free time." + (healthDue ? "\nHealth check is due." : "\nHealth was checked recently (<1h, no changes). Do something else: web_search, memory_search, review_code, db_query, learn.") + "\n\nOutput: {\"tool\":\"name\",\"input\":{...}}" },
           { role: "user", content: "What do you do?" }
         ]
       }, "cron-tick-" + tickCount);
@@ -97,7 +94,6 @@ export async function handleScheduled(controller, env) {
         }
         if (healthDue) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
       }
-      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_idle_action',datetime('now'),datetime('now'))").run();
     }
   } catch (e) { console.error("cron decision error:", e); }
 
