@@ -65,7 +65,9 @@ export async function handleScheduled(controller, env) {
   // --- Skytron Decision Cycle (every tick when idle) ---
   try {
     const pendingActions = await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all();
-    if (pendingActions.results?.[0]?.c === 0) {
+    const pendingCount = pendingActions.results?.[0]?.c || 0;
+    try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "pending=" + pendingCount + " energy=? health=? tick=" + tickCount, "system").run(); } catch {}
+    if (pendingCount === 0) {
       const stateRows = await env.DB.prepare("SELECT key, value FROM identity WHERE key IN ('energy','tick_count','health_flags')").all();
       const stateMap = {};
       for (const row of stateRows.results || []) stateMap[row.key] = row.value;
@@ -92,17 +94,24 @@ export async function handleScheduled(controller, env) {
       }, "cron-tick-" + tickCount);
 
       if (decision?.content && typeof decision.content === "string") {
+        try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_ok_" + tickCount, "LLM OK: " + decision.content.slice(0, 200) + " | model=" + (decision.model || "?"), decision.model || "?").run(); } catch {}
         const trimmed = decision.content.trim();
         const parsed = tryParseSelfAction(trimmed);
         if (parsed) {
+          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "parsed_" + tickCount, "Tool: " + parsed.tool + " Input: " + JSON.stringify(parsed.input).slice(0, 200), decision.model || "?").run(); } catch {}
           const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
+          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "dispatch_" + tickCount, "Result (" + (result?.length || 0) + " chars): " + (result || "null").slice(0, 200), decision.model || "?").run(); } catch {}
           if (result && result.length > 10) {
             await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + parsed.tool + ": " + result.slice(0, 300)).run();
           }
+        } else {
+          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "parse_fail_" + tickCount, "Parse failed. Raw: " + trimmed.slice(0, 300), decision.model || "?").run(); } catch {}
         }
+      } else {
+        try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_null_" + tickCount, "LLM returned null content. errors=" + JSON.stringify(decision?.errors || []).slice(0, 200), decision?.model || "?").run(); } catch {}
       }
     }
-  } catch (e) { console.error("cron decision error:", e); }
+  } catch (e) { try { env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "exception_" + tickCount, "Exception: " + (e.message || String(e)).slice(0, 300), "error").run().catch(()=>{}); } catch(e2){} console.error("cron decision error:", e); }
 
   // --- Daily cleanup ---
   try {
