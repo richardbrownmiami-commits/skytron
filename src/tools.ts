@@ -53,6 +53,20 @@ export async function webSearch(env, query) {
     }
     lastError = "DuckDuckGo returned no results";
   } catch (e) { lastError = "DuckDuckGo error: " + (e.message || e); }
+  try {
+    const resp = await fetch("https://www.google.com/search?q=" + encodeURIComponent(query) + "&num=5", { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }, signal: AbortSignal.timeout(10000) });
+    const html = await resp.text();
+    const results = [];
+    const blocks = [...html.matchAll(/<a[^>]*href=["']\/url\?q=([^"']+)[^>]*>([\s\S]*?)<\/a>/g)].slice(0, 5);
+    for (const b of blocks) {
+      const url = decodeURIComponent(b[1].split("&")[0]);
+      const title = b[2].replace(/<[^>]*>/g, "").trim();
+      if (url && title && !url.startsWith("http")) continue;
+      results.push(title + " (" + url + ")");
+    }
+    if (results.length) return results.join("\n");
+    lastError = "Google returned no results";
+  } catch (e) { lastError = "Google error: " + (e.message || e); }
   if (env.TAVILY_API_KEY) {
     const tavily = await tavilySearch(env.TAVILY_API_KEY, query);
     if (tavily) return tavily;
