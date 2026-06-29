@@ -15,19 +15,8 @@ const AI_MODEL = "@cf/zai-org/glm-4.7-flash";
 
 export async function callLLM(env, body, sessionId) {
   const errors = [];
-  // Check if WA hit rate limit 2+ times today — skip if so
-  let waSkipped = false;
-  if (env.DB) {
-    try {
-      const row = await env.DB.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
-      if (row?.value) {
-        const [date, count] = row.value.split(":");
-        if (date === new Date().toISOString().split("T")[0] && parseInt(count) >= 2) waSkipped = true;
-      }
-    } catch {}
-  }
   // Priority 1: Workers AI (GLM-4.7-Flash)
-  if (env.AI && !waSkipped) {
+  if (env.AI) {
     let waReturned = false;
     try {
       const waResult = await Promise.race([
