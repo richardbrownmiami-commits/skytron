@@ -118,15 +118,20 @@ export async function handleScheduled(controller, env) {
           let parsed = tryParseSelfAction(trimmed);
           if (!parsed) parsed = tryParseNaturalLanguage(trimmed);
           if (parsed && settings.tool_dispatch) {
-            const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
-            if (result) {
-              try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + slot + " " + parsed.tool + ": " + String(result).slice(0, 300)).run(); } catch {}
-            }
-            // Save complex project state for next tick
-            if (settings.idle_project && (slot === "self_improve" || slot === "test")) {
-              await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('idle_project',?1,datetime('now'))").bind(JSON.stringify({ task: parsed.tool, input: parsed.input || {}, tick: tickCount })).run();
-            } else {
-              try { await env.DB.prepare("DELETE FROM identity WHERE key='idle_project'").run(); } catch {}
+            // Check per-task toggle
+            const taskToggleKey = "task_" + parsed.tool;
+            const taskAllowed = settings[taskToggleKey] !== false; // default true if not set
+            if (taskAllowed) {
+              const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
+              if (result) {
+                try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + slot + " " + parsed.tool + ": " + String(result).slice(0, 300)).run(); } catch {}
+              }
+              // Save complex project state for next tick
+              if (settings.idle_project && (slot === "self_improve" || slot === "test")) {
+                await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('idle_project',?1,datetime('now'))").bind(JSON.stringify({ task: parsed.tool, input: parsed.input || {}, tick: tickCount })).run();
+              } else {
+                try { await env.DB.prepare("DELETE FROM identity WHERE key='idle_project'").run(); } catch {}
+              }
             }
           }
         } else {
@@ -158,7 +163,8 @@ async function getCronSettings(db) {
     enabled: true, log_tick: false, idle_cycle: true, health_check: true,
     slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true,
     idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true,
-    process_agents: true, daily_cleanup: true, night_sleep: true
+    process_agents: true, daily_cleanup: true, night_sleep: true,
+    task_web_search: true, task_memory_search: true, task_learn: true, task_db_query: true, task_review_code: true
   };
   try {
     const rows = await db.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
