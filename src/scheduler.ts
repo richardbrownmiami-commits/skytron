@@ -77,10 +77,12 @@ export async function handleScheduled(controller, env) {
       const changesSince = lastHealth ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done' AND task='coding'").bind(lastHealth).all()).results?.[0]?.c || 0 : 0;
       try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "free_time_tick=" + tickCount, "system").run(); } catch {}
       const healthDue = hoursSinceHealth >= 1 || changesSince > 0;
+      const taskIdx = tickCount % 5;
+      const tasks = ["web_search", "memory_search", "review_code", "db_query", "learn"];
       const decision = await callLLM(env, {
         messages: [
-          { role: "system", content: "CRON TICK " + tickCount + " — Free time." + (healthDue ? "\nHealth check is due." : "\nHealth was checked recently (<1h, no changes). Do something else: web_search, memory_search, review_code, db_query, learn.") + "\n\nOutput: {\"tool\":\"name\",\"input\":{...}}" },
-          { role: "user", content: "What do you do?" }
+          { role: "system", content: "tick=" + tickCount + (healthDue ? " health" : " " + tasks[taskIdx]) + "\nOutput: {\"tool\":\"" + (healthDue ? "db_query" : tasks[taskIdx]) + "\",\"input\":{}}" },
+          { role: "user", content: "run " + (healthDue ? "SELECT COUNT(*) FROM actions" : tasks[taskIdx]) }
         ]
       }, "cron-tick-" + tickCount);
       if (decision?.content && typeof decision.content === "string") {
@@ -93,10 +95,10 @@ export async function handleScheduled(controller, env) {
             await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + parsed.tool + ": " + result.slice(0, 300)).run();
           }
         }
-        if (healthDue) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
       } else {
         try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_null_" + tickCount, "LLM returned null. errors=" + JSON.stringify(decision?.errors || []), "none").run(); } catch {}
       }
+      if (healthDue) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
     }
   } catch (e) { console.error("cron decision error:", e); }
 
