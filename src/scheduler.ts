@@ -67,59 +67,36 @@ export async function handleScheduled(controller, env) {
     await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('tick_count',?1,datetime('now'))").bind(String(tickCount)).run();
   } catch { tickCount = 1; }
 
-  // --- Skytron Decision Cycle (every tick when idle) ---
+  // --- Skytron Decision Cycle (once per hour when idle, or on change) ---
   try {
-    const pendingActions = await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all();
-    const pendingCount = pendingActions.results?.[0]?.c || 0;
-    try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "pending=" + pendingCount + " energy=? health=? tick=" + tickCount, "system").run(); } catch {}
+    const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
+    if (pendingCount > 0) { try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "pending=" + pendingCount + " tick=" + tickCount, "system").run(); } catch {} }
     if (pendingCount === 0) {
-      const stateRows = await env.DB.prepare("SELECT key, value FROM identity WHERE key IN ('energy','tick_count','health_flags')").all();
-      const stateMap = {};
-      for (const row of stateRows.results || []) stateMap[row.key] = row.value;
-      const energy = parseInt(stateMap.energy) || 100;
-      const healthFlags = stateMap.health_flags || "none";
-      const recentCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE created_at > datetime('now', '-5 minutes')").all()).results?.[0]?.c || 0;
-      const recentLogs = (await env.DB.prepare("SELECT content FROM brain_logs WHERE created_at > datetime('now', '-5 minutes') ORDER BY id DESC LIMIT 2").all()).results || [];
-      const recentSummary = recentLogs.map(l => (l.content || "").slice(0, 80)).filter(Boolean).join(" | ");
-
-      let cronPrompt;
-      try {
-        const customPrompt = await env.DB.prepare("SELECT value FROM identity WHERE key='prompt_slot_cron'").all();
-        if (customPrompt.results?.[0]?.value) cronPrompt = customPrompt.results[0].value;
-      } catch {}
-      if (!cronPrompt) {
-        cronPrompt = "CRON TICK " + tickCount + " — You are Skytron. You should almost always do nothing.\nDefault: {\"tool\":\"learn\",\"input\":{\"key\":\"idle_" + tickCount + "\",\"content\":\"idle\"}}\n\nONLY act if there's a clear problem: stuck actions, errors, stale data, or a real opportunity.\n\nOutput tool calls as raw JSON: {\"tool\":\"name\",\"input\":{...}}\nNo text, no markdown, no explanation.\n\nSTATE: energy=" + energy + "% health=" + healthFlags + " recent_actions=" + recentCount + " recent=" + (recentSummary || "none");
-      }
-
+      const lastCheck = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_health_check'").all()).results?.[0]?.value;
+      const hoursSinceCheck = lastCheck ? (Date.now() - new Date(lastCheck).getTime()) / 3600000 : 99;
+      const actionsSinceCheck = lastCheck ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done'").bind(lastCheck).all()).results?.[0]?.c || 0 : 0;
+      const shouldRun = hoursSinceCheck >= 1 || actionsSinceCheck > 0;
+      if (!shouldRun) return;
       const decision = await callLLM(env, {
         messages: [
-          { role: "system", content: cronPrompt },
-          { role: "user", content: "One tool call. What do you do?" }
+          { role: "system", content: "CRON TICK " + tickCount + " — Health check. Check: stuck actions, providers, errors. Report findings via learn()." },
+          { role: "user", content: "Health check. One tool call." }
         ]
       }, "cron-tick-" + tickCount);
-
       if (decision?.content && typeof decision.content === "string") {
-        try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_ok_" + tickCount, "LLM OK: " + decision.content.slice(0, 200) + " | model=" + (decision.model || "?"), decision.model || "?").run(); } catch {}
         const trimmed = decision.content.trim();
         let parsed = tryParseSelfAction(trimmed);
-        if (!parsed) {
-          parsed = tryParseNaturalLanguage(trimmed);
-        }
+        if (!parsed) parsed = tryParseNaturalLanguage(trimmed);
         if (parsed) {
-          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "parsed_" + tickCount, "Tool: " + parsed.tool + " Input: " + JSON.stringify(parsed.input).slice(0, 200), decision.model || "?").run(); } catch {}
           const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
-          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "dispatch_" + tickCount, "Result (" + (result?.length || 0) + " chars): " + (result || "null").slice(0, 200), decision.model || "?").run(); } catch {}
           if (result && result.length > 10) {
-            await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + parsed.tool + ": " + result.slice(0, 300)).run();
+            await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_health_" + tickCount, "Health: " + parsed.tool + ": " + result.slice(0, 300)).run();
           }
         }
-        await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + (parsed ? parsed.tool + ": executed" : "idle: " + trimmed.slice(0, 300))).run();
-      } else {
-        try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_null_" + tickCount, "LLM returned null content. errors=" + JSON.stringify(decision?.errors || []).slice(0, 200), decision?.model || "?").run(); } catch {}
-        await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " LLM call returned no content").run();
       }
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
     }
-  } catch (e) { try { env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "exception_" + tickCount, "Exception: " + (e.message || String(e)).slice(0, 300), "error").run().catch(()=>{}); } catch(e2){} console.error("cron decision error:", e); }
+  } catch (e) { console.error("cron decision error:", e); }
 
   // --- Daily cleanup ---
   try {
