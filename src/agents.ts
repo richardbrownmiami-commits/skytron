@@ -35,27 +35,7 @@ export async function processOneStep(env, action) {
   }
   if (!resp || typeof content !== "string") {
     const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
-    const fallbackPrompt = "You are a helpful assistant. Your AI providers failed: " + errorSummary.slice(0, 300) + ". Apologize briefly mentioning the real issue, and ask the user to try again later. Under 50 words.";
-    try {
-      if (env.AI) {
-        try {
-          await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_start", "Workers AI fallback starting...", "workers-ai").run();
-        } catch {}
-        const waResult = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
-          messages: [{ role: "system", content: fallbackPrompt }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200
-        }, { signal: AbortSignal.timeout(15000) });
-        const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
-        if (waText) {
-          try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_ok", "Workers AI succeeded: " + waText.slice(0, 200), "workers-ai").run(); } catch {}
-          state.finalContent = cleanseIdentity(waText); state.done = true; await finalizeAction(db, action.id, state); return;
-        }
-        try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_noresp", "Workers AI returned no response: " + JSON.stringify(waResult).slice(0, 200), "workers-ai").run(); } catch {}
-      } else {
-        try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_nobind", "env.AI is undefined - binding not working", "workers-ai").run(); } catch {}
-      }
-    } catch (e) {
-      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_err", "Workers AI error: " + (e.message || String(e)).slice(0, 200), "workers-ai").run(); } catch {}
-    }
+    try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "provider_fail", "Both providers failed: " + errorSummary.slice(0, 200), "error").run(); } catch {}
     state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
   } else {
     state.modelName = resp.model;
