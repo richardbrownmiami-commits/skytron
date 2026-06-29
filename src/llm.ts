@@ -49,7 +49,7 @@ export async function callLLM(env, body, sessionId) {
   let bdOk = false;
   if (env.BUDDHI_DWAR) {
     try {
-      const reqBody = { messages: body.messages, model: body.model || "", max_tokens: 3000, task: body.task || "chat" };
+      const reqBody = { messages: body.messages, model: body.model || "", max_tokens: 3000 };
       const resp = await Promise.race([
         env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
           method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
