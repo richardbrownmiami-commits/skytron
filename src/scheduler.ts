@@ -16,7 +16,7 @@ import { dispatchTool, toolDefinitions } from './tools';
 export async function handleScheduled(controller, env) {
   try { await initSchema(env.DB, env); } catch {}
 
-  // --- Night sleep (6h window: UTC 20-1 = IST 1:30AM-7AM) ---
+  // --- Night sleep (6h window: UTC 20-2 = IST 1:30AM-7:30AM) ---
   const now = new Date();
   const h = now.getUTCHours();
   if (h >= 20 || h < 2) return;
