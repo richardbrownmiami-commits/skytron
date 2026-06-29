@@ -217,7 +217,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       await storeMemory(env.DB, "user", llmInput.slice(0, 2000), conversationId);
 
       const taskType = detectTaskType(input);
-      const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', 'queued', ?1, ?2) RETURNING id").bind(input, taskType).all();
+      const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', 'running', ?1, ?2) RETURNING id").bind(input, taskType).all();
       const aid = r.results[0].id;
 
       let slotContent = await getPromptSlot(env.DB, taskType);
@@ -266,7 +266,6 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       ctx.waitUntil((async () => {
         try {
-          await env.DB.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(aid).run();
           await processOneStep(env, { id: aid });
         } catch (e) { console.error("background /think processing error:", e); }
         try {
