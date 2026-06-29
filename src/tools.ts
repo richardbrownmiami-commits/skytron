@@ -183,7 +183,7 @@ export const toolDefinitions = {
     description: "Update a prompt slot (default/coding/search/review/chat) or the global override. Slots are injected based on task type.",
     schema: z.object({
       prompt: z.string().describe("The new prompt content"),
-      slot: z.enum(["default","coding","search","review","chat"]).optional().describe("Which slot to update. Omit for legacy global prompt_override."),
+      slot: z.enum(["default","coding","search","review","chat","cron"]).optional().describe("Which slot to update. Omit for legacy global prompt_override."),
     }),
     execute: async (env, input) => {
       const key = input.slot ? "prompt_slot_" + input.slot : "prompt_override";
