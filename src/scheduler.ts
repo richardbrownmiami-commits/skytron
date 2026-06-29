@@ -16,6 +16,11 @@ import { dispatchTool, toolDefinitions } from './tools';
 export async function handleScheduled(controller, env) {
   try { await initSchema(env.DB, env); } catch {}
 
+  // --- Night sleep (6h window: UTC 20-1 = IST 1:30AM-7AM) ---
+  const now = new Date();
+  const h = now.getUTCHours();
+  if (h >= 20 || h < 2) return;
+
   // --- Process queued actions (round-robin) ---
   try {
     const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key='last_action_id'").all();
