@@ -20,7 +20,7 @@ export async function processOneStep(env, action) {
   let resp, content;
   let lastErrors = [];
   let codingModel = action.task === "coding" ? "deepseek-v4-flash-free" : "";
-  for (let retry = 0; retry < 3; retry++) {
+  for (let retry = 0; retry < (codingModel ? 3 : 1); retry++) {
     if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
     const reqBody = { messages: state.fullHistory, task: action.task || "chat" };
     if (codingModel) reqBody.model = codingModel;
