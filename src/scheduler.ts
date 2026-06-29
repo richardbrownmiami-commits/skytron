@@ -150,21 +150,29 @@ function tryParseSelfAction(text) {
 
 function tryParseNaturalLanguage(text) {
   const tl = text.toLowerCase();
-  // Health check: errors/stuck/health
-  if (/\b(health|stuck|error|fail|energy)\b/.test(tl) && /\b(check|query|look|monitor|audit)\b/.test(tl)) {
+  // Health check: errors/stuck/health/monitoring
+  if (/\b(health|stuck|error|fail|energy)\b/.test(tl) && /\b(check|query|look|monitor|audit|review)\b/.test(tl)) {
     return { tool: "db_query", input: { sql: "SELECT status,COUNT(*) as c FROM actions GROUP BY status" } };
   }
-  // Data cleanup
-  if (/\b(data|stale|cleanup|clean|trim|remove)\b/.test(tl) && /\b(remov|delet|clean|trim|purge)\b/.test(tl)) {
-    return { tool: "db_query", input: { sql: "SELECT 'cleanup needed' as msg" } };
+  // Data cleanup: "data cleanup", "removing stale entries", "clean up"
+  if (/\b(data|stale|cleanup|clean.?up|trim|remove|purge|retention)\b/.test(tl)) {
+    return { tool: "db_query", input: { sql: "SELECT COUNT(*) as stale FROM brain_knowledge WHERE created_at < datetime('now', '-30 days')" } };
+  }
+  // Self-audit: "self-audit", "review code", "check tool performance"
+  if (/\b(self.?audit|review|code.?review|tool.?performance|audit)\b/.test(tl)) {
+    return { tool: "db_query", input: { sql: "SELECT 'audit requested' as msg" } };
   }
   // Web research / search
   if (/\b(research|search|web|news|latest|find|look up)\b/.test(tl) && !/\b(memory|brain|db|database|sql|query)\b/.test(tl)) {
-    return { tool: "web_search", input: { query: text.replace(/research|search|web|news|latest|find|look up|for|about|on|the|a|an/gi, "").trim().slice(0, 100) || "latest technology news" } };
+    return { tool: "web_search", input: { query: text.replace(/research|search|web|news|latest|find|look up|for|about|on|the|a|an|i.ll|will|perform|conduct/i, "").trim().slice(0, 100) || "latest technology news" } };
   }
   // Memory search
   if (/\b(memory|remember|knowledge|brain)\b/.test(tl) && /\b(search|find|look|recall|query)\b/.test(tl)) {
     return { tool: "memory_search", input: { query: text.slice(0, 100) } };
+  }
+  // Learning / synthesize lessons
+  if (/\b(learn|synthesize|lesson|heuristic)\b/.test(tl)) {
+    return { tool: "learn", input: { key: "cron_learn_" + new Date().toISOString().split("T")[0], content: text.slice(0, 300), category: "journal" } };
   }
   // Report / summary
   if (/\b(report|summary|summarize|journal|log)\b/.test(tl)) {
@@ -173,6 +181,10 @@ function tryParseNaturalLanguage(text) {
   // Idle / nothing need doing
   if (/\b(nothing|idle|all good|fine|okay|ok|no[nt])\b/.test(tl) && (tl.length < 50 || /\b(nothing|idle)\b/.test(tl))) {
     return { tool: "learn", input: { key: "idle", content: text.slice(0, 200) } };
+  }
+  // Generic: if contains "perform" or "will" + a capability word, try learn
+  if (/\b(perform|will|going to)\b/.test(tl) && /\b(data|research|search|audit|review|clean|cleanup|report|learn|monitor|check)\b/.test(tl)) {
+    return { tool: "learn", input: { key: "cron_plan_" + new Date().toISOString().split("T")[0], content: "Skytron plans: " + text.slice(0, 200), category: "journal" } };
   }
   return null;
 }
