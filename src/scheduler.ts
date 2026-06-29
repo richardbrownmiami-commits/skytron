@@ -16,47 +16,56 @@ import { dispatchTool, toolDefinitions } from './tools';
 export async function handleScheduled(controller, env) {
   try { await initSchema(env.DB, env); } catch {}
 
+  // --- Load settings ---
+  const settings = await getCronSettings(env.DB);
+
   // --- Night sleep (6h window: UTC 20-2 = IST 1:30AM-7:30AM) ---
-  const now = new Date();
-  const h = now.getUTCHours();
-  if (h >= 20 || h < 2) return;
+  if (settings.night_sleep) {
+    const now = new Date();
+    const h = now.getUTCHours();
+    if (h >= 20 || h < 2) return;
+  }
 
   // --- Process queued actions (round-robin) ---
-  try {
-    const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key='last_action_id'").all();
-    const lastId = parseInt(lastIdRow.results?.[0]?.value) || 0;
-    let r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' AND id > ?1 ORDER BY id ASC LIMIT 1) RETURNING *").bind(lastId).all();
-    if (!r.results?.length) {
-      r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' ORDER BY id ASC LIMIT 1) RETURNING *").all();
-    }
-    if (r.results?.length) {
-      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_action_id',?1,datetime('now'))").bind(String(r.results[0].id)).run();
-      await processOneStep(env, r.results[0]);
-    } else {
-      // Recover stuck actions: kill the frozen copy, mark it queued with checkpoint note, let next tick resume from last step
-      const s = await env.DB.prepare("SELECT * FROM actions WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
-      if (s.results?.length) {
-        const sid = s.results[0].id;
-        try {
-          const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
-          if (stateRow?.state) {
-            const state = JSON.parse(stateRow.state);
-            const lastStep = state.step || 0;
-            if (!state.fullHistory) state.fullHistory = [];
-            state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED at step " + lastStep + ". Your completed steps are saved as checkpoints. Run db_query(\"SELECT content FROM brain_knowledge WHERE key LIKE 'checkpoint_" + sid + "_%' ORDER BY key\") to see what you already did. Do NOT re-read files or repeat completed steps. Continue from step " + lastStep + ".]" });
-            await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
-          }
-        } catch {}
-        await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
+  if (settings.process_actions) {
+    try {
+      const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key='last_action_id'").all();
+      const lastId = parseInt(lastIdRow.results?.[0]?.value) || 0;
+      let r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' AND id > ?1 ORDER BY id ASC LIMIT 1) RETURNING *").bind(lastId).all();
+      if (!r.results?.length) {
+        r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' ORDER BY id ASC LIMIT 1) RETURNING *").all();
       }
-    }
-    await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run();
-    await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
-    const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
-    if (ar.results?.length) {
-      await processOneAgentStep(env, ar.results[0]);
-    }
-  } catch (e) { console.error("cron error:", e); }
+      if (r.results?.length) {
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_action_id',?1,datetime('now'))").bind(String(r.results[0].id)).run();
+        await processOneStep(env, r.results[0]);
+      } else if (settings.stuck_recovery) {
+        // Recover stuck actions
+        const s = await env.DB.prepare("SELECT * FROM actions WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
+        if (s.results?.length) {
+          const sid = s.results[0].id;
+          try {
+            const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
+            if (stateRow?.state) {
+              const state = JSON.parse(stateRow.state);
+              const lastStep = state.step || 0;
+              if (!state.fullHistory) state.fullHistory = [];
+              state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED at step " + lastStep + ". Your completed steps are saved as checkpoints. Run db_query(\"SELECT content FROM brain_knowledge WHERE key LIKE 'checkpoint_" + sid + "_%' ORDER BY key\") to see what you already did. Do NOT re-read files or repeat completed steps. Continue from step " + lastStep + ".]" });
+              await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
+            }
+          } catch {}
+          await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
+        }
+      }
+      if (settings.process_agents) {
+        await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run();
+        await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
+        const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
+        if (ar.results?.length) {
+          await processOneAgentStep(env, ar.results[0]);
+        }
+      }
+    } catch (e) { console.error("cron error:", e); }
+  }
 
   // --- Tick counter ---
   let tickCount = 0;
@@ -68,73 +77,99 @@ export async function handleScheduled(controller, env) {
   } catch { tickCount = 1; }
 
   // --- Skytron Idle Cycle (hour-slot schedule, complex tasks continue across ticks) ---
-  try {
-    const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
-    if (pendingCount > 0) { try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "pending=" + pendingCount + " tick=" + tickCount, "system").run(); } catch {} }
-    if (pendingCount === 0) {
-      const lastHealth = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_health_check'").all()).results?.[0]?.value;
-      const hoursSinceHealth = lastHealth ? (Date.now() - new Date(lastHealth).getTime()) / 3600000 : 99;
-      const healthDue = hoursSinceHealth >= 1;
-      if (healthDue) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
-      try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "free_time_tick=" + tickCount, "system").run(); } catch {}
-      // Check for in-progress complex task
-      let projectTask = "";
-      let projectInput = "";
-      try {
-        const p = await env.DB.prepare("SELECT value FROM identity WHERE key='idle_project'").first();
-        if (p?.value) { const j = JSON.parse(p.value); projectTask = j.task || ""; projectInput = j.input || ""; }
-      } catch {}
-      // Determine hour slot
-      const hourSlot = new Date().getUTCHours() % 4;
-      const slots = ["self_improve", "test", "research", "housekeep"];
-      const slot = healthDue ? "health" : slots[hourSlot];
-      const task = projectTask || (healthDue ? "db_query" : (
-        slot === "self_improve" ? "review_code" :
-        slot === "test" ? "db_query" :
-        slot === "research" ? "web_search" : "learn"
-      ));
-      const prompt = "tick=" + tickCount + " slot=" + slot + (projectTask ? " continuing " + projectTask : "") + "\nChoose a tool and run it." + (slot === "housekeep" ? " Do something with learn or db_query." : slot === "research" ? " Do web_search." : "") + "\nWhen done with a multi-step task, learn() the result as 'idle_done_DATE'.";
-      const decision = await callLLM(env, {
-        messages: [
-          { role: "system", content: prompt },
-          { role: "user", content: "pick a tool and run it" }
-        ]
-      }, "cron-tick-" + tickCount);
-      if (decision?.content && typeof decision.content === "string") {
-        const trimmed = decision.content.trim();
-        let parsed = tryParseSelfAction(trimmed);
-        if (!parsed) parsed = tryParseNaturalLanguage(trimmed);
-        if (parsed) {
-          const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
-          if (result) {
-            await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + slot + " " + parsed.tool + ": " + String(result).slice(0, 300)).run();
-          }
-          // Save complex project state for next tick
-          if (slot === "self_improve" || slot === "test") {
-            await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('idle_project',?1,datetime('now'))").bind(JSON.stringify({ task: parsed.tool, input: parsed.input || {}, tick: tickCount })).run();
-          } else {
-            try { await env.DB.prepare("DELETE FROM identity WHERE key='idle_project'").run(); } catch {}
-          }
+  if (settings.idle_cycle) {
+    try {
+      const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
+      if (pendingCount > 0) { try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "pending=" + pendingCount + " tick=" + tickCount, "system").run(); } catch {} }
+      if (pendingCount === 0) {
+        if (settings.log_tick) {
+          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "free_time_tick=" + tickCount, "system").run(); } catch {}
         }
-      } else {
-        try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_null_" + tickCount, "LLM returned null. errors=" + JSON.stringify(decision?.errors || []), "none").run(); } catch {}
+        // Check for in-progress complex task
+        let projectTask = "";
+        let projectInput = "";
+        if (settings.idle_project) {
+          try {
+            const p = await env.DB.prepare("SELECT value FROM identity WHERE key='idle_project'").first();
+            if (p?.value) { const j = JSON.parse(p.value); projectTask = j.task || ""; projectInput = j.input || ""; }
+          } catch {}
+        }
+        // Determine hour slot
+        const hourSlot = new Date().getUTCHours() % 4;
+        const slots = ["self_improve", "test", "research", "housekeep"];
+        const activeSlots = { "self_improve": settings.slot_self_improve, "test": settings.slot_test, "research": settings.slot_research, "housekeep": settings.slot_housekeep };
+        const healthDue = settings.health_check ? ((await env.DB.prepare("SELECT value FROM identity WHERE key='last_health_check'").first())?.value ? (Date.now() - new Date((await env.DB.prepare("SELECT value FROM identity WHERE key='last_health_check'").first()).value).getTime()) / 3600000 >= 1 : true) : false;
+        if (healthDue && settings.health_check) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
+        const slot = healthDue ? "health" : (activeSlots[slots[hourSlot]] ? slots[hourSlot] : "housekeep");
+        const task = projectTask || (healthDue ? "db_query" : (
+          slot === "self_improve" ? "review_code" :
+          slot === "test" ? "db_query" :
+          slot === "research" ? "web_search" : "learn"
+        ));
+        const prompt = "tick=" + tickCount + " slot=" + slot + (projectTask ? " continuing " + projectTask : "") + "\nChoose a tool and run it." + (slot === "housekeep" ? " Do something with learn or db_query." : slot === "research" ? " Do web_search." : "") + "\nWhen done with a multi-step task, learn() the result as 'idle_done_DATE'.";
+        const decision = await callLLM(env, {
+          messages: [
+            { role: "system", content: prompt },
+            { role: "user", content: "pick a tool and run it" }
+          ]
+        }, "cron-tick-" + tickCount);
+        if (decision?.content && typeof decision.content === "string") {
+          const trimmed = decision.content.trim();
+          let parsed = tryParseSelfAction(trimmed);
+          if (!parsed) parsed = tryParseNaturalLanguage(trimmed);
+          if (parsed && settings.tool_dispatch) {
+            const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
+            if (result) {
+              try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + slot + " " + parsed.tool + ": " + String(result).slice(0, 300)).run(); } catch {}
+            }
+            // Save complex project state for next tick
+            if (settings.idle_project && (slot === "self_improve" || slot === "test")) {
+              await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('idle_project',?1,datetime('now'))").bind(JSON.stringify({ task: parsed.tool, input: parsed.input || {}, tick: tickCount })).run();
+            } else {
+              try { await env.DB.prepare("DELETE FROM identity WHERE key='idle_project'").run(); } catch {}
+            }
+          }
+        } else {
+          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_null_" + tickCount, "LLM returned null. errors=" + JSON.stringify(decision?.errors || []), "none").run(); } catch {}
+        }
       }
-    }
-  } catch (e) { console.error("cron decision error:", e); }
+    } catch (e) { console.error("cron decision error:", e); }
+  }
 
   // --- Daily cleanup ---
+  if (settings.daily_cleanup) {
+    try {
+      const lastClean = await env.DB.prepare("SELECT value FROM identity WHERE key='last_cleanup_date'").all();
+      const today = new Date().toISOString().split("T")[0];
+      if (lastClean.results?.[0]?.value !== today) {
+        const deleted = await env.DB.prepare("DELETE FROM brain_memory WHERE id NOT IN (SELECT id FROM brain_memory ORDER BY id DESC LIMIT 200) AND created_at < datetime('now', '-7 days')").run();
+        const logTrim = await env.DB.prepare("DELETE FROM brain_logs WHERE id NOT IN (SELECT id FROM brain_logs ORDER BY id DESC LIMIT 1000)").run();
+        const actTrim = await env.DB.prepare("DELETE FROM actions WHERE status='done' AND id NOT IN (SELECT id FROM actions WHERE status='done' ORDER BY id DESC LIMIT 500)").run();
+        const agentTrim = await env.DB.prepare("DELETE FROM brain_agents WHERE status IN ('done','error') AND id NOT IN (SELECT id FROM brain_agents WHERE status IN ('done','error') ORDER BY id DESC LIMIT 50)").run();
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_cleanup_date',?1,datetime('now'))").bind(today).run();
+        console.error("Cleanup: removed " + (deleted.meta?.changes||0) + " old memories, " + (logTrim.meta?.changes||0) + " logs, " + (actTrim.meta?.changes||0) + " actions, " + (agentTrim.meta?.changes||0) + " agents");
+      }
+    } catch (e) { console.error("cleanup error:", e); }
+  }
+}
+
+async function getCronSettings(db) {
+  const defaults = {
+    enabled: true, log_tick: false, idle_cycle: true, health_check: true,
+    slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true,
+    idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true,
+    process_agents: true, daily_cleanup: true, night_sleep: true
+  };
   try {
-    const lastClean = await env.DB.prepare("SELECT value FROM identity WHERE key='last_cleanup_date'").all();
-    const today = new Date().toISOString().split("T")[0];
-    if (lastClean.results?.[0]?.value !== today) {
-      const deleted = await env.DB.prepare("DELETE FROM brain_memory WHERE id NOT IN (SELECT id FROM brain_memory ORDER BY id DESC LIMIT 200) AND created_at < datetime('now', '-7 days')").run();
-      const logTrim = await env.DB.prepare("DELETE FROM brain_logs WHERE id NOT IN (SELECT id FROM brain_logs ORDER BY id DESC LIMIT 1000)").run();
-      const actTrim = await env.DB.prepare("DELETE FROM actions WHERE status='done' AND id NOT IN (SELECT id FROM actions WHERE status='done' ORDER BY id DESC LIMIT 500)").run();
-      const agentTrim = await env.DB.prepare("DELETE FROM brain_agents WHERE status IN ('done','error') AND id NOT IN (SELECT id FROM brain_agents WHERE status IN ('done','error') ORDER BY id DESC LIMIT 50)").run();
-      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_cleanup_date',?1,datetime('now'))").bind(today).run();
-      console.error("Cleanup: removed " + (deleted.meta?.changes||0) + " old memories, " + (logTrim.meta?.changes||0) + " logs, " + (actTrim.meta?.changes||0) + " actions, " + (agentTrim.meta?.changes||0) + " agents");
+    const rows = await db.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
+    if (rows.results?.length) {
+      for (const r of rows.results) {
+        const k = r.key.replace("cron_cfg_", "");
+        if (k in defaults) defaults[k] = r.value === "true";
+      }
     }
-  } catch (e) { console.error("cleanup error:", e); }
+  } catch {}
+  return defaults;
 }
 
 function tryParseSelfAction(text) {

@@ -62,15 +62,63 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     return json({ query: q, results: r.results || [] });
   }
 
+  if (url.pathname === "/cron/settings") {
+    if (req.method === "POST") {
+      let body; try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
+      const allowed = ["enabled","log_tick","idle_cycle","health_check","slot_self_improve","slot_test","slot_research","slot_housekeep","idle_project","tool_dispatch","process_actions","stuck_recovery","process_agents","daily_cleanup","night_sleep"];
+      for (const k of allowed) {
+        if (body[k] !== undefined) {
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cron_cfg_' || ?1, ?2, datetime('now'))").bind(k, body[k] ? "true" : "false").run();
+        }
+      }
+      return json({ ok: true });
+    }
+    const rows = (await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all()).results || [];
+    const s = {};
+    for (const r of rows) s[r.key.replace("cron_cfg_","")] = r.value === "true";
+    const d = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, night_sleep: true };
+    const set = (k) => s[k] !== undefined ? s[k] : d[k];
+    return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cron Tick Settings</title><style>*{margin:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:2rem;max-width:700px;margin:auto}h1{color:#58a6ff;margin-bottom:0.5rem}.sub{color:#8b949e;font-size:0.85rem;margin-bottom:1.5rem}.section{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1rem;margin-bottom:1rem}.section h2{font-size:1rem;color:#58a6ff;margin-bottom:0.5rem}.row{display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0;border-bottom:1px solid #21262d}.row:last-child{border:none}.label{flex:1}.label .desc{font-size:0.75rem;color:#8b949e;margin-top:2px}.switch{position:relative;width:44px;height:24px;flex-shrink:0;margin-left:1rem}input{opacity:0;width:0;height:0}.slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:#30363d;transition:.3s;border-radius:24px}.slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background-color:#e6edf3;transition:.3s;border-radius:50%}input:checked+.slider{background-color:#3fb950}input:checked+.slider:before{transform:translateX(20px)}.btn{padding:0.5rem 1.5rem;border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;background:#3fb950;color:#0b1120;font-weight:600;display:none;margin-top:0.5rem}.btn.show{display:inline-block}.saved{color:#3fb950;font-size:0.85rem;margin-top:0.5rem;display:none}</style></head><body><h1>Cron Tick Settings</h1><p class="sub">Toggle what Skytron does each idle tick. All settings are read on every tick.</p>
+<div class="section"><h2>Master</h2>
+<div class="row"><div class="label">Enabled<div class="desc">Master switch — disables ALL cron activity when off</div></div><label class="switch"><input type="checkbox" id="enabled" `+(set("enabled")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Night Sleep UTC 20‑2<div class="desc">Skip cron during sleep hours (IST 1:30AM–7:30AM)</div></div><label class="switch"><input type="checkbox" id="night_sleep" `+(set("night_sleep")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+</div>
+<div class="section"><h2>Logging</h2>
+<div class="row"><div class="label">Log free_time_tick<div class="desc">Log every idle tick to brain_logs (was on by default — noisy)</div></div><label class="switch"><input type="checkbox" id="log_tick" `+(set("log_tick")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+</div>
+<div class="section"><h2>Action Processing</h2>
+<div class="row"><div class="label">Process Actions<div class="desc">Pick and execute queued actions</div></div><label class="switch"><input type="checkbox" id="process_actions" `+(set("process_actions")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Stuck Recovery<div class="desc">Detect and requeue actions stuck in running for >2min</div></div><label class="switch"><input type="checkbox" id="stuck_recovery" `+(set("stuck_recovery")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Process Agents<div class="desc">Process sub-agent steps</div></div><label class="switch"><input type="checkbox" id="process_agents" `+(set("process_agents")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+</div>
+<div class="section"><h2>Idle Cycle</h2>
+<div class="row"><div class="label">Idle LLM Cycle<div class="desc">Master — call LLM each idle tick to decide what to do</div></div><label class="switch"><input type="checkbox" id="idle_cycle" `+(set("idle_cycle")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Health Check<div class="desc">Check BD health once/hour when idle</div></div><label class="switch"><input type="checkbox" id="health_check" `+(set("health_check")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Tool Dispatch<div class="desc">Actually run the tool the LLM chose (off = LLM decides but nothing runs)</div></div><label class="switch"><input type="checkbox" id="tool_dispatch" `+(set("tool_dispatch")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Project Continuation<div class="desc">Continue complex tasks (self_improve/test) across multiple ticks</div></div><label class="switch"><input type="checkbox" id="idle_project" `+(set("idle_project")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+</div>
+<div class="section"><h2>Hour Slots</h2>
+<div class="row"><div class="label">Self‑Improve (HH%4=0)<div class="desc">review_code, create_tool — complex multi-tick</div></div><label class="switch"><input type="checkbox" id="slot_self_improve" `+(set("slot_self_improve")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Test (HH%4=1)<div class="desc">Run checks after changes</div></div><label class="switch"><input type="checkbox" id="slot_test" `+(set("slot_test")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Research (HH%4=2)<div class="desc">web_search, memory_search — quick per tick</div></div><label class="switch"><input type="checkbox" id="slot_research" `+(set("slot_research")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Housekeep (HH%4=3)<div class="desc">learn, db_query — quick per tick</div></div><label class="switch"><input type="checkbox" id="slot_housekeep" `+(set("slot_housekeep")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+</div>
+<div class="section"><h2>Maintenance</h2>
+<div class="row"><div class="label">Daily Cleanup<div class="desc">Trim old memories, logs, actions, agents once/day</div></div><label class="switch"><input type="checkbox" id="daily_cleanup" `+(set("daily_cleanup")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+</div>
+<p class="saved" id="saved">✓ Saved</p>
+<script>async function save(){const s={};document.querySelectorAll('input[type=checkbox]').forEach(c=>{s[c.id]=c.checked});await fetch('/cron/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s)});const e=document.getElementById('saved');e.style.display='block';setTimeout(()=>e.style.display='none',2000)}</script></body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" } });
+  }
+
   if (url.pathname === "/brain/source") {
     return json({
       language: "TypeScript", runtime: "Cloudflare Workers (ES module)", file: "src/ (modular)",
-      endpoints: ["/think","/status","/skytronchat","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source","/brain/agents"],
+      endpoints: ["/think","/status","/skytronchat","/","/brain/history","/brain/memory","/brain/memory/search","/brain/knowledge","/brain/prompt","/brain/prompt/reset","/brain/repair","/brain/logs","/brain/vectorize","/brain/introspect","/brain/source","/brain/agents","/cron/settings"],
       tools: Object.keys(toolDefinitions),
       tables: ["identity","brain_memory","brain_knowledge","actions","brain_logs","brain_agents","knowledge_fts"],
       llm: "Workers AI (@cf/zai-org/glm-4.7-flash) + BUDDHI_DWAR (Groq + OpenCode Zen)",
       agent_loop: "Multi-step function-calling with Zod schema validation (max 15 steps). Sub-agents: spawn_agent + get_agent_result for parallel specialized tasks (max 8 steps, limited tools).",
-      capabilities: ["conversation with 10-msg memory","web search","web fetch","DB introspection","prompt self-edit","code execution (38+ langs)","API calls","knowledge base (FTS5 + vector)","GitHub self-modification","live docs via Context7","emotions & energy","conversation history viewer","sub-agents for parallel tasks"]
+      capabilities: ["conversation with 10-msg memory","web search","web fetch","DB introspection","prompt self-edit","code execution (38+ langs)","API calls","knowledge base (FTS5 + vector)","GitHub self-modification","live docs via Context7","emotions & energy","conversation history viewer","sub-agents for parallel tools"]
     });
   }
 
