@@ -83,7 +83,7 @@ export async function handleScheduled(controller, env) {
         if (customPrompt.results?.[0]?.value) cronPrompt = customPrompt.results[0].value;
       } catch {}
       if (!cronPrompt) {
-        cronPrompt = "CRON TICK " + tickCount + " — You are Skytron. Pick ONE tool and output ONLY:\n{\"tool\":\"name\",\"input\":{...}}\n\nEXAMPLES:\n{\"tool\":\"db_query\",\"input\":{\"sql\":\"SELECT status,COUNT(*) FROM actions GROUP BY status\"}}\n{\"tool\":\"learn\",\"input\":{\"key\":\"idle_" + tickCount + "\",\"content\":\"all good\"}}\n{\"tool\":\"memory_search\",\"input\":{\"query\":\"recent errors\"}}\n{\"tool\":\"web_search\",\"input\":{\"query\":\"latest tech news\"}}\n\nRULES:\n- Raw JSON only. No markdown. No ```. No text. No explanation.\n- One call per tick.\n- If nothing needs doing, use learn().\n\nSTATE: energy=" + energy + "% health=" + healthFlags + " recent_actions=" + recentCount + " recent=" + (recentSummary || "none");
+        cronPrompt = "CRON TICK " + tickCount + " — You are Skytron. You should almost always do nothing.\nDefault: {\"tool\":\"learn\",\"input\":{\"key\":\"idle_" + tickCount + "\",\"content\":\"idle\"}}\n\nONLY act if there's a clear problem: stuck actions, errors, stale data, or a real opportunity.\n\nOutput tool calls as raw JSON: {\"tool\":\"name\",\"input\":{...}}\nNo text, no markdown, no explanation.\n\nSTATE: energy=" + energy + "% health=" + healthFlags + " recent_actions=" + recentCount + " recent=" + (recentSummary || "none");
       }
 
       const decision = await callLLM(env, {
