@@ -74,7 +74,7 @@ export async function handleScheduled(controller, env) {
     if (pendingCount === 0) {
       const lastHealth = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_health_check'").all()).results?.[0]?.value;
       const hoursSinceHealth = lastHealth ? (Date.now() - new Date(lastHealth).getTime()) / 3600000 : 99;
-      const changesSince = lastHealth ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done'").bind(lastHealth).all()).results?.[0]?.c || 0 : 0;
+      const changesSince = lastHealth ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done' AND task='coding'").bind(lastHealth).all()).results?.[0]?.c || 0 : 0;
       try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "free_time_tick=" + tickCount, "system").run(); } catch {}
       const healthDue = hoursSinceHealth >= 1 || changesSince > 0;
       const decision = await callLLM(env, {
