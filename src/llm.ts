@@ -33,7 +33,7 @@ export async function callLLM(env, body, sessionId) {
         env.AI.run(AI_MODEL, {
           messages: body.messages, max_tokens: 2000
         }),
-        timeoutRace(60000)
+        timeoutRace(20000)
       ]);
       const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
       if (waText) {
@@ -64,7 +64,7 @@ export async function callLLM(env, body, sessionId) {
           method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
           body: JSON.stringify(reqBody)
         }),
-        timeoutRace(60000)
+        timeoutRace(8000)
       ]);
       if (resp.ok) {
         const data = await resp.json();
