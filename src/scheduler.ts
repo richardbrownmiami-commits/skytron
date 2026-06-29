@@ -11,7 +11,7 @@
 import { initSchema } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 import { callLLM } from './llm';
-import { dispatchTool } from './tools';
+import { dispatchTool, toolDefinitions } from './tools';
 
 export async function handleScheduled(controller, env) {
   try { await initSchema(env.DB, env); } catch {}
@@ -83,7 +83,7 @@ export async function handleScheduled(controller, env) {
         if (customPrompt.results?.[0]?.value) cronPrompt = customPrompt.results[0].value;
       } catch {}
       if (!cronPrompt) {
-        cronPrompt = "You are Skytron on an idle cron tick (tick " + tickCount + "). Decide what to do in ONE tool call.\nOutput EXACTLY: {\"tool\":\"name\",\"input\":{...}} — raw JSON, no markdown, no explanation.\n\nCURRENT STATE:\n- Energy: " + energy + "% | Health: " + healthFlags + "\n- Recent actions (5min): " + recentCount + "\n- Recent: " + (recentSummary || "none") + "\n\nCAPABILITIES (pick one or invent your own):\n1. Health Checks — db_query for errors/stuck actions, check provider health\n2. Pending Task Processing — check for overdue/scheduled tasks\n3. New Task Creation — schedule future tasks via learn() or db_query INSERT\n4. Data Aggregation & Analysis — memory_search or web_search for useful data\n5. Report Generation — compile and store summaries via learn()\n6. Notification & Alerting — alert on conditions via learn() or api_call\n7. Workflow Automation — execute multi-step sequences\n\nUse any tool you have. One call per tick. If nothing needs doing: {\"tool\":\"learn\",\"input\":{\"key\":\"idle_tick_" + tickCount + "\",\"content\":\"idle\"}}\nAdd/edit capabilities via: prompt_edit(slot=\"cron\", prompt=\"...\")";
+        cronPrompt = "CRON TICK " + tickCount + " — You are Skytron. Pick ONE tool and output ONLY:\n{\"tool\":\"name\",\"input\":{...}}\n\nEXAMPLES:\n{\"tool\":\"db_query\",\"input\":{\"sql\":\"SELECT status,COUNT(*) FROM actions GROUP BY status\"}}\n{\"tool\":\"learn\",\"input\":{\"key\":\"idle_" + tickCount + "\",\"content\":\"all good\"}}\n{\"tool\":\"memory_search\",\"input\":{\"query\":\"recent errors\"}}\n{\"tool\":\"web_search\",\"input\":{\"query\":\"latest tech news\"}}\n\nRULES:\n- Raw JSON only. No markdown. No ```. No text. No explanation.\n- One call per tick.\n- If nothing needs doing, use learn().\n\nSTATE: energy=" + energy + "% health=" + healthFlags + " recent_actions=" + recentCount + " recent=" + (recentSummary || "none");
       }
 
       const decision = await callLLM(env, {
@@ -96,7 +96,10 @@ export async function handleScheduled(controller, env) {
       if (decision?.content && typeof decision.content === "string") {
         try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_ok_" + tickCount, "LLM OK: " + decision.content.slice(0, 200) + " | model=" + (decision.model || "?"), decision.model || "?").run(); } catch {}
         const trimmed = decision.content.trim();
-        const parsed = tryParseSelfAction(trimmed);
+        let parsed = tryParseSelfAction(trimmed);
+        if (!parsed) {
+          parsed = tryParseNaturalLanguage(trimmed);
+        }
         if (parsed) {
           try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "parsed_" + tickCount, "Tool: " + parsed.tool + " Input: " + JSON.stringify(parsed.input).slice(0, 200), decision.model || "?").run(); } catch {}
           const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
@@ -104,11 +107,11 @@ export async function handleScheduled(controller, env) {
           if (result && result.length > 10) {
             await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + parsed.tool + ": " + result.slice(0, 300)).run();
           }
-        } else {
-          try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "parse_fail_" + tickCount, "Parse failed. Raw: " + trimmed.slice(0, 300), decision.model || "?").run(); } catch {}
         }
+        await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + (parsed ? parsed.tool + ": executed" : "idle: " + trimmed.slice(0, 300))).run();
       } else {
         try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_null_" + tickCount, "LLM returned null content. errors=" + JSON.stringify(decision?.errors || []).slice(0, 200), decision?.model || "?").run(); } catch {}
+        await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " LLM call returned no content").run();
       }
     }
   } catch (e) { try { env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "exception_" + tickCount, "Exception: " + (e.message || String(e)).slice(0, 300), "error").run().catch(()=>{}); } catch(e2){} console.error("cron decision error:", e); }
@@ -141,6 +144,35 @@ function tryParseSelfAction(text) {
       const parsed = JSON.parse(jsonToTry.slice(start, end + 1));
       if (parsed.tool) { if (parsed.arguments) { parsed.input = parsed.arguments; delete parsed.arguments; } if (parsed.input) return parsed; }
     } catch {}
+  }
+  return null;
+}
+
+function tryParseNaturalLanguage(text) {
+  const tl = text.toLowerCase();
+  // Health check: errors/stuck/health
+  if (/\b(health|stuck|error|fail|energy)\b/.test(tl) && /\b(check|query|look|monitor|audit)\b/.test(tl)) {
+    return { tool: "db_query", input: { sql: "SELECT status,COUNT(*) as c FROM actions GROUP BY status" } };
+  }
+  // Data cleanup
+  if (/\b(data|stale|cleanup|clean|trim|remove)\b/.test(tl) && /\b(remov|delet|clean|trim|purge)\b/.test(tl)) {
+    return { tool: "db_query", input: { sql: "SELECT 'cleanup needed' as msg" } };
+  }
+  // Web research / search
+  if (/\b(research|search|web|news|latest|find|look up)\b/.test(tl) && !/\b(memory|brain|db|database|sql|query)\b/.test(tl)) {
+    return { tool: "web_search", input: { query: text.replace(/research|search|web|news|latest|find|look up|for|about|on|the|a|an/gi, "").trim().slice(0, 100) || "latest technology news" } };
+  }
+  // Memory search
+  if (/\b(memory|remember|knowledge|brain)\b/.test(tl) && /\b(search|find|look|recall|query)\b/.test(tl)) {
+    return { tool: "memory_search", input: { query: text.slice(0, 100) } };
+  }
+  // Report / summary
+  if (/\b(report|summary|summarize|journal|log)\b/.test(tl)) {
+    return { tool: "learn", input: { key: "cron_report_" + new Date().toISOString().split("T")[0], content: text.slice(0, 300), category: "journal" } };
+  }
+  // Idle / nothing need doing
+  if (/\b(nothing|idle|all good|fine|okay|ok|no[nt])\b/.test(tl) && (tl.length < 50 || /\b(nothing|idle)\b/.test(tl))) {
+    return { tool: "learn", input: { key: "idle", content: text.slice(0, 200) } };
   }
   return null;
 }
