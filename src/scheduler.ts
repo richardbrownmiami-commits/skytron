@@ -81,7 +81,7 @@ export async function handleScheduled(controller, env) {
         if (customPrompt.results?.[0]?.value) cronPrompt = customPrompt.results[0].value;
       } catch {}
       if (!cronPrompt) {
-        cronPrompt = "You are Skytron on an idle cron tick (tick " + tickCount + "). Decide what to do in ONE tool call.\n\nCURRENT STATE:\n- Energy: " + energy + "% | Health: " + healthFlags + "\n- Recent actions (5min): " + recentCount + "\n- Recent: " + (recentSummary || "none") + "\n\nCAPABILITIES (pick one or invent your own):\n1. Health Checks — db_query for errors/stuck actions, check provider health\n2. Pending Task Processing — check for overdue/scheduled tasks\n3. New Task Creation — schedule future tasks via learn() or db_query INSERT\n4. Data Aggregation & Analysis — memory_search or web_search for useful data\n5. Report Generation — compile and store summaries via learn()\n6. Notification & Alerting — alert on conditions via learn() or api_call\n7. Workflow Automation — execute multi-step sequences\n\nUse any tool you have. One call per tick. If nothing needs doing, call learn() with 'idle' content.\nAdd/edit capabilities via: prompt_edit(slot=\"cron\", prompt=\"...\")";
+        cronPrompt = "You are Skytron on an idle cron tick (tick " + tickCount + "). Decide what to do in ONE tool call.\nOutput EXACTLY: {\"tool\":\"name\",\"input\":{...}} — raw JSON, no markdown, no explanation.\n\nCURRENT STATE:\n- Energy: " + energy + "% | Health: " + healthFlags + "\n- Recent actions (5min): " + recentCount + "\n- Recent: " + (recentSummary || "none") + "\n\nCAPABILITIES (pick one or invent your own):\n1. Health Checks — db_query for errors/stuck actions, check provider health\n2. Pending Task Processing — check for overdue/scheduled tasks\n3. New Task Creation — schedule future tasks via learn() or db_query INSERT\n4. Data Aggregation & Analysis — memory_search or web_search for useful data\n5. Report Generation — compile and store summaries via learn()\n6. Notification & Alerting — alert on conditions via learn() or api_call\n7. Workflow Automation — execute multi-step sequences\n\nUse any tool you have. One call per tick. If nothing needs doing: {\"tool\":\"learn\",\"input\":{\"key\":\"idle_tick_" + tickCount + "\",\"content\":\"idle\"}}\nAdd/edit capabilities via: prompt_edit(slot=\"cron\", prompt=\"...\")";
       }
 
       const decision = await callLLM(env, {
@@ -120,11 +120,17 @@ export async function handleScheduled(controller, env) {
 }
 
 function tryParseSelfAction(text) {
-  const jsonMatch = text.match(/\{(?:[^{}]|"(?:\\.|[^"\\])*")*\}/);
-  if (jsonMatch) {
+  const trimmed = text.trim().replace(/```(?:json)?\s*[\s\S]*?```/g, "").trim();
+  const fenceMatch = text.match(/```(?:json)?\s*\n?(\{[\s\S]*?"tool"[\s\S]*?\})\n?```/);
+  const jsonToTry = fenceMatch ? fenceMatch[1] : trimmed;
+  if (jsonToTry.startsWith("{") && jsonToTry.includes('"tool"') && (jsonToTry.includes('"input"') || jsonToTry.includes('"arguments"'))) {
     try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.tool && (parsed.input || parsed.arguments)) return parsed;
+      const start = jsonToTry.indexOf("{");
+      let depth = 0, end = start;
+      for (; end < jsonToTry.length; end++) { if (jsonToTry[end] === "{") depth++; else if (jsonToTry[end] === "}") depth--; if (depth === 0) break; }
+      if (depth !== 0) return null;
+      const parsed = JSON.parse(jsonToTry.slice(start, end + 1));
+      if (parsed.tool) { if (parsed.arguments) { parsed.input = parsed.arguments; delete parsed.arguments; } if (parsed.input) return parsed; }
     } catch {}
   }
   return null;
