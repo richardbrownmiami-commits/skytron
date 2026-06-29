@@ -128,6 +128,9 @@ export async function processOneStep(env, action) {
           state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
         } else {
           state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
+          if (result.length > 20) {
+            try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'checkpoint', 'system')").bind("checkpoint_" + action.id + "_step_" + state.step, "Tool: " + parsed.tool + " | Input: " + JSON.stringify(parsed.input).slice(0, 200) + " | Result: " + result.slice(0, 500)).run(); } catch {}
+          }
         }
         if (result && result.startsWith("[TOOL ERROR:")) {
           state.repeatCount = 0;
@@ -169,6 +172,7 @@ export async function finalizeAction(db, actionId, state) {
     const content = "Step " + state.step + " | Model: " + (state.modelName || "?") + " | Tokens: " + (state.totalTokens || 0) + " | Last tool: " + lastTool + " | Repeat: " + (state.repeatCount || 0) + " | " + summary;
     await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'learned')").bind(key, content.slice(0, 2000)).run();
   } catch (e) { console.error("journal write error:", e); }
+  try { await db.prepare("DELETE FROM brain_knowledge WHERE key LIKE ?1").bind("checkpoint_" + actionId + "_%").run(); } catch {}
   await deleteAgentState(db, actionId);
 }
 

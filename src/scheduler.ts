@@ -45,7 +45,7 @@ export async function handleScheduled(controller, env) {
             const state = JSON.parse(stateRow.state);
             const lastStep = state.step || 0;
             if (!state.fullHistory) state.fullHistory = [];
-            state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED - resume from here. Do NOT re-read files or repeat completed steps. Continue from where you left off at step " + lastStep + ".]" });
+            state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED at step " + lastStep + ". Your completed steps are saved as checkpoints. Run db_query(\"SELECT content FROM brain_knowledge WHERE key LIKE 'checkpoint_" + sid + "_%' ORDER BY key\") to see what you already did. Do NOT re-read files or repeat completed steps. Continue from step " + lastStep + ".]" });
             await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
           }
         } catch {}
