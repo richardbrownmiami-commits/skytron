@@ -67,22 +67,37 @@ export async function handleScheduled(controller, env) {
     await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('tick_count',?1,datetime('now'))").bind(String(tickCount)).run();
   } catch { tickCount = 1; }
 
-  // --- Skytron Idle Cycle (every tick, health check once/hour) ---
+  // --- Skytron Idle Cycle (hour-slot schedule, complex tasks continue across ticks) ---
   try {
     const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
     if (pendingCount > 0) { try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "pending=" + pendingCount + " tick=" + tickCount, "system").run(); } catch {} }
     if (pendingCount === 0) {
       const lastHealth = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_health_check'").all()).results?.[0]?.value;
       const hoursSinceHealth = lastHealth ? (Date.now() - new Date(lastHealth).getTime()) / 3600000 : 99;
-      const changesSince = lastHealth ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done' AND task='coding'").bind(lastHealth).all()).results?.[0]?.c || 0 : 0;
+      const healthDue = hoursSinceHealth >= 1;
+      if (healthDue) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
       try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "free_time_tick=" + tickCount, "system").run(); } catch {}
-      const healthDue = hoursSinceHealth >= 1 || changesSince > 0;
-      const taskIdx = tickCount % 5;
-      const tasks = ["web_search", "memory_search", "review_code", "db_query", "learn"];
+      // Check for in-progress complex task
+      let projectTask = "";
+      let projectInput = "";
+      try {
+        const p = await env.DB.prepare("SELECT value FROM identity WHERE key='idle_project'").first();
+        if (p?.value) { const j = JSON.parse(p.value); projectTask = j.task || ""; projectInput = j.input || ""; }
+      } catch {}
+      // Determine hour slot
+      const hourSlot = new Date().getUTCHours() % 4;
+      const slots = ["self_improve", "test", "research", "housekeep"];
+      const slot = healthDue ? "health" : slots[hourSlot];
+      const task = projectTask || (healthDue ? "db_query" : (
+        slot === "self_improve" ? "review_code" :
+        slot === "test" ? "db_query" :
+        slot === "research" ? "web_search" : "learn"
+      ));
+      const prompt = "tick=" + tickCount + " slot=" + slot + (projectTask ? " continuing " + projectTask : "") + "\nChoose a tool and run it." + (slot === "housekeep" ? " Do something with learn or db_query." : slot === "research" ? " Do web_search." : "") + "\nWhen done with a multi-step task, learn() the result as 'idle_done_DATE'.";
       const decision = await callLLM(env, {
         messages: [
-          { role: "system", content: "tick=" + tickCount + (healthDue ? " health" : " " + tasks[taskIdx]) + "\nOutput: {\"tool\":\"" + (healthDue ? "db_query" : tasks[taskIdx]) + "\",\"input\":{}}" },
-          { role: "user", content: "run " + (healthDue ? "SELECT COUNT(*) FROM actions" : tasks[taskIdx]) }
+          { role: "system", content: prompt },
+          { role: "user", content: "pick a tool and run it" }
         ]
       }, "cron-tick-" + tickCount);
       if (decision?.content && typeof decision.content === "string") {
@@ -91,14 +106,19 @@ export async function handleScheduled(controller, env) {
         if (!parsed) parsed = tryParseNaturalLanguage(trimmed);
         if (parsed) {
           const result = await dispatchTool(env, parsed.tool, parsed.input || parsed.arguments || {});
-          if (result && result.length > 10) {
-            await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + parsed.tool + ": " + result.slice(0, 300)).run();
+          if (result) {
+            await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + slot + " " + parsed.tool + ": " + String(result).slice(0, 300)).run();
+          }
+          // Save complex project state for next tick
+          if (slot === "self_improve" || slot === "test") {
+            await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('idle_project',?1,datetime('now'))").bind(JSON.stringify({ task: parsed.tool, input: parsed.input || {}, tick: tickCount })).run();
+          } else {
+            try { await env.DB.prepare("DELETE FROM identity WHERE key='idle_project'").run(); } catch {}
           }
         }
       } else {
         try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "llm_null_" + tickCount, "LLM returned null. errors=" + JSON.stringify(decision?.errors || []), "none").run(); } catch {}
       }
-      if (healthDue) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
     }
   } catch (e) { console.error("cron decision error:", e); }
 
