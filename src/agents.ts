@@ -10,7 +10,6 @@
 import { callLLM, parseLLMJson } from './llm';
 import { dispatchTool, listTools, toolDefinitions } from './tools';
 import { storeMemory, saveAgentState, loadAgentState, deleteAgentState } from './db';
-
 export async function processOneStep(env, action) {
   const db = env.DB;
   const state = await loadAgentState(db, action.id);
@@ -42,7 +41,7 @@ export async function processOneStep(env, action) {
         try {
           await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "wa_start", "Workers AI fallback starting...", "workers-ai").run();
         } catch {}
-        const waResult = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+        const waResult = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
           messages: [{ role: "system", content: fallbackPrompt }, { role: "user", content: state.fullHistory?.[0]?.content || "hello" }], max_tokens: 200
         }, { signal: AbortSignal.timeout(15000) });
         const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
