@@ -22,7 +22,7 @@ export async function callLLM(env, body, sessionId) {
         env.AI.run(AI_MODEL, {
           messages: body.messages, max_tokens: 2000
         }),
-        timeoutRace(30000)
+        timeoutRace(60000)
       ]);
       const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
       if (waText) return { content: waText, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
