@@ -67,19 +67,22 @@ export async function handleScheduled(controller, env) {
     await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('tick_count',?1,datetime('now'))").bind(String(tickCount)).run();
   } catch { tickCount = 1; }
 
-  // --- Skytron Idle Cycle (every ~15 min or on change) ---
+  // --- Skytron Idle Cycle (LLM call every ~8 ticks = ~16 min, health check once/hour) ---
   try {
     const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
     if (pendingCount > 0) { try { await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind("cron", "tick_" + tickCount, "pending=" + pendingCount + " tick=" + tickCount, "system").run(); } catch {} }
     if (pendingCount === 0) {
-      const lastRun = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_cron_action'").all()).results?.[0]?.value;
-      const minsSince = lastRun ? (Date.now() - new Date(lastRun).getTime()) / 60000 : 99;
-      const actionsSince = lastRun ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done'").bind(lastRun).all()).results?.[0]?.c || 0 : 0;
-      if (minsSince < 15 && actionsSince === 0) return;
+      const lastRun = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_idle_action'").all()).results?.[0]?.value;
+      const lastHealth = (await env.DB.prepare("SELECT value FROM identity WHERE key='last_health_check'").all()).results?.[0]?.value;
+      const minsSinceRun = lastRun ? (Date.now() - new Date(lastRun).getTime()) / 60000 : 99;
+      const hoursSinceHealth = lastHealth ? (Date.now() - new Date(lastHealth).getTime()) / 3600000 : 99;
+      const actionsSinceLast = lastRun ? (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE completed_at > ?1 AND status='done'").bind(lastRun).all()).results?.[0]?.c || 0 : 0;
+      if (minsSinceRun < 16 && actionsSinceLast === 0) return;
+      const healthDue = hoursSinceHealth >= 1;
       const decision = await callLLM(env, {
         messages: [
-          { role: "system", content: "CRON TICK " + tickCount + " — You have free time. Options: web_search to learn something new, memory_search to consolidate knowledge, db_query to audit state, review_code to improve yourself, learn to store insights. Default: just store idle note via learn().\n\nOutput: {\"tool\":\"name\",\"input\":{...}}" },
-          { role: "user", content: "What do you want to do in your idle time?" }
+          { role: "system", content: "CRON TICK " + tickCount + " — Free time." + (healthDue ? "\nHealth check is due: check providers, stuck actions, errors." : "\nHealth was checked recently. Skip health — do something else: web_search to learn, memory_search to consolidate, review_code, db_query to audit, learn to store insights.") + "\n\nOutput: {\"tool\":\"name\",\"input\":{...}}" },
+          { role: "user", content: "What do you do?" }
         ]
       }, "cron-tick-" + tickCount);
       if (decision?.content && typeof decision.content === "string") {
@@ -92,8 +95,9 @@ export async function handleScheduled(controller, env) {
             await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'cron')").bind("cron_tick_" + tickCount, "Tick " + tickCount + " " + parsed.tool + ": " + result.slice(0, 300)).run();
           }
         }
+        if (healthDue) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
       }
-      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_cron_action',datetime('now'),datetime('now'))").run();
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_idle_action',datetime('now'),datetime('now'))").run();
     }
   } catch (e) { console.error("cron decision error:", e); }
 
