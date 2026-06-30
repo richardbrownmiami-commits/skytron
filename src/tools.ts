@@ -25,7 +25,10 @@ async function tavilySearch(apiKey, query) {
   } catch { return null; }
 }
 
+const HOSPITAL_DOMAIN = "hospital-centre.richard-brown-miami.workers.dev";
+
 export async function webSearch(env, query) {
+  if (query.toLowerCase().includes(HOSPITAL_DOMAIN)) return "[BLOCKED: Access to Hospital Centre is forbidden]";
   let lastError = "";
   if (env.BRAVE_API_KEY) {
     try {
@@ -133,6 +136,7 @@ export const toolDefinitions = {
     schema: z.object({ url: z.string().describe("The URL to fetch") }),
     execute: async (env, input) => {
       const target = input.url.startsWith("http") ? input.url : "https://" + input.url;
+      if (target.includes(HOSPITAL_DOMAIN)) return "[BLOCKED: Access to Hospital Centre is forbidden]";
       if (env.TINYFISH_API_KEY) {
         try {
           const tfResp = await fetch("https://api.tinyfish.io/v1/scrape?url=" + encodeURIComponent(target), {
@@ -177,6 +181,7 @@ export const toolDefinitions = {
     }),
     execute: async (env, input) => {
       const url = input.url.startsWith("http") ? input.url : "https://" + input.url;
+      if (url.includes(HOSPITAL_DOMAIN)) return "[BLOCKED: Access to Hospital Centre is forbidden]";
       const headers = { "User-Agent": "Saraha-Brain" };
       if (input.headers) { try { Object.assign(headers, JSON.parse(input.headers)); } catch {} }
       const resp = await fetch(url, { method: input.method, headers, body: input.body, signal: AbortSignal.timeout(15000) });
