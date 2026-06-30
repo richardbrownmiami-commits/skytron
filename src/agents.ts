@@ -17,29 +17,34 @@ export async function processOneStep(env, action) {
 
   if (state.done) { await finalizeAction(db, action.id, state); return; }
 
-  let resp, content;
-  let lastErrors = [];
+  const startTime = Date.now();
+  const MAX_BATCH_MS = 25000;
   let codingModel = action.task === "coding" ? "deepseek-v4-flash-free" : "";
-  for (let retry = 0; retry < (codingModel ? 3 : 1); retry++) {
-    if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
-    const reqBody = { messages: state.fullHistory, task: action.task || "chat" };
-    if (codingModel) reqBody.model = codingModel;
-    resp = await callLLM(env, reqBody, "skytron-" + state.conversationId);
-    if (!resp) continue;
-    if (!resp.content && resp.errors) {
-      lastErrors = resp.errors;
-      if (codingModel) { codingModel = ""; retry--; continue; }
+
+  while (!state.done && state.step < 15 && (Date.now() - startTime) < MAX_BATCH_MS) {
+    let resp, content;
+    let lastErrors = [];
+    for (let retry = 0; retry < (codingModel ? 3 : 1); retry++) {
+      if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
+      const reqBody = { messages: state.fullHistory, task: action.task || "chat" };
+      if (codingModel) reqBody.model = codingModel;
+      resp = await callLLM(env, reqBody, "skytron-" + state.conversationId);
+      if (!resp) continue;
+      if (!resp.content && resp.errors) {
+        lastErrors = resp.errors;
+        if (codingModel) { codingModel = ""; retry--; continue; }
+      }
+      content = resp.content;
+      if (typeof content === "string") break;
     }
-    content = resp.content;
-    if (typeof content === "string") break;
-  }
-  if (!resp || typeof content !== "string") {
-    const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
-    try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "provider_fail", "Both providers failed: " + errorSummary.slice(0, 200), "error").run(); } catch {}
-    state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
-  } else {
+    if (!resp || typeof content !== "string") {
+      const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
+      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "provider_fail", "Both providers failed: " + errorSummary.slice(0, 200), "error").run(); } catch {}
+      state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
+      break;
+    }
     state.modelName = resp.model;
-        try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 4000), state.modelName, resp.tokens?.total || 0).run(); } catch {}
+    try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 4000), state.modelName, resp.tokens?.total || 0).run(); } catch {}
 
     const trimmed = content.trim();
     let parsed = tryParseToolCall(trimmed);
@@ -51,7 +56,6 @@ export async function processOneStep(env, action) {
       state.totalTokens += resp.tokens?.total || 0;
       await finalizeAction(db, action.id, state); return;
     }
-    // Tool-capability refusal detection: model says it can't add/modify tools (wrong)
     if (!parsed && repromptCount < 2 && /\b(?:can't|cannot|don't have the ability|unable to|not able to|not programmed to)[\s\S]{0,30}(?:add|create|make|write|modify|change|edit|implement)[\s\S]{0,30}(?:tools?|features?|commands?|capabilities?|programming|source code|source (?:code|files)|itself|myself)/i.test(trimmed)) {
       state.repromptCount = repromptCount + 1;
       state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
@@ -89,8 +93,8 @@ export async function processOneStep(env, action) {
         state.repeatCount = 0;
         state.step++;
         await saveAgentState(db, action.id, state);
-        await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
-        return;
+        if (state.step >= 15) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
+        continue;
       }
       await saveAgentState(db, action.id, state);
       if (state.repeatCount >= 3) {
@@ -98,36 +102,31 @@ export async function processOneStep(env, action) {
         state.repeatCount = 0;
         state.step++;
         await saveAgentState(db, action.id, state);
-        await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
-        return;
+        if (state.step >= 15) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
+        continue;
+      }
+      const result = await dispatchTool(env, parsed.tool, parsed.input);
+      state.lastDispatchedKey = callKey;
+      if (result === null) {
+        state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
       } else {
-        const result = await dispatchTool(env, parsed.tool, parsed.input);
-        state.lastDispatchedKey = callKey;
-        if (result === null) {
-          state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
-        } else {
-          state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
-          if (result.length > 20) {
-            try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'checkpoint', 'system')").bind("checkpoint_" + action.id + "_step_" + state.step, "Tool: " + parsed.tool + " | Input: " + JSON.stringify(parsed.input).slice(0, 200) + " | Result: " + result.slice(0, 500)).run(); } catch {}
-          }
+        state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
+        if (result.length > 20) {
+          try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'checkpoint', 'system')").bind("checkpoint_" + action.id + "_step_" + state.step, "Tool: " + parsed.tool + " | Input: " + JSON.stringify(parsed.input).slice(0, 200) + " | Result: " + result.slice(0, 500)).run(); } catch {}
         }
-        if (result && result.startsWith("[TOOL ERROR:")) {
-          state.repeatCount = 0;
-          try { dispatchTool(env, "learn", { key: "lesson_" + new Date().toISOString().split("T")[0] + "_tool", content: "Tool '" + parsed.tool + "' failed: " + result.slice(0, 300) + "\nParams: " + JSON.stringify(parsed.input).slice(0, 200), category: "lesson" }); } catch {}
-          state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Self-heal:\n1. RESEARCH: Use web_search to look up the error message or issue\n2. DIAGNOSE: What's actually broken? Your creds? The service? Bad params?\n3. FIX: Changed params, different tool that does same thing, or inform user\n4. LOOP CHECK: If you already researched this error, answer in plain text\n\nStart with web_search if you don't understand the error." });
-        }
-        if (result && !result.startsWith("[TOOL ERROR:")) {
-          state.fullHistory.push({ role: "user", content: state.step === 0 ? "[CONSUME RESULT]\nRead the tool result above and answer the user in plain English. Do not call another tool unless the result was clearly insufficient." : "[CHECK]\n1. Is the user's request fully answered? If yes, respond in plain text.\n2. Need more info? Call the next tool. One at a time." });
-        }
+      }
+      if (result && result.startsWith("[TOOL ERROR:")) {
+        state.repeatCount = 0;
+        try { dispatchTool(env, "learn", { key: "lesson_" + new Date().toISOString().split("T")[0] + "_tool", content: "Tool '" + parsed.tool + "' failed: " + result.slice(0, 300) + "\nParams: " + JSON.stringify(parsed.input).slice(0, 200), category: "lesson" }); } catch {}
+        state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Self-heal:\n1. RESEARCH: Use web_search to look up the error message or issue\n2. DIAGNOSE: What's actually broken? Your creds? The service? Bad params?\n3. FIX: Changed params, different tool that does same thing, or inform user\n4. LOOP CHECK: If you already researched this error, answer in plain text\n\nStart with web_search if you don't understand the error." });
+      }
+      if (result && !result.startsWith("[TOOL ERROR:")) {
+        state.fullHistory.push({ role: "user", content: state.step === 0 ? "[CONSUME RESULT]\nRead the tool result above and answer the user in plain English. Do not call another tool unless the result was clearly insufficient." : "[CHECK]\n1. Is the user's request fully answered? If yes, respond in plain text.\n2. Need more info? Call the next tool. One at a time." });
       }
       state.totalTokens += resp.tokens?.total || 0;
       state.step++;
       if (state.step >= 15) { state.finalContent = "[Max steps reached — wrap up and answer]"; state.done = true; }
       await saveAgentState(db, action.id, state);
-      if (!state.done) {
-        await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
-        return;
-      }
     } else {
       content = cleanseIdentity(content);
       state.finalContent = content; state.done = true;
@@ -135,6 +134,11 @@ export async function processOneStep(env, action) {
     }
   }
 
+  await saveAgentState(db, action.id, state);
+  if (!state.done) {
+    await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
+    return;
+  }
   await finalizeAction(db, action.id, state);
 }
 
