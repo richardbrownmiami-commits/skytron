@@ -151,7 +151,19 @@ export const toolDefinitions = {
     description: "Run a SELECT query on the D1 SQLite database (tables: identity, brain_memory, brain_knowledge, actions, brain_logs).",
     schema: z.object({ sql: z.string().describe("SELECT SQL query") }),
     execute: async (env, input) => {
-      const r = await env.DB.prepare(input.sql).all();
+      const sql = input.sql.trim();
+      const firstWord = sql.match(/^\s*(\w+)/)?.[1]?.toUpperCase();
+      if (firstWord && !["SELECT", "WITH", "PRAGMA", "EXPLAIN"].includes(firstWord)) {
+        const tableMatch = sql.match(/\b(?:FROM|INTO|UPDATE|TABLE)\s+(\w+)/i);
+        const table = tableMatch ? tableMatch[1] : "unknown";
+        try {
+          const backupRows = await env.DB.prepare("SELECT * FROM " + table + " LIMIT 1000").all();
+          const backupKey = "backup_" + Date.now() + "_" + table;
+          await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'backup', 'auto')").bind(backupKey, JSON.stringify(backupRows.results || [])).run();
+          try { await indexKnowledgeForSearch(env, backupKey, "Auto-backup of " + table + " before write: " + sql.slice(0, 200), "backup"); } catch {}
+        } catch {}
+      }
+      const r = await env.DB.prepare(sql).all();
       return JSON.stringify(r.results || []);
     },
   },
@@ -691,6 +703,36 @@ export const toolDefinitions = {
         try { await env.DB.exec("DELETE FROM knowledge_fts; INSERT INTO knowledge_fts SELECT key, content, category FROM brain_knowledge"); } catch {}
         return "Deleted " + deleted + " entr" + (deleted === 1 ? "y" : "ies") + "." + (input.category ? " Category: " + input.category : " Key: " + input.key);
       } catch (e) { return "Error: " + (e.message || String(e)); }
+    },
+  },
+  restore: {
+    description: "Restore data from a backup snapshot. Provide the backup key (e.g. 'backup_17190000000_brain_memory'). Lists available backups if called without a key. Backups are auto-created before every INSERT/UPDATE/DELETE/DROP query.",
+    schema: z.object({
+      key: z.string().optional().describe("Backup key from a previous auto-backup (e.g. 'backup_17190000000_brain_memory'). Leave empty to list available backups."),
+    }),
+    execute: async (env, input) => {
+      try {
+        if (!input.key) {
+          const b = await env.DB.prepare("SELECT key, created_at FROM brain_knowledge WHERE category='backup' ORDER BY created_at DESC LIMIT 20").all();
+          if (!b.results?.length) return "No backups found.";
+          return "Available backups:\n" + b.results.map(r => "- " + r.key + " (" + r.created_at + ")").join("\n");
+        }
+        const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key=?1").bind(input.key).first();
+        if (!row?.content) return "Backup key '" + input.key + "' not found.";
+        const data = JSON.parse(row.content);
+        if (!data.length) return "Backup is empty, nothing to restore.";
+        const tableMatch = input.key.match(/backup_\d+_(.+)/);
+        const table = tableMatch ? tableMatch[1] : "unknown";
+        let restored = 0;
+        for (const item of data) {
+          const cols = Object.keys(item).filter(k => k !== "id");
+          if (!cols.length) continue;
+          const names = cols.join(", ");
+          const placeholders = cols.map((_, i) => "?" + (i + 1)).join(", ");
+          try { await env.DB.prepare("INSERT OR REPLACE INTO " + table + " (" + names + ") VALUES (" + placeholders + ")").bind(...cols.map(c => item[c])).run(); restored++; } catch {}
+        }
+        return "Restored " + restored + " rows from backup '" + input.key + "' into " + table + ".";
+      } catch (e) { return "Restore error: " + (e.message || String(e)); }
     },
   },
   cron_control: {
