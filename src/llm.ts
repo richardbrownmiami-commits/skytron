@@ -15,7 +15,7 @@ const AI_MODEL = "@cf/zai-org/glm-4.7-flash";
 
 export async function callLLM(env, body, sessionId) {
   const errors = [];
-  // Priority 1: Workers AI (GLM-4.7-Flash)
+  // Priority 1: Workers AI (GLM-4.7-Flash with 10s timeout for cold starts)
   if (env.AI) {
     let waReturned = false;
     try {
@@ -23,25 +23,43 @@ export async function callLLM(env, body, sessionId) {
         env.AI.run(AI_MODEL, {
           messages: body.messages, max_tokens: 2000
         }),
-        timeoutRace(5000)
+        timeoutRace(10000)
       ]);
       waReturned = true;
       const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
       if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='wa_limited'").run(); } catch {}
       return { content: waText || "", model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
     } catch (e) {
+      const errMsg = e.message || "";
       if (!waReturned) {
-        const errMsg = e.message || "";
         errors.push("Workers AI: " + errMsg);
-        if (errMsg.includes("4006") || errMsg.includes("allocation") || errMsg.includes("limit")) {
-          if (env.DB) try {
-            const row = await env.DB.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
-            const today = new Date().toISOString().split("T")[0];
-            let count = 1;
-            if (row?.value) { const [d, c] = row.value.split(":"); if (d === today) count = parseInt(c) + 1; }
-            await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_limited',?1,datetime('now'))").bind(today + ":" + count).run();
-          } catch {}
+      }
+      // Try fast fallback model before giving up on WA
+      if (!waReturned && errMsg.includes("timeout")) {
+        try {
+          const fallback = await Promise.race([
+            env.AI.run("@cf/meta/llama-3.2-3b-instruct", {
+              messages: body.messages, max_tokens: 2000
+            }),
+            timeoutRace(8000)
+          ]);
+          const fbText = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
+          if (fbText) {
+            if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='wa_limited'").run(); } catch {}
+            return { content: fbText, model: "workers-ai/llama-3.2-3b", tokens: { total: 0 } };
+          }
+        } catch (fbErr) {
+          errors.push("WA fallback: " + (fbErr.message || "timeout"));
         }
+      }
+      if (errMsg.includes("4006") || errMsg.includes("allocation") || errMsg.includes("limit")) {
+        if (env.DB) try {
+          const row = await env.DB.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
+          const today = new Date().toISOString().split("T")[0];
+          let count = 1;
+          if (row?.value) { const [d, c] = row.value.split(":"); if (d === today) count = parseInt(c) + 1; }
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_limited',?1,datetime('now'))").bind(today + ":" + count).run();
+        } catch {}
       }
     }
   }
