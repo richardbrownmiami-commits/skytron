@@ -60,13 +60,17 @@ export async function callLLM(env, body, sessionId) {
       if (resp.ok) {
         const data = await resp.json();
         const msgContent = data.choices?.[0]?.message?.content;
-        if (typeof msgContent === "string") {
+        if (typeof msgContent === "string" && msgContent.length > 0) {
           bdOk = true;
           return { content: msgContent, model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
         }
+        // BD returned 200 but no content — extract error from body
+        const errDetail = data.error?.message || JSON.stringify(data).slice(0, 100);
+        errors.push("BUDDHI_DWAR: HTTP 200 empty: " + errDetail);
+      } else {
+        const errBody = await resp.text().catch(() => "");
+        errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
       }
-      const errBody = await resp.text().catch(() => "");
-      errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
     } catch (e) {
       errors.push("BUDDHI_DWAR: " + (e.message || "timeout"));
     }
