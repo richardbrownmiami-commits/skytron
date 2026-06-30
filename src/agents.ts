@@ -122,7 +122,7 @@ export async function processOneStep(env, action) {
       }
       state.totalTokens += resp.tokens?.total || 0;
       state.step++;
-      if (state.step >= 5) { state.finalContent = "[Reached max steps]"; state.done = true; }
+      if (state.step >= 15) { state.finalContent = "[Max steps reached — wrap up and answer]"; state.done = true; }
       await saveAgentState(db, action.id, state);
       if (!state.done) {
         await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();

@@ -39,21 +39,34 @@ export async function handleScheduled(controller, env) {
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_action_id',?1,datetime('now'))").bind(String(r.results[0].id)).run();
         await processOneStep(env, r.results[0]);
       } else if (settings.stuck_recovery) {
-        // Recover stuck actions
         const s = await env.DB.prepare("SELECT * FROM actions WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
         if (s.results?.length) {
           const sid = s.results[0].id;
-          try {
-            const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
-            if (stateRow?.state) {
-              const state = JSON.parse(stateRow.state);
-              const lastStep = state.step || 0;
-              if (!state.fullHistory) state.fullHistory = [];
-              state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED at step " + lastStep + ". Your completed steps are saved as checkpoints. Run db_query(\"SELECT content FROM brain_knowledge WHERE key LIKE 'checkpoint_" + sid + "_%' ORDER BY key\") to see what you already did. Do NOT re-read files or repeat completed steps. Continue from step " + lastStep + ".]" });
-              await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
+          const ageMins = Math.round((Date.now() - new Date(s.results[0].created_at + "Z").getTime()) / 60000);
+          const retryKey = "recovery_count_" + sid;
+          const prevRetry = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(retryKey).first();
+          const retryCount = parseInt(prevRetry?.value) || 0;
+          if (retryCount >= 3) {
+            await env.DB.prepare("UPDATE actions SET status='error', result='Stuck after 3 recovery attempts', completed_at=datetime('now') WHERE id=?1").bind(sid).run();
+            try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
+            try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " kept getting stuck for " + ageMins + " minutes. I auto-failed it. It was on step " + (s.results[0].step || "?") + ".").run(); } catch {}
+          } else {
+            await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(retryKey, String(retryCount + 1)).run();
+            try {
+              const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
+              if (stateRow?.state) {
+                const state = JSON.parse(stateRow.state);
+                const lastStep = state.step || 0;
+                if (!state.fullHistory) state.fullHistory = [];
+                state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED at step " + lastStep + ". Your completed steps are saved as checkpoints. Run db_query(\"SELECT content FROM brain_knowledge WHERE key LIKE 'checkpoint_" + sid + "_%' ORDER BY key\") to see what you already did. Do NOT re-read files or repeat completed steps. Continue from step " + lastStep + ".]" });
+                await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
+              }
+            } catch {}
+            await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
+            if (retryCount === 0 && ageMins > 10) {
+              try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " has been stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". I'm recovering it.").run(); } catch {}
             }
-          } catch {}
-          await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
+          }
         }
       }
       if (settings.process_agents) {

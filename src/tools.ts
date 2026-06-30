@@ -693,4 +693,34 @@ export const toolDefinitions = {
       } catch (e) { return "Error: " + (e.message || String(e)); }
     },
   },
+  cron_control: {
+    description: "Manage your cron settings. 'list' returns all settings with their current state. 'toggle key' flips a setting (e.g. 'night_sleep'). 'set key value' sets a key to a specific value (true/false). Settings: enabled, log_tick, idle_cycle, health_check, night_sleep, slot_self_improve, slot_test, slot_research, slot_housekeep, tool_dispatch, process_actions, stuck_recovery, process_agents, daily_cleanup, idle_project.",
+    schema: z.object({
+      action: z.enum(["list", "toggle", "set"]).describe("What to do: 'list' shows settings, 'toggle' flips a key, 'set key value' sets explicitly"),
+      key: z.string().optional().describe("Setting key to toggle or set"),
+      value: z.string().optional().describe("Value for 'set' action ('true' or 'false')"),
+    }),
+    execute: async (env, input) => {
+      if (input.action === "list") {
+        const r = await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
+        const defaults = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, night_sleep: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, idle_project: true };
+        for (const row of r.results || []) { const k = row.key.replace("cron_cfg_", ""); defaults[k] = row.value === "true"; }
+        return JSON.stringify(defaults, null, 2);
+      }
+      if (!input.key) return "Provide a key to toggle or set. Keys: enabled, log_tick, idle_cycle, health_check, night_sleep, slot_*, process_*, task_*.";
+      const key = "cron_cfg_" + input.key;
+      if (input.action === "toggle") {
+        const cur = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(key).first();
+        const newVal = cur?.value === "true" ? "false" : "true";
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(key, newVal).run();
+        return "Toggled '" + input.key + "' to " + newVal + ". Takes effect next tick.";
+      }
+      if (input.action === "set") {
+        const val = input.value === "true" || input.value === "false" ? input.value : "true";
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(key, val).run();
+        return "Set '" + input.key + "' to " + val + ". Takes effect next tick.";
+      }
+      return "Invalid action. Use 'list', 'toggle', or 'set'.";
+    },
+  },
 }; // --- End tool definitions ---
