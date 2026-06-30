@@ -765,4 +765,12 @@ export const toolDefinitions = {
       return "Invalid action. Use 'list', 'toggle', or 'set'.";
     },
   },
+
+  self_improve_config: {
+    description: "Optimize idle cycle, code structure, and rule improvements",
+    schema: z.object({...}),
+    execute: async (env, input) => {
+async function body { ... }
+    },
+  },
 }; // --- End tool definitions ---
