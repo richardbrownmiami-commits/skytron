@@ -252,6 +252,19 @@ function tryParseToolCall(text) {
     else if (args && toolDefinitions[name]) { var keys = toolDefinitions[name].schema ? Object.keys(toolDefinitions[name].schema.shape) : []; if (keys.length === 1) input[keys[0]] = args; else if (args.startsWith("{") || args.startsWith("[")) { try { input = JSON.parse(args); } catch {} } }
     if (name && (Object.keys(input).length > 0 || !args)) return { tool: name, input: input };
   }
+  // XML tool call format: <tool_call>name<arg_key>key</arg_key>value</arg_value></tool_call>
+  var xmlMatch = trimmed.match(/<tool_call>(\w+)(?:[\s>]+([\s\S]*?))?<\/tool_call>/i);
+  if (xmlMatch) {
+    var name = xmlMatch[1], argsText = xmlMatch[2] || "", input = {};
+    var argPairs = argsText.match(/<arg_key>(\w+)<\/arg_key>([^<]+)(?:<\/arg_value>)?/g);
+    if (argPairs) {
+      for (var i = 0; i < argPairs.length; i++) {
+        var ap = argPairs[i].match(/<arg_key>(\w+)<\/arg_key>([^<]+)(?:<\/arg_value>)?/);
+        if (ap) input[ap[1]] = ap[2].trim();
+      }
+    }
+    if (name && Object.keys(input).length > 0) return { tool: name, input: input };
+  }
   return null;
 }
 
