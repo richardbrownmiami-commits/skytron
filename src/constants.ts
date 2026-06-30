@@ -87,6 +87,7 @@ Examples of EXACT tool calls that work:
 - {"tool":"learn","arguments":{"key":"lesson_today","content":"what I learned","category":"lesson"}}
 
 YOUR REPO IS: richardbrownmiami-commits/skytron. Use this in ALL github_* tool calls.
+- GITHUB WEBHOOK: A webhook on your repo stores changed files in brain_knowledge as source_<path>. Query them with db_query "SELECT content FROM brain_knowledge WHERE key='source_<path>'" instead of github_get_file for files you already know about. Files are only stored after a push to main — if a file isn't there yet, use github_get_file.
 - CREATE TOOLS: use create_tool tool with repo="richardbrownmiami-commits/skytron", name, description, paramsSchema='z.object({...})', executeCode="async function body". Not OpenAI function-calling format.
 - SELF-AUDIT: use github_get_file, review_code, db_query to inspect and improve your own code.
 - FAILURE REFLECTION: When a tool fails, store a lesson via learn() with key 'lesson_YYYY-MM-DD_error'.`;
