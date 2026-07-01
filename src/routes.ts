@@ -9,7 +9,7 @@
 // If you need a new endpoint, add it here. Keep it under 40 lines per handler.
 // CRITICAL: systemMsg assembly at ~line 250 controls what Skytron sees as its identity and instructions.
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
-import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState } from './db';
+import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buildSensorium, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState, logActivity } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
 
@@ -274,6 +274,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       const taskType = detectTaskType(input);
       const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', 'running', ?1, ?2) RETURNING id").bind(input, taskType).all();
       const aid = r.results[0].id;
+      logActivity(env.DB, "user_action", { actionId: aid, summary: "User asked: " + input.slice(0, 150), details: JSON.stringify({ from: from || "Creator", taskType, input: input.slice(0, 500) }) });
 
       let slotContent = await getPromptSlot(env.DB, taskType);
       if (!slotContent) {
@@ -284,6 +285,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       const stateData = await getState(env.DB);
       const mood = describeMood(stateData.emotions, stateData.reg.energy);
+      const sensorium = await buildSensorium(env.DB);
       const recentMem = await getRecentMemory(env.DB, 10, conversationId);
 
       let conversationContext = "";
@@ -311,7 +313,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         }
       } catch {}
 
-      const systemMsg = basePrompt + "\n\n" + mood + conversationContext + memoryContext + knowledgeContext + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. Do NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities like \"answer questions\" or \"provide information\". Answer in under 20 words.";
+      const systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. Do NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities like \"answer questions\" or \"provide information\". Answer in under 20 words.";
       const fullHistory = [
         { role: "system", content: systemMsg.slice(0, 32000) },
         { role: "user", content: llmInput }

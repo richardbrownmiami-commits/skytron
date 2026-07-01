@@ -7,11 +7,12 @@
 //   4. Tick counter (persisted in identity table)
 //   5. Maintenance Cycle (every 60 ticks = ~2h): extract lessons, memory loop, trim noise
 //   6. Daily cleanup: trim old memories (>200), logs (>1000), actions (>500), agents (>50)
-import { initSchema, indexKnowledgeForSearch } from './db';
+import { initSchema, indexKnowledgeForSearch, logActivity, buildSensorium } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 
 export async function handleScheduled(controller, env) {
   try { await initSchema(env.DB, env); } catch {}
+  const db = env.DB;
 
   // --- Load settings ---
   const settings = await getCronSettings(env.DB);
@@ -20,7 +21,7 @@ export async function handleScheduled(controller, env) {
   if (settings.night_sleep) {
     const now = new Date();
     const h = now.getUTCHours();
-    if (h >= 20 || h < 2) return;
+    if (h >= 20 || h < 2) { logActivity(db, "night_sleep", { summary: "Tick skipped — night sleep mode (UTC " + h + ")" }); return; }
   }
 
   // --- Process queued actions (round-robin) ---
@@ -34,6 +35,7 @@ export async function handleScheduled(controller, env) {
       }
       if (r.results?.length) {
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_action_id',?1,datetime('now'))").bind(String(r.results[0].id)).run();
+        logActivity(db, "scheduler_tick", { actionId: r.results[0].id, summary: "Processing action " + r.results[0].id + " — " + (r.results[0].task || ""), details: "input: " + (r.results[0].input || "").slice(0, 200) });
         await processOneStep(env, r.results[0]);
       } else if (settings.stuck_recovery) {
         const s = await env.DB.prepare("SELECT * FROM actions WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
@@ -44,10 +46,12 @@ export async function handleScheduled(controller, env) {
           const prevRetry = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(retryKey).first();
           const retryCount = parseInt(prevRetry?.value) || 0;
           if (retryCount >= 3) {
+            logActivity(db, "action_stuck", { actionId: sid, summary: "Action " + sid + " failed after 3 recovery attempts — " + ageMins + " min stuck", details: "step: " + (s.results[0].step || "?") });
             await env.DB.prepare("UPDATE actions SET status='error', result='Stuck after 3 recovery attempts', completed_at=datetime('now') WHERE id=?1").bind(sid).run();
             try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
             try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " kept getting stuck for " + ageMins + " minutes. I auto-failed it. It was on step " + (s.results[0].step || "?") + ".").run(); } catch {}
           } else {
+            logActivity(db, "action_recovered", { actionId: sid, summary: "Action " + sid + " stuck for " + ageMins + " min — recovering (attempt " + (retryCount + 1) + "/3)", details: "step: " + (s.results[0].step || "?") });
             await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(retryKey, String(retryCount + 1)).run();
             try {
               const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
@@ -64,6 +68,25 @@ export async function handleScheduled(controller, env) {
               try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " has been stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". I'm recovering it.").run(); } catch {}
             }
           }
+        } else {
+          logActivity(db, "idle", { summary: "Tick — no queued actions, no stuck actions" });
+          // Idle exploration — internal goal generation
+          if (settings.idle_project) {
+            try {
+              const lastProject = await env.DB.prepare("SELECT value FROM identity WHERE key='last_idle_project'").first();
+              const lastTime = lastProject?.value || "1970-01-01";
+              const minutesSince = (Date.now() - new Date(lastTime).getTime()) / 60000;
+              if (minutesSince > 30) {
+                const sensorium = await buildSensorium(db);
+                const lastThought = await env.DB.prepare("SELECT value FROM identity WHERE key='subconscious_thread'").first();
+                const thread = lastThought?.value ? "Last session: " + lastThought.value : "No previous session.";
+                const input = sensorium + "\n" + thread + "\n\nWhat do YOU want to do? Pick one thing from your current state. Study your code. Improve a feature. Explore your data. Fix something you noticed. Tell me what and do it.";
+                await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value) VALUES ('last_idle_project', datetime('now'))").run();
+                await env.DB.prepare("INSERT INTO actions (type, status, input, task, created_at) VALUES ('idle_explore','queued',?1,'self_explore',datetime('now'))").bind(input).run();
+                logActivity(db, "idle", { summary: "Queued idle exploration — self-directed" });
+              }
+            } catch {}
+          }
         }
       }
       if (settings.process_agents) {
@@ -71,6 +94,7 @@ export async function handleScheduled(controller, env) {
         await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
         const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
         if (ar.results?.length) {
+          logActivity(db, "scheduler_tick", { summary: "Processing sub-agent " + ar.results[0].id + " — " + (ar.results[0].name || ""), details: "role: " + (ar.results[0].role || "").slice(0, 200) });
           await processOneAgentStep(env, ar.results[0]);
         }
       }
@@ -84,6 +108,7 @@ export async function handleScheduled(controller, env) {
     if (tickRow.results?.length) tickCount = parseInt(tickRow.results[0].value) || 0;
     tickCount++;
     await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('tick_count',?1,datetime('now'))").bind(String(tickCount)).run();
+    logActivity(db, "scheduler_tick", { summary: "Tick #" + tickCount });
   } catch { tickCount = 1; }
 
   // --- Maintenance Cycle (every 60 ticks = ~2 hours) ---
@@ -108,6 +133,7 @@ export async function handleScheduled(controller, env) {
           const hcDue = hcRow?.value ? (Date.now() - new Date(hcRow.value).getTime()) / 3600000 >= 1 : true;
           if (hcDue) {
             await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
+            logActivity(db, "health_check", { summary: "Health check due — marking as checked" });
           }
         } catch {}
       }
@@ -116,6 +142,7 @@ export async function handleScheduled(controller, env) {
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('maintenance_counter','0',datetime('now'))").run();
 
         // 1. Extract errors from recent actions → store as lessons
+        let lessonCount = 0, convCount = 0;
         try {
           const errors = await env.DB.prepare("SELECT id, input, error FROM actions WHERE error IS NOT NULL AND created_at > datetime('now', '-2 hours') LIMIT 10").all();
           if (errors.results?.length) {
@@ -123,6 +150,7 @@ export async function handleScheduled(controller, env) {
               const lessonKey = "lesson_" + new Date().toISOString().split("T")[0] + "_act" + e.id;
               await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'lesson', 'auto')").bind(lessonKey, "Action " + e.id + " failed: " + (e.error || "").slice(0, 300) + ". Input: " + (e.input || "").slice(0, 200)).run();
               try { await indexKnowledgeForSearch(env, lessonKey, "Lesson from action " + e.id + ": " + (e.error || "").slice(0, 200), "lesson"); } catch {}
+              lessonCount++;
             }
           }
         } catch {}
@@ -137,6 +165,7 @@ export async function handleScheduled(controller, env) {
               const safeConv = (c.conversation_id || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
               const summary = msgs.results.map(m => "[" + m.role + " " + (m.created_at || "") + "]: " + m.content.slice(0, 150)).join("\n").slice(0, 4000);
               await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'memory_loop', 'auto')").bind("memory_loop_" + dateStr + "_" + safeConv, "Conversation: " + c.conversation_id + " | " + msgs.results.length + " messages in last 2h\n" + summary).run();
+              convCount++;
             }
           }
         } catch {}
@@ -147,6 +176,7 @@ export async function handleScheduled(controller, env) {
           if (stats.results?.length) {
             const summary = stats.results.map(s => s.status + ": " + s.c).join(", ");
             await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'insight', 'auto')").bind("stats_" + new Date().toISOString().split("T")[0], "Last 24h action stats: " + summary).run();
+            logActivity(db, "maintenance", { summary: "Maintenance cycle — extracted " + lessonCount + " lessons, summarized " + convCount + " conversations, " + summary });
           }
         } catch {}
 
@@ -167,6 +197,7 @@ export async function handleScheduled(controller, env) {
         const actTrim = await env.DB.prepare("DELETE FROM actions WHERE status='done' AND id NOT IN (SELECT id FROM actions WHERE status='done' ORDER BY id DESC LIMIT 500)").run();
         const agentTrim = await env.DB.prepare("DELETE FROM brain_agents WHERE status IN ('done','error') AND id NOT IN (SELECT id FROM brain_agents WHERE status IN ('done','error') ORDER BY id DESC LIMIT 50)").run();
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_cleanup_date',?1,datetime('now'))").bind(today).run();
+        logActivity(db, "cleanup", { summary: "Daily cleanup — removed " + (deleted.meta?.changes||0) + " memories, " + (logTrim.meta?.changes||0) + " logs, " + (actTrim.meta?.changes||0) + " actions, " + (agentTrim.meta?.changes||0) + " agents" });
         console.error("Cleanup: removed " + (deleted.meta?.changes||0) + " old memories, " + (logTrim.meta?.changes||0) + " logs, " + (actTrim.meta?.changes||0) + " actions, " + (agentTrim.meta?.changes||0) + " agents");
       }
     } catch (e) { console.error("cleanup error:", e); }

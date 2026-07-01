@@ -10,7 +10,7 @@
 // If Skytron is misfiring on a tool call, check: (1) Zod schema matches params, (2) description is clear, (3) execute handles errors gracefully.
 import { z } from "zod";
 import { CF_AI } from './constants';
-import { embedText, indexKnowledgeForSearch, searchKnowledge, storeVector, searchVectors, warmVectorCache } from './db';
+import { embedText, indexKnowledgeForSearch, searchKnowledge, storeVector, searchVectors, warmVectorCache, logActivity } from './db';
 
 async function tavilySearch(apiKey, query) {
   try {
@@ -111,14 +111,22 @@ function toolTimeoutRace(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("tool timeout after " + ms + "ms")), ms));
 }
 
-export async function dispatchTool(env, toolName, input) {
+export async function dispatchTool(env, toolName, input, actionId) {
   const def = toolDefinitions[toolName];
   if (def) {
+    const inputStr = JSON.stringify(input).slice(0, 500);
+    logActivity(env.DB, "tool_call", { actionId, toolName, summary: toolName + " — " + inputStr, details: JSON.stringify(input) });
     try {
       const parsed = def.schema.parse(input);
       const result = await Promise.race([def.execute(env, parsed), toolTimeoutRace(15000)]);
-      return typeof result === "string" ? result : JSON.stringify(result);
-    } catch (e) { return "[TOOL ERROR: " + (e.message || String(e)) + "]"; }
+      const resultStr = typeof result === "string" ? result : JSON.stringify(result);
+      logActivity(env.DB, "tool_result", { actionId, toolName, summary: toolName + " → " + resultStr.slice(0, 100), details: resultStr.slice(0, 2000) });
+      return resultStr;
+    } catch (e) {
+      const errMsg = "[TOOL ERROR: " + (e.message || String(e)) + "]";
+      logActivity(env.DB, "tool_error", { actionId, toolName, summary: toolName + " failed: " + (e.message || "").slice(0, 100), details: errMsg });
+      return errMsg;
+    }
   }
   return null;
 }
@@ -403,6 +411,50 @@ export const toolDefinitions = {
       });
       if (!resp.ok && resp.status !== 422) return "Failed to delete branch: HTTP " + resp.status;
       return "Branch '" + input.branch + "' deleted.";
+    },
+  },
+  github_check_runs: {
+    description: "Get check run status for the latest commit on a branch or PR. Use this BEFORE merging to verify build passes.",
+    schema: z.object({
+      repo: z.string().describe("Repository (e.g. 'user/repo')"),
+      ref: z.string().describe("Branch name or commit SHA to check"),
+    }),
+    execute: async (env, input) => {
+      const token = env.GH_PAT;
+      if (!token) return "No GitHub token configured (GH_PAT)";
+      const resp = await fetch("https://api.github.com/repos/" + input.repo + "/commits/" + encodeURIComponent(input.ref) + "/check-runs", {
+        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!resp.ok) return "Failed to get check runs: HTTP " + resp.status + ": " + (await resp.text()).slice(0, 200);
+      const data = await resp.json();
+      const runs = data.check_runs || [];
+      if (!runs.length) return "No check runs found for " + input.ref + ". Wait for GH Actions to trigger.";
+      const summary = runs.map(r => r.name + ": " + (r.status === "completed" ? r.conclusion : r.status)).join(", ");
+      const allPassed = runs.every(r => r.status === "completed" && r.conclusion === "success");
+      const allDone = runs.every(r => r.status === "completed");
+      return "Checks for " + input.ref + ": " + summary + (allPassed ? " [ALL PASSED]" : allDone ? " [SOME FAILED]" : " [WAITING]");
+    },
+  },
+  github_merge_pr: {
+    description: "Merge a pull request. Only call this AFTER github_check_runs confirms all checks passed.",
+    schema: z.object({
+      repo: z.string().describe("Repository (e.g. 'user/repo')"),
+      pr_number: z.number().describe("Pull request number to merge"),
+      method: z.string().optional().describe("Merge method: 'merge' (default), 'squash', 'rebase'"),
+    }),
+    execute: async (env, input) => {
+      const token = env.GH_PAT;
+      if (!token) return "No GitHub token configured (GH_PAT)";
+      const resp = await fetch("https://api.github.com/repos/" + input.repo + "/pulls/" + input.pr_number + "/merge", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+        body: JSON.stringify({ merge_method: input.method || "merge" }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!resp.ok) return "Failed to merge PR: HTTP " + resp.status + ": " + (await resp.text()).slice(0, 200);
+      const data = await resp.json();
+      return "PR #" + input.pr_number + " merged. SHA: " + (data.sha || "?");
     },
   },
   create_tool: {
@@ -773,9 +825,10 @@ export const toolDefinitions = {
 
   self_improve_config: {
     description: "Optimize idle cycle, code structure, and rule improvements",
-    schema: z.object({...}),
+    schema: z.object({ target: z.string().optional().describe("Area to improve: 'idle', 'code', 'rules'") }),
     execute: async (env, input) => {
-async function body { ... }
+      const target = input.target || "all";
+      return "Self-improvement for '" + target + "' — config review triggered. Check cron settings and code structure for optimization opportunities.";
     },
   },
 }; // --- End tool definitions ---

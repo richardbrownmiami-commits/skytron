@@ -73,6 +73,32 @@ export function describeMood(emotions, energy) {
   return "Running low, but operational.";
 }
 
+export async function buildSensorium(db) {
+  try {
+    const [tickR, memR, knowR, lastActionR, lastProjectR, energyR] = await Promise.all([
+      db.prepare("SELECT value FROM identity WHERE key='tick_count'").first(),
+      db.prepare("SELECT COUNT(*) as c FROM brain_memory").first(),
+      db.prepare("SELECT COUNT(*) as c FROM brain_knowledge").first(),
+      db.prepare("SELECT id, type, status, task, created_at FROM actions ORDER BY id DESC LIMIT 1").first(),
+      db.prepare("SELECT value FROM identity WHERE key='last_idle_project'").first(),
+      db.prepare("SELECT value FROM identity WHERE key='energy'").first(),
+    ]);
+    const tick = tickR?.value || "?";
+    const memCount = memR?.c || 0;
+    const knowCount = knowR?.c || 0;
+    const energy = parseInt(energyR?.value) || 100;
+    const lastAction = lastActionR?.id ? `#${lastActionR.id} ${lastActionR.status} (${(lastActionR.task || "").slice(0, 30)})` : "none";
+    const lastProject = lastProjectR?.value || "never";
+    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+    
+    return `[SENSORIUM]
+Time: ${now} UTC | Tick: #${tick}
+Energy: ${energy}% | Memory: ${memCount}msgs | Knowledge: ${knowCount}facts
+Last action: ${lastAction}
+Last idle: ${lastProject}`;
+  } catch { return ""; }
+}
+
 export async function storeMemory(db, role, content, conversationId = "default") {
   try { await db.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES (?1, ?2, ?3)").bind(role, content, conversationId).run(); } catch {}
 }
@@ -231,4 +257,10 @@ export async function loadAgentState(db, actionId) {
 }
 export async function deleteAgentState(db, actionId) {
   await db.prepare("DELETE FROM identity WHERE key='agent_state_' || ?1").bind(String(actionId)).run();
+}
+
+export async function logActivity(db, type, opts = {}) {
+  try {
+    await db.prepare("INSERT INTO activity_log (event_type, action_id, tool_name, summary, details) VALUES (?1, ?2, ?3, ?4, ?5)").bind(type, opts.actionId || null, opts.toolName || null, (opts.summary || "").slice(0, 500), (opts.details || "").slice(0, 2000)).run();
+  } catch {}
 }

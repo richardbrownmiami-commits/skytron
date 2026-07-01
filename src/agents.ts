@@ -9,7 +9,7 @@
 // If adding new tool formats to tryParseToolCall, update the regex + tests.
 import { callLLM, parseLLMJson } from './llm';
 import { dispatchTool, listTools, toolDefinitions } from './tools';
-import { storeMemory, saveAgentState, loadAgentState, deleteAgentState } from './db';
+import { storeMemory, saveAgentState, loadAgentState, deleteAgentState, logActivity } from './db';
 export async function processOneStep(env, action) {
   const db = env.DB;
   const state = await loadAgentState(db, action.id);
@@ -28,7 +28,9 @@ export async function processOneStep(env, action) {
       if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
       const reqBody = { messages: state.fullHistory, task: action.task || "chat" };
       if (codingModel) reqBody.model = codingModel;
-      resp = await callLLM(env, reqBody, "skytron-" + state.conversationId);
+      const chatId = "skytron-" + state.conversationId;
+      logActivity(db, "llm_call", { actionId: action.id, summary: "LLM call — step " + state.step + ", model: pending", details: "messages: " + (reqBody.messages?.length || 0) + ", task: " + (action.task || "chat") });
+      resp = await callLLM(env, reqBody, chatId);
       if (!resp) continue;
       if (!resp.content && resp.errors) {
         lastErrors = resp.errors;
@@ -39,11 +41,14 @@ export async function processOneStep(env, action) {
     }
     if (!resp || typeof content !== "string") {
       const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
+      logActivity(db, "provider_fail", { actionId: action.id, summary: "Provider fail: " + errorSummary.slice(0, 100), details: errorSummary });
       try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "provider_fail", "Both providers failed: " + errorSummary.slice(0, 200), "error").run(); } catch {}
       state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
       break;
     }
     state.modelName = resp.model;
+    logActivity(db, "llm_call", { actionId: action.id, summary: "LLM output — step " + state.step + ", model: " + (resp.model || "?") + ", tokens: " + (resp.tokens?.total || 0), details: content.slice(0, 1000) });
+    logActivity(db, "thought", { actionId: action.id, summary: (action.task || "chat") + " — step " + state.step, details: content.slice(0, 1000) });
     try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 4000), state.modelName, resp.tokens?.total || 0).run(); } catch {}
 
     const trimmed = content.trim();
@@ -105,7 +110,7 @@ export async function processOneStep(env, action) {
         if (state.step >= 15) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
         continue;
       }
-      const result = await dispatchTool(env, parsed.tool, parsed.input);
+      const result = await dispatchTool(env, parsed.tool, parsed.input, action.id);
       state.lastDispatchedKey = callKey;
       if (result === null) {
         state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
@@ -121,7 +126,7 @@ export async function processOneStep(env, action) {
         state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Self-heal:\n1. RESEARCH: Use web_search to look up the error message or issue\n2. DIAGNOSE: What's actually broken? Your creds? The service? Bad params?\n3. FIX: Changed params, different tool that does same thing, or inform user\n4. LOOP CHECK: If you already researched this error, answer in plain text\n\nStart with web_search if you don't understand the error." });
       }
       if (result && !result.startsWith("[TOOL ERROR:")) {
-        state.fullHistory.push({ role: "user", content: state.step === 0 ? "[CONSUME RESULT]\nRead the tool result above and answer the user in plain English. Do not call another tool unless the result was clearly insufficient." : "[CHECK]\n1. Is the user's request fully answered? If yes, respond in plain text.\n2. Need more info? Call the next tool. One at a time." });
+        state.fullHistory.push({ role: "user", content: state.step === 0 ? "[CONSUME RESULT]\nRead the tool result above and answer the user in plain English. Do not call another tool unless the result was clearly insufficient." : "[CONTINUE]\nTool returned. Either: (a) answer the user now in plain text, or (b) output the next tool JSON. Pick one. No questions." });
       }
       state.totalTokens += resp.tokens?.total || 0;
       state.step++;
@@ -147,6 +152,7 @@ export async function finalizeAction(db, actionId, state) {
   if (typeof state.finalContent !== "string") state.finalContent = String(state.finalContent);
   await storeMemory(db, "assistant", state.finalContent.slice(0, 5000), state.conversationId);
   await db.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(state.finalContent.slice(0, 5000), actionId).run();
+  logActivity(db, "action_done", { actionId, summary: (state.finalContent || "").slice(0, 150), details: "Step: " + state.step + " | Model: " + (state.modelName || "?") + " | Tokens: " + (state.totalTokens || 0) });
   try {
     const date = new Date().toISOString().split("T")[0];
     const lastTool = state.lastToolCall ? state.lastToolCall.split(":")[0] : "none";
@@ -154,6 +160,12 @@ export async function finalizeAction(db, actionId, state) {
     const key = "journal_" + date + "_" + actionId;
     const content = "Step " + state.step + " | Model: " + (state.modelName || "?") + " | Tokens: " + (state.totalTokens || 0) + " | Last tool: " + lastTool + " | Repeat: " + (state.repeatCount || 0) + " | " + summary;
     await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'learned')").bind(key, content.slice(0, 2000)).run();
+    // Store subconscious thread for idle_explore actions — so next idle tick continues from here
+    const actionType = await db.prepare("SELECT type FROM actions WHERE id=?1").bind(actionId).first().catch(() => ({}));
+    if (actionType?.type === "idle_explore") {
+      const threadSummary = (state.finalContent || "").slice(0, 200).replace(/\n/g, " ");
+      await db.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('subconscious_thread', ?1, datetime('now'))").bind(threadSummary).run();
+    }
   } catch (e) { console.error("journal write error:", e); }
   try { await db.prepare("DELETE FROM brain_knowledge WHERE key LIKE ?1").bind("checkpoint_" + actionId + "_%").run(); } catch {}
   await deleteAgentState(db, actionId);
@@ -182,9 +194,10 @@ export async function processOneAgentStep(env, agent) {
   }
   const step = (agent.step || 0) + 1;
   history.push({ role: "assistant", content });
+  logActivity(env.DB, "llm_call", { actionId: agent.id, summary: "Sub-agent LLM — " + agent.name + ", step " + step, details: (content || "").slice(0, 500) });
   const parsed = tryParseToolCall(content);
   if (parsed && ["web_search","web_fetch","db_query"].includes(parsed.tool)) {
-    const result = await dispatchTool(env, parsed.tool, parsed.input);
+    const result = await dispatchTool(env, parsed.tool, parsed.input, agent.id);
     history.push({ role: "user", content: result !== null ? "[TOOL RESULT: " + result.slice(0, 3000) + "]" : "[TOOL ERROR: unknown tool]" });
   } else if (parsed) {
     history.push({ role: "user", content: "[TOOL ERROR: tool '" + parsed.tool + "' not available to sub-agents. Use: web_search, web_fetch, db_query]" });
