@@ -1,4 +1,4 @@
-// === Skytron Scheduler (CRON ENGINE) ===
+// === Skytron Scheduler (CRON ENGINE) with Priority Queue ===
 // Runs every 120s via [[triggers]] pattern in wrangler.toml.
 // Execution order per tick:
 //   1. Process queued actions (pick 1 queued → set running → processOneStep)
@@ -8,6 +8,8 @@
 //   5. Maintenance Cycle (every 60 ticks = ~2h): extract lessons, memory loop, trim noise
 //   6. Daily cleanup: trim old memories (>200), logs (>1000), actions (>500), agents (>50)
 import { initSchema, indexKnowledgeForSearch } from './db';
+// Priority queue: actions ordered by priority (idle_explore < user < cron)
+const ACTION_PRIORITY = { idle_explore: 0, system: 1, cron: 2, user: 3, chat: 3 };
 import { processOneStep, processOneAgentStep } from './agents';
 
 export async function handleScheduled(controller, env) {
