@@ -48,7 +48,7 @@ export async function handleScheduled(controller, env) {
           if (retryCount >= 3) {
             await env.DB.prepare("UPDATE actions SET status='error', result='Stuck after 3 recovery attempts', completed_at=datetime('now') WHERE id=?1").bind(sid).run();
             try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
-            try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " kept getting stuck for " + ageMins + " minutes. I auto-failed it. It was on step " + (s.results[0].step || "?") + ".").run(); } catch {}
+            try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " kept getting stuck for " + ageMins + "min after 3 recovery attempts. Marked as error.").run(); } catch {}
           } else {
             await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(retryKey, String(retryCount + 1)).run();
             try {
@@ -57,13 +57,13 @@ export async function handleScheduled(controller, env) {
                 const state = JSON.parse(stateRow.state);
                 const lastStep = state.step || 0;
                 if (!state.fullHistory) state.fullHistory = [];
-                state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED at step " + lastStep + ". Your completed steps are saved as checkpoints. Run db_query(\"SELECT content FROM brain_knowledge WHERE key LIKE 'checkpoint_" + sid + "_%' ORDER BY key\") to see what you already did. Do NOT re-read files or repeat completed steps. Continue from step " + lastStep + ".]" });
+                state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED at step " + lastStep + ". Your completed steps are saved as checkpoints. Run db_query(\"SELECT content FROM brain_memory WHERE conversation_id='action_" + sid + "' AND role='assistant'\") to review progress. Resuming now.]" });
                 await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
               }
             } catch {}
             await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
             if (retryCount === 0 && ageMins > 10) {
-              try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " has been stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". I'm recovering it.").run(); } catch {}
+              try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " has been stuck for " + ageMins + "min. Attempting recovery (attempt 1/3).").run(); } catch {}
             }
           }
         }
@@ -110,6 +110,7 @@ export async function handleScheduled(controller, env) {
           const hcDue = hcRow?.value ? (Date.now() - new Date(hcRow.value).getTime()) / 3600000 >= 1 : true;
           if (hcDue) {
             await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_health_check',datetime('now'),datetime('now'))").run();
+            // TODO: Add actual health check logic (db connectivity, table consistency, etc.)
           }
         } catch {}
       }
@@ -123,7 +124,7 @@ export async function handleScheduled(controller, env) {
           if (errors.results?.length) {
             for (const e of errors.results) {
               const lessonKey = "lesson_" + new Date().toISOString().split("T")[0] + "_act" + e.id;
-              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'lesson', 'auto')").bind(lessonKey, "Action " + e.id + " failed: " + (e.error || "").slice(0, 300) + ". Input: " + (e.input || "").slice(0, 200)).run();
+              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'lesson', 'auto')").bind(lessonKey, "Action " + e.id + " failed: " + (e.error || "").slice(0, 500)).run();
               try { await indexKnowledgeForSearch(env, lessonKey, "Lesson from action " + e.id + ": " + (e.error || "").slice(0, 200), "lesson"); } catch {}
             }
           }
@@ -138,7 +139,7 @@ export async function handleScheduled(controller, env) {
               const dateStr = new Date().toISOString().split("T")[0];
               const safeConv = (c.conversation_id || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
               const summary = msgs.results.map(m => "[" + m.role + " " + (m.created_at || "") + "]: " + m.content.slice(0, 150)).join("\n").slice(0, 4000);
-              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'memory_loop', 'auto')").bind("memory_loop_" + dateStr + "_" + safeConv, "Conversation: " + c.conversation_id + " | " + msgs.results.length + " messages in last 2h\n" + summary).run();
+              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'memory_loop', 'auto')").bind("memory_loop_" + dateStr + "_" + safeConv, summary).run();
             }
           }
         } catch {}
@@ -148,7 +149,7 @@ export async function handleScheduled(controller, env) {
           const stats = await env.DB.prepare("SELECT status, COUNT(*) as c FROM actions WHERE created_at > datetime('now', '-24 hours') GROUP BY status").all();
           if (stats.results?.length) {
             const summary = stats.results.map(s => s.status + ": " + s.c).join(", ");
-            await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'insight', 'auto')").bind("stats_" + new Date().toISOString().split("T")[0], "Last 24h action stats: " + summary).run();
+            await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'insight', 'auto')").bind("stats_" + new Date().toISOString().split("T")[0], summary).run();
           }
         } catch {}
 
