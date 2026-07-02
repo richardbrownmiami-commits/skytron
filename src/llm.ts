@@ -1,9 +1,9 @@
 // === Skytron LLM Gateway (AI PROVIDER) ===
-// Priority 1: Workers AI — if not rate-limited today. Priority 2: BUDDHI_DWAR gateway.
-// callLLM(env, body, sessionId): checks wa_limited flag, skips WA if rate limited today.
-// - MODEL_OVERRIDE env var can force a specific model
-// - Workers AI response format: handles both {.response} and {choices:[{message:{content:...}}]}
-// DO NOT add provider-specific API keys here. They're managed by BUDDHI_DWAR.
+// Priority 1: Workers AI — skip if rate-limited today (wa_limited flag in identity table).
+// Priority 2: BUDDHI_DWAR gateway — BD's scoring selects best provider.
+// Priority 3: OpenRouter direct — maintenance fallback when both WA and BD fail.
+// callLLM(env, body, sessionId): auto-cycles through all 3 priorities.
+// Workers AI response format: handles both {.response} and {choices:[{message:{content:...}}]}
 
 function timeoutRace(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
@@ -112,6 +112,38 @@ export async function callLLM(env, body, sessionId) {
     await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_failures',?1,datetime('now'))").bind(String(count)).run();
     if (count >= 3) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('health_flags','bd_unreachable',datetime('now'))").run();
   } catch {}
+
+  // Priority 3: OpenRouter direct — last resort when both WA and BD are down
+  if (env.OPENROUTER_API_KEY) {
+    try {
+      const orModel = body.model || "openrouter/free";
+      const resp = await Promise.race([
+        fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + env.OPENROUTER_API_KEY,
+            "HTTP-Referer": "https://github.com/richardbrownmiami-commits/skytron",
+            "X-Title": "Skytron"
+          },
+          body: JSON.stringify({ messages: body.messages, model: orModel, max_tokens: 2000 })
+        }),
+        timeoutRace(15000)
+      ]);
+      if (resp.ok) {
+        const data = await resp.json();
+        const msgContent = data.choices?.[0]?.message?.content;
+        if (typeof msgContent === "string" && msgContent.length > 0) {
+          if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
+          return { content: msgContent, model: data.model || orModel, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+        }
+        errors.push("OpenRouter: HTTP 200 empty: " + (data.error?.message || JSON.stringify(data).slice(0, 100)));
+      } else {
+        const errBody = await resp.text().catch(() => "");
+        errors.push("OpenRouter: HTTP " + resp.status + " " + errBody.slice(0, 100));
+      }
+    } catch (e) { errors.push("OpenRouter: " + (e.message || "timeout")); }
+  }
 
   return { content: null, errors, model: "none", tokens: { total: 0 } };
 }

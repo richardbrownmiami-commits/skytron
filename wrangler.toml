@@ -27,4 +27,5 @@ pattern = "*/2 * * * *"
 BRAIN_KEY = "Saraha-Brain-Key"
 BRAVE_API_KEY = ""
 CONTEXT7_API_KEY = "ctx7sk-687e27f3-2714-4ef2-ab6d-cdc978e6d4fa"
+# OPENROUTER_API_KEY is set as a Cloudflare secret (not in plain text)
 # ONE_KNOWLEDGE_KEY is set as a Cloudflare secret (not in plain text)
