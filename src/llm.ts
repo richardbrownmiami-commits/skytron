@@ -3,6 +3,7 @@
 // Priority 2: BUDDHI_DWAR gateway — BD's scoring selects best provider.
 // Priority 3: OpenRouter direct — maintenance fallback when both WA and BD fail.
 // callLLM(env, body, sessionId): auto-cycles through all 3 priorities.
+// callOpenRouter(env, messages, max_tokens?): standalone — bypasses WA and BD entirely.
 // Workers AI response format: handles both {.response} and {choices:[{message:{content:...}}]}
 
 function timeoutRace(ms) {
@@ -115,37 +116,47 @@ export async function callLLM(env, body, sessionId) {
 
   // Priority 3: OpenRouter direct — last resort when both WA and BD are down
   if (env.OPENROUTER_API_KEY) {
-    try {
-      const orModel = body.model || "openrouter/free";
-      const resp = await Promise.race([
-        fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: "Bearer " + env.OPENROUTER_API_KEY,
-            "HTTP-Referer": "https://github.com/richardbrownmiami-commits/skytron",
-            "X-Title": "Skytron"
-          },
-          body: JSON.stringify({ messages: body.messages, model: orModel, max_tokens: 2000 })
-        }),
-        timeoutRace(15000)
-      ]);
-      if (resp.ok) {
-        const data = await resp.json();
-        const msgContent = data.choices?.[0]?.message?.content;
-        if (typeof msgContent === "string" && msgContent.length > 0) {
-          if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
-          return { content: msgContent, model: data.model || orModel, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
-        }
-        errors.push("OpenRouter: HTTP 200 empty: " + (data.error?.message || JSON.stringify(data).slice(0, 100)));
-      } else {
-        const errBody = await resp.text().catch(() => "");
-        errors.push("OpenRouter: HTTP " + resp.status + " " + errBody.slice(0, 100));
-      }
-    } catch (e) { errors.push("OpenRouter: " + (e.message || "timeout")); }
+    const orResult = await callOpenRouter(env, body.messages, 2000, body.model || "openrouter/free");
+    if (orResult?.content) {
+      if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
+      return orResult;
+    }
+    if (orResult?.error) errors.push(orResult.error);
   }
 
   return { content: null, errors, model: "none", tokens: { total: 0 } };
+}
+
+// callOpenRouter: direct OpenRouter call — bypasses WA and BD entirely.
+// Used by callLLM as Priority 3 and by scheduler for emergency self-repair.
+export async function callOpenRouter(env, messages, maxTokens = 2000, model = "openrouter/free") {
+  if (!env.OPENROUTER_API_KEY) return { content: null, error: "OPENROUTER_API_KEY not set" };
+  try {
+    const resp = await Promise.race([
+      fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + env.OPENROUTER_API_KEY,
+          "HTTP-Referer": "https://github.com/richardbrownmiami-commits/skytron",
+          "X-Title": "Skytron"
+        },
+        body: JSON.stringify({ messages, model, max_tokens: maxTokens })
+      }),
+      timeoutRace(15000)
+    ]);
+    if (resp.ok) {
+      const data = await resp.json();
+      const msgContent = data.choices?.[0]?.message?.content;
+      if (typeof msgContent === "string" && msgContent.length > 0) {
+        return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+      }
+      return { content: null, error: "OpenRouter: HTTP 200 empty: " + (data.error?.message || JSON.stringify(data).slice(0, 100)) };
+    } else {
+      const errBody = await resp.text().catch(() => "");
+      return { content: null, error: "OpenRouter: HTTP " + resp.status + " " + errBody.slice(0, 100) };
+    }
+  } catch (e) { return { content: null, error: "OpenRouter: " + (e.message || "timeout") }; }
 }
 
 export function parseLLMJson(text) {
