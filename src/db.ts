@@ -73,8 +73,9 @@ export function describeMood(emotions, energy) {
   return "Running low, but operational.";
 }
 
-export async function buildSensorium(db) {
+export async function buildSensorium(env) {
   try {
+    const db = env.DB;
     const [tickR, memR, knowR, lastActionR, lastProjectR, energyR] = await Promise.all([
       db.prepare("SELECT value FROM identity WHERE key='tick_count'").first(),
       db.prepare("SELECT COUNT(*) as c FROM brain_memory").first(),
@@ -91,11 +92,25 @@ export async function buildSensorium(db) {
     const lastProject = lastProjectR?.value || "never";
     const now = new Date().toISOString().replace("T", " ").slice(0, 19);
     
+    let bdScores = "";
+    try {
+      if (env.BUDDHI_DWAR) {
+        const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/providers/scores", {
+          headers: { Authorization: "Bearer " + (env.BRAIN_KEY || "") }
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const top = (data.scores || []).slice(0, 3).map((s: any) => `${s.provider}:${(s.score * 100).toFixed(0)}% cap:${s.remainingCap > 0.9 ? "high" : s.remainingCap > 0.5 ? "mid" : "low"} cb:${s.openCBs}/${s.totalKeys}`).join(" ");
+          if (top) bdScores = "\nBD providers: " + top;
+        }
+      }
+    } catch {}
+    
     return `[SENSORIUM]
 Time: ${now} UTC | Tick: #${tick}
 Energy: ${energy}% | Memory: ${memCount}msgs | Knowledge: ${knowCount}facts
 Last action: ${lastAction}
-Last idle: ${lastProject}`;
+Last idle: ${lastProject}${bdScores}`;
   } catch { return ""; }
 }
 

@@ -65,7 +65,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
   if (url.pathname === "/cron/settings") {
     if (req.method === "POST") {
       let body; try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
-      const allowed = ["enabled","log_tick","idle_cycle","health_check","slot_self_improve","slot_test","slot_research","slot_housekeep","idle_project","tool_dispatch","process_actions","stuck_recovery","process_agents","daily_cleanup","night_sleep","task_web_search","task_memory_search","task_learn","task_db_query","task_review_code"];
+      const allowed = ["enabled","log_tick","idle_cycle","health_check","slot_self_improve","slot_test","slot_research","slot_housekeep","idle_project","tool_dispatch","process_actions","stuck_recovery","process_agents","daily_cleanup","night_sleep","wake_up","task_web_search","task_memory_search","task_learn","task_db_query","task_review_code"];
       for (const k of allowed) {
         if (body[k] !== undefined) {
           await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cron_cfg_' || ?1, ?2, datetime('now'))").bind(k, body[k] ? "true" : "false").run();
@@ -76,12 +76,13 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     const rows = (await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all()).results || [];
     const s = {};
     for (const r of rows) s[r.key.replace("cron_cfg_","")] = r.value === "true";
-    const d = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, night_sleep: true, task_web_search: true, task_memory_search: true, task_learn: true, task_db_query: true, task_review_code: true };
+    const d = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, night_sleep: true, wake_up: true, task_web_search: true, task_memory_search: true, task_learn: true, task_db_query: true, task_review_code: true };
     const set = (k) => s[k] !== undefined ? s[k] : d[k];
     return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cron Tick Settings</title><style>*{margin:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:2rem;max-width:700px;margin:auto}h1{color:#58a6ff;margin-bottom:0.5rem}.sub{color:#8b949e;font-size:0.85rem;margin-bottom:1.5rem}.section{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1rem;margin-bottom:1rem}.section h2{font-size:1rem;color:#58a6ff;margin-bottom:0.5rem}.row{display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0;border-bottom:1px solid #21262d}.row:last-child{border:none}.label{flex:1}.label .desc{font-size:0.75rem;color:#8b949e;margin-top:2px}.switch{position:relative;width:44px;height:24px;flex-shrink:0;margin-left:1rem}input{opacity:0;width:0;height:0}.slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:#30363d;transition:.3s;border-radius:24px}.slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background-color:#e6edf3;transition:.3s;border-radius:50%}input:checked+.slider{background-color:#3fb950}input:checked+.slider:before{transform:translateX(20px)}.btn{padding:0.5rem 1.5rem;border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;background:#3fb950;color:#0b1120;font-weight:600;display:none;margin-top:0.5rem}.btn.show{display:inline-block}.saved{color:#3fb950;font-size:0.85rem;margin-top:0.5rem;display:none}</style></head><body><h1>Cron Tick Settings</h1><p class="sub">Toggle what Skytron does each idle tick. All settings are read on every tick.</p>
 <div class="section"><h2>Master</h2>
 <div class="row"><div class="label">Enabled<div class="desc">Master switch — disables ALL cron activity when off</div></div><label class="switch"><input type="checkbox" id="enabled" `+(set("enabled")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
 <div class="row"><div class="label">Night Sleep UTC 20‑2<div class="desc">Skip cron during sleep hours (IST 1:30AM–7:30AM)</div></div><label class="switch"><input type="checkbox" id="night_sleep" `+(set("night_sleep")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Wake-Up Heartbeat<div class="desc">Queue a think action every ~15min so Skytron stays awake</div></div><label class="switch"><input type="checkbox" id="wake_up" `+(set("wake_up")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
 </div>
 <div class="section"><h2>Logging</h2>
 <div class="row"><div class="label">Log free_time_tick<div class="desc">Log every idle tick to brain_logs (was on by default — noisy)</div></div><label class="switch"><input type="checkbox" id="log_tick" `+(set("log_tick")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
@@ -285,7 +286,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       const stateData = await getState(env.DB);
       const mood = describeMood(stateData.emotions, stateData.reg.energy);
-      const sensorium = await buildSensorium(env.DB);
+      const sensorium = await buildSensorium(env);
       const recentMem = await getRecentMemory(env.DB, 10, conversationId);
 
       let conversationContext = "";

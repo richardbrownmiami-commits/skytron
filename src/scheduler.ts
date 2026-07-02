@@ -59,7 +59,13 @@ export async function handleScheduled(controller, env) {
                 const state = JSON.parse(stateRow.state);
                 const lastStep = state.step || 0;
                 if (!state.fullHistory) state.fullHistory = [];
-                state.fullHistory.push({ role: "user", content: "[TASK INTERRUPTED at step " + lastStep + ". Your completed steps are saved as checkpoints. Run db_query(\"SELECT content FROM brain_knowledge WHERE key LIKE 'checkpoint_" + sid + "_%' ORDER BY key\") to see what you already did. Do NOT re-read files or repeat completed steps. Continue from step " + lastStep + ".]" });
+                // Load checkpoints directly from brain_knowledge and inject inline
+                const ckRows = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key LIKE ?1 ORDER BY key").bind("checkpoint_" + sid + "_%").all();
+                let ckSummary = "";
+                if (ckRows.results?.length) {
+                  ckSummary = ckRows.results.map((r: any, i: number) => "  Step " + (i + 1) + ": " + r.content.slice(0, 300)).join("\n");
+                }
+                state.fullHistory.push({ role: "user", content: "[TASK RESUMED at step " + lastStep + (ckSummary ? " — previous steps:\n" + ckSummary : " — no checkpoints found") + "\n\nContinue from step " + lastStep + ". DO NOT repeat completed steps.]" });
                 await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
               }
             } catch {}
@@ -77,7 +83,7 @@ export async function handleScheduled(controller, env) {
               const lastTime = lastProject?.value || "1970-01-01";
               const minutesSince = (Date.now() - new Date(lastTime).getTime()) / 60000;
               if (minutesSince > 30) {
-                const sensorium = await buildSensorium(db);
+                const sensorium = await buildSensorium(env);
                 const lastThought = await env.DB.prepare("SELECT value FROM identity WHERE key='subconscious_thread'").first();
                 const thread = lastThought?.value ? "Last session: " + lastThought.value : "No previous session.";
                 const input = sensorium + "\n" + thread + "\n\nWhat do YOU want to do? Pick one thing from your current state. Study your code. Improve a feature. Explore your data. Fix something you noticed. Tell me what and do it.";
@@ -99,6 +105,21 @@ export async function handleScheduled(controller, env) {
         }
       }
     } catch (e) { console.error("cron error:", e); }
+  }
+
+  // --- Wake-up heartbeat (independent of queue state) ---
+  if (settings.enabled) {
+    try {
+      const lastWake = await env.DB.prepare("SELECT value FROM identity WHERE key='last_wake_up'").first();
+      const lastWakeTime = lastWake?.value || "1970-01-01T00:00:00Z";
+      const minsSince = (Date.now() - new Date(lastWakeTime).getTime()) / 60000;
+      if (minsSince > 15) {
+        const sensorium = await buildSensorium(env);
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_wake_up',datetime('now'),datetime('now'))").run();
+        await env.DB.prepare("INSERT INTO actions (type,status,input,task,created_at) VALUES ('think','queued',?1,'self_explore',datetime('now'))").bind(sensorium + "\n\nWake up. Check your state. Queue tasks, run maintenance, or self-improve. Decide and act.").run();
+        logActivity(env.DB, "wake_up", { summary: "Heartbeat tick — wake-up action queued" });
+      }
+    } catch {}
   }
 
   // --- Tick counter ---
@@ -209,7 +230,7 @@ async function getCronSettings(db) {
     enabled: true, log_tick: false, idle_cycle: true, health_check: true,
     slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true,
     idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true,
-    process_agents: true, daily_cleanup: true, night_sleep: true,
+    process_agents: true, daily_cleanup: true, night_sleep: true, wake_up: true,
     task_web_search: true, task_memory_search: true, task_learn: true, task_db_query: true, task_review_code: true
   };
   try {

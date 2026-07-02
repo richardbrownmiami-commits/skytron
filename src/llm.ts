@@ -1,9 +1,7 @@
 // === Skytron LLM Gateway (AI PROVIDER) ===
-// Priority 1: Workers AI (GLM-4.7-Flash) — fast, cheap, always available.
-// Priority 2: BUDDHI_DWAR gateway (5 providers: groq/openrouter/mistral/google/opencode-zen) — fallback.
-// - callLLM(env, body, sessionId): tries Workers AI first, BD second
-// - parseLLMJson: extracts JSON from LLM responses
-// - MODEL_OVERRIDE env var can force a specific model (used for coding tasks: deepseek-v4-flash-free)
+// Priority 1: Workers AI — if not rate-limited today. Priority 2: BUDDHI_DWAR gateway.
+// callLLM(env, body, sessionId): checks wa_limited flag, skips WA if rate limited today.
+// - MODEL_OVERRIDE env var can force a specific model
 // - Workers AI response format: handles both {.response} and {choices:[{message:{content:...}}]}
 // DO NOT add provider-specific API keys here. They're managed by BUDDHI_DWAR.
 
@@ -11,30 +9,54 @@ function timeoutRace(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
 }
 
-const AI_MODEL = "@cf/zai-org/glm-4.7-flash";
+async function isWARateLimited(db) {
+  if (!db) return false;
+  try {
+    const row = await db.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
+    if (!row?.value) return false;
+    const today = new Date().toISOString().split("T")[0];
+    const [d] = row.value.split(":");
+    return d === today;
+  } catch { return false; }
+}
+
+async function markWARateLimited(db) {
+  if (!db) return;
+  try {
+    const row = await db.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
+    const today = new Date().toISOString().split("T")[0];
+    let count = 1;
+    if (row?.value) { const [d, c] = row.value.split(":"); if (d === today) count = parseInt(c) + 1; }
+    await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_limited',?1,datetime('now'))").bind(today + ":" + count).run();
+  } catch {}
+}
+
+async function clearWARateLimit(db) {
+  if (!db) return;
+  try { await db.prepare("DELETE FROM identity WHERE key='wa_limited'").run(); } catch {}
+}
 
 export async function callLLM(env, body, sessionId) {
   const errors = [];
-  // Priority 1: Workers AI (GLM-4.7-Flash with 10s timeout for cold starts)
-  if (env.AI) {
+  const waLimited = await isWARateLimited(env.DB);
+
+  // Priority 1: Workers AI — skip if rate limited today
+  if (!waLimited && env.AI) {
     let waReturned = false;
     try {
       const waResult = await Promise.race([
-        env.AI.run(AI_MODEL, {
+        env.AI.run("@cf/zai-org/glm-4.7-flash", {
           messages: body.messages, max_tokens: 2000
         }),
         timeoutRace(10000)
       ]);
       waReturned = true;
       const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
-      if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='wa_limited'").run(); } catch {}
-      return { content: waText || "", model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
+      if (waText) { await clearWARateLimit(env.DB); return { content: waText, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } }; }
     } catch (e) {
       const errMsg = e.message || "";
-      if (!waReturned) {
-        errors.push("Workers AI: " + errMsg);
-      }
-      // Try fast fallback model before giving up on WA
+      if (!waReturned) errors.push("Workers AI: " + errMsg);
+      // Try WA fallback model on timeout
       if (!waReturned && errMsg.includes("timeout")) {
         try {
           const fallback = await Promise.race([
@@ -44,26 +66,18 @@ export async function callLLM(env, body, sessionId) {
             timeoutRace(8000)
           ]);
           const fbText = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
-          if (fbText) {
-            if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='wa_limited'").run(); } catch {}
-            return { content: fbText, model: "workers-ai/llama-3.2-3b", tokens: { total: 0 } };
-          }
-        } catch (fbErr) {
-          errors.push("WA fallback: " + (fbErr.message || "timeout"));
-        }
+          if (fbText) { await clearWARateLimit(env.DB); return { content: fbText, model: "workers-ai/llama-3.2-3b", tokens: { total: 0 } }; }
+        } catch (fbErr) { errors.push("WA fallback: " + (fbErr.message || "timeout")); }
       }
+      // Mark rate limit if WA hit its daily limit
       if (errMsg.includes("4006") || errMsg.includes("allocation") || errMsg.includes("limit")) {
-        if (env.DB) try {
-          const row = await env.DB.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
-          const today = new Date().toISOString().split("T")[0];
-          let count = 1;
-          if (row?.value) { const [d, c] = row.value.split(":"); if (d === today) count = parseInt(c) + 1; }
-          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_limited',?1,datetime('now'))").bind(today + ":" + count).run();
-        } catch {}
+        await markWARateLimited(env.DB);
+        errors.push("Workers AI: rate limited today");
       }
     }
   }
-  // Priority 2: BUDDHI_DWAR fallback
+
+  // Priority 2: BUDDHI_DWAR gateway
   let bdOk = false;
   if (env.BUDDHI_DWAR) {
     try {
@@ -73,41 +87,32 @@ export async function callLLM(env, body, sessionId) {
           method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
           body: JSON.stringify(reqBody)
         }),
-        timeoutRace(45000)
+        timeoutRace(waLimited ? 15000 : 30000)
       ]);
       if (resp.ok) {
         const data = await resp.json();
         const msgContent = data.choices?.[0]?.message?.content;
         if (typeof msgContent === "string" && msgContent.length > 0) {
           bdOk = true;
+          if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
           return { content: msgContent, model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
         }
-        // BD returned 200 but no content — extract error from body
-        const errDetail = data.error?.message || JSON.stringify(data).slice(0, 100);
-        errors.push("BUDDHI_DWAR: HTTP 200 empty: " + errDetail);
+        errors.push("BUDDHI_DWAR: HTTP 200 empty: " + (data.error?.message || JSON.stringify(data).slice(0, 100)));
       } else {
         const errBody = await resp.text().catch(() => "");
         errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
       }
-    } catch (e) {
-      errors.push("BUDDHI_DWAR: " + (e.message || "timeout"));
-    }
-  } else {
-    errors.push("BUDDHI_DWAR: binding not available");
-  }
-  // Track BD failures — reset on success, flag health after 3 consecutive
-  if (env.DB) try {
-    if (bdOk) {
-      await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
-    } else {
-      const row = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first();
-      const count = (parseInt(row?.value) || 0) + 1;
-      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_failures',?1,datetime('now'))").bind(String(count)).run();
-      if (count >= 3) {
-        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('health_flags','bd_unreachable',datetime('now'))").run();
-      }
-    }
+    } catch (e) { errors.push("BUDDHI_DWAR: " + (e.message || "timeout")); }
+  } else { errors.push("BUDDHI_DWAR: binding not available"); }
+
+  // Track consecutive BD failures
+  if (!bdOk && env.DB) try {
+    const row = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first();
+    const count = (parseInt(row?.value) || 0) + 1;
+    await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_failures',?1,datetime('now'))").bind(String(count)).run();
+    if (count >= 3) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('health_flags','bd_unreachable',datetime('now'))").run();
   } catch {}
+
   return { content: null, errors, model: "none", tokens: { total: 0 } };
 }
 
