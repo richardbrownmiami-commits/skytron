@@ -302,15 +302,26 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       let memoryContext = "";
       try {
-        const words = input.split(/\s+/).filter(w => w.length > 2).slice(0, 4).map(w => w.replace(/[^a-zA-Z0-9-]/g, "")).filter(Boolean);
-        if (words.length) {
+        const words = input.split(/\s+/).filter(w => w.length > 2).slice(0, 8).map(w => w.replace(/[^a-zA-Z0-9-]/g, "")).filter(Boolean);
+        const phrases = input.match(/"([^"]+)"/g)?.map(p => p.slice(1, -1)) || [];
+        const allTerms = [...words, ...phrases];
+        if (allTerms.length) {
           const recentIds = recentMem.map(m => m.id).filter(id => id != null).join(",");
-          const likes = words.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
+          const likes = allTerms.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
           let sql = "SELECT role, content, created_at FROM brain_memory WHERE (" + likes + ")";
           if (recentIds) sql += " AND id NOT IN (" + recentIds + ")";
-          sql += " ORDER BY id DESC LIMIT 15";
+          sql += " ORDER BY id DESC LIMIT 20";
           const mr = await env.DB.prepare(sql).all();
-          if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES:\n" + mr.results.map(m => { var c = m.content.slice(0, 1000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
+          if (mr.results?.length) {
+            const memStr = mr.results.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n");
+            memoryContext = "\n\nPAST MEMORIES:\n" + memStr + "\n";
+          }
+          // Also search pre-summarized conversation loops in brain_knowledge
+          const loopSql = "SELECT key, content FROM brain_knowledge WHERE category='memory_loop' AND (" + likes + ") ORDER BY key DESC LIMIT 5";
+          const loops = await env.DB.prepare(loopSql).all();
+          if (loops.results?.length) {
+            memoryContext += "\nPAST CONVERSATION SUMMARIES:\n" + loops.results.map(l => "- " + l.key + ": " + l.content.slice(0, 500)).join("\n") + "\n";
+          }
         }
       } catch {}
 
