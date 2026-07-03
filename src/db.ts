@@ -118,7 +118,7 @@ export async function storeMemory(db, role, content, conversationId = "default")
   try { await db.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES (?1, ?2, ?3)").bind(role, content, conversationId).run(); } catch {}
 }
 
-export async function getRecentMemory(db, limit = 10, conversationId = "default") {
+export async function getRecentMemory(db, limit = 50, conversationId = "default") {
   try { const r = await db.prepare("SELECT id, role, content, created_at FROM brain_memory WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2").bind(conversationId, limit).all(); return r.results ? r.results.reverse() : []; } catch { return []; }
 }
 

@@ -287,10 +287,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       const stateData = await getState(env.DB);
       const mood = describeMood(stateData.emotions, stateData.reg.energy);
       const sensorium = await buildSensorium(env);
-      const recentMem = await getRecentMemory(env.DB, 10, conversationId);
+      const recentMem = await getRecentMemory(env.DB, 50, conversationId);
 
       let conversationContext = "";
-      if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 1000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
+      if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
 
       let knowledgeContext = "";
       try {
@@ -308,7 +308,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           const likes = words.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
           let sql = "SELECT role, content, created_at FROM brain_memory WHERE (" + likes + ")";
           if (recentIds) sql += " AND id NOT IN (" + recentIds + ")";
-          sql += " ORDER BY id DESC LIMIT 8";
+          sql += " ORDER BY id DESC LIMIT 15";
           const mr = await env.DB.prepare(sql).all();
           if (mr.results?.length) memoryContext = "\n\nPAST MEMORIES:\n" + mr.results.map(m => { var c = m.content.slice(0, 1000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,100}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
         }
