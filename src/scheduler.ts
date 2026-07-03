@@ -279,23 +279,36 @@ export async function handleScheduled(controller, env) {
               const asstMsgs = goodMsgs.filter(m => m.role === "assistant").map(m => cleanContent(m.content)).filter(Boolean);
               const allTexts = [...userMsgs, ...asstMsgs];
 
-              let summary = "";
               const topics = extractTopics(allTexts);
               const tools = extractTools(msgs.results.map(m => m.content));
-
-              if (topics.length) summary += "Topics: " + topics.join(", ") + "\n";
-              if (tools.length) summary += "Tools: " + tools.join(", ") + "\n";
-
               const questions = userMsgs.filter(hasSubstance).slice(0, 3);
-              if (questions.length) summary += "Questions: " + questions.map(q => q.length > 100 ? q.slice(0, 97) + "..." : q).join(" | ") + "\n";
-
               const answers = asstMsgs.filter(hasSubstance).slice(0, 2);
-              if (answers.length) summary += "Answers: " + answers.map(a => a.length > 200 ? a.slice(0, 197) + "..." : a).join(" | ");
 
+              const parts = [];
+              if (topics.length) parts.push("Discussed " + topics.slice(0, 4).join(", ") + ".");
+
+              if (questions.length) {
+                const qs = questions.map(q => q.length > 80 ? q.slice(0, 77) + "..." : q);
+                if (qs.length === 1) parts.push("User asked: " + qs[0] + ".");
+                else parts.push("User asked about " + qs.join(" and ") + ".");
+              }
+
+              if (answers.length) {
+                const aText = answers[0].length > 120 ? answers[0].slice(0, 117) + "..." : answers[0];
+                parts.push("Skytron responded: " + aText + ".");
+                if (answers.length > 1) {
+                  const a2 = answers[1].length > 80 ? answers[1].slice(0, 77) + "..." : answers[1];
+                  parts.push("Also: " + a2 + ".");
+                }
+              }
+
+              if (tools.length) parts.push("Used tools: " + tools.join(", ") + ".");
+
+              let summary = parts.join(" ");
               if (!summary) {
                 const allRaw = msgs.results.map(m => cleanContent(m.content)).filter(Boolean);
                 const rawTopics = extractTopics(allRaw);
-                summary = "Topics: " + (rawTopics.length ? rawTopics.join(", ") : "no meaningful topics extracted") + "\nMessages: " + msgs.results.length + " (no substantive content found)";
+                summary = rawTopics.length ? "Discussed " + rawTopics.join(", ") + "." : "No meaningful topics extracted.";
               }
 
               await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'memory_loop', 'auto')").bind("memory_loop_" + dateStr + "_" + safeConv, "Conversation: " + c.conversation_id + " | " + msgs.results.length + " messages, " + goodMsgs.length + " substantive\n" + summary).run();
