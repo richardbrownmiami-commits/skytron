@@ -834,71 +834,10 @@ export const toolDefinitions = {
 
   priority_queue: {
     description: "A priority queue implementation for scheduling jobs",
-    schema: z.object({...}),
+    schema: z.object({}).passthrough(),
     execute: async (env, input) => {
-async function body {
-  // Priority queue implementation
-  class PriorityQueue {
-    constructor() {
-      this.heap = [];
-    }
-
-    // Insert an element into the priority queue
-    insert(element) {
-      this.heap.push(element);
-      this.heapifyUp(this.heap.length - 1);
-    }
-
-    // Extract the minimum element from the priority queue
-    extractMin() {
-      if (this.heap.length === 0) return null;
-      const min = this.heap[0];
-      this.heap[0] = this.heap[this.heap.length - 1];
-      this.heap.pop();
-      this.heapifyDown(0);
-      return min;
-    }
-
-    // Heapify up
-    heapifyUp(index) {
-      if (index === 0) return;
-      const parentIndex = Math.floor((index - 1) / 2);
-      if (this.heap[parentIndex][0] > this.heap[index][0]) {
-        this.swap(parentIndex, index);
-        this.heapifyUp(parentIndex);
-      }
-    }
-
-    // Heapify down
-    heapifyDown(index) {
-      const leftChildIndex = 2 * index + 1;
-      const rightChildIndex = 2 * index + 2;
-      let smallest = index;
-      if (leftChildIndex < this.heap.length && this.heap[leftChildIndex][0] < this.heap[smallest][0]) {
-        smallest = leftChildIndex;
-      }
-      if (rightChildIndex < this.heap.length && this.heap[rightChildIndex][0] < this.heap[smallest][0]) {
-        smallest = rightChildIndex;
-      }
-      if (smallest !== index) {
-        this.swap(smallest, index);
-        this.heapifyDown(smallest);
-      }
-    }
-
-    // Swap two elements in the heap
-    swap(i, j) {
-      [this.heap[i], this.heap[j]] = [this.heap[j], this.heap[i]];
-    }
-  }
-}
-
-// Usage
-const queue = new PriorityQueue();
-queue.insert({id: 1, priority: 3});
-queue.insert({id: 2, priority: 1});
-const min = queue.extractMin();
-console.log(min);
+      // Priority queue stubbed — full implementation pending
+      return "Priority queue tool: not yet implemented (stub)";
     },
   },
 }; // --- End tool definitions ---
