@@ -300,27 +300,36 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         if (sem.length) knowledgeContext += "\nSEMANTIC MATCHES:\n" + sem.map(s => "- " + s.key + " (score: " + s.score.toFixed(2) + "): " + s.content.slice(0, 200)).join("\n") + "\n";
       } catch {}
 
+      const STOP_WORDS = new Set(["you","your","this","that","with","from","have","been","were","they","their","what","about","which","when","where","how","why","just","like","know","think","want","need","can","will","would","should","could","did","does","doing","done","make","made","gets","got","get","say","says","said","tell","told","ask","asked","use","used","using","look","looking","found","find","help","need","take","took","thing","things","much","many","some","any","all","each","every","both","few","more","most","other","into","over","after","before","between","under","again","further","then","once","here","there","very","too","also","not","yes","no","maybe","always","never","sometimes","often","usually","well","back","still","already","yet","because","though","although","while","during","until","since","result","answer","question","previous","last","next","first","second","new","old","good","bad","big","small","long","short","high","low","same","different","own","very","really","actually","basically","literally","probably","maybe","perhaps","please","thank","thanks","ok","okay","hi","hello","hey","yes","no","yeah","nope","sure","fine","great","nice","cool","awesome","amazing","perfect","love","hate","sorry","wait","stop","go","come","let","put","set","run","move","show","try","keep","start","end","begin","done","doing","going","coming","taking","making","giving","using","working","looking","trying","asking","telling","saying","thinking","feeling","knowing","seeing","hearing","being","having"]);
+
       let memoryContext = "";
       try {
-        const words = input.split(/\s+/).filter(w => w.length > 2).slice(0, 8).map(w => w.replace(/[^a-zA-Z0-9-]/g, "")).filter(Boolean);
-        const phrases = input.match(/"([^"]+)"/g)?.map(p => p.slice(1, -1)) || [];
+        const rawWords = input.split(/\s+/).filter(w => w.length > 2).slice(0, 12).map(w => w.replace(/[^a-zA-Z0-9-]/g, "").toLowerCase()).filter(Boolean);
+        const words = rawWords.filter(w => !STOP_WORDS.has(w));
+        const phrases = input.match(/"([^"]+)"/g)?.map(p => p.slice(1, -1).toLowerCase()) || [];
         const allTerms = [...words, ...phrases];
-        if (allTerms.length) {
+        if (allTerms.length >= 1) {
           const recentIds = recentMem.map(m => m.id).filter(id => id != null).join(",");
-          const likes = allTerms.map(k => "content LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
-          let sql = "SELECT role, content, created_at FROM brain_memory WHERE (" + likes + ")";
+          const likes = allTerms.map(k => "LOWER(content) LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
+          let sql = "SELECT role, content, created_at, conversation_id FROM brain_memory WHERE (" + likes + ")";
           if (recentIds) sql += " AND id NOT IN (" + recentIds + ")";
           sql += " ORDER BY id DESC LIMIT 20";
           const mr = await env.DB.prepare(sql).all();
           if (mr.results?.length) {
-            const memStr = mr.results.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n");
+            const memStr = mr.results.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.conversation_id + " " + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n");
             memoryContext = "\n\nPAST MEMORIES:\n" + memStr + "\n";
           }
-          // Also search pre-summarized conversation loops in brain_knowledge
           const loopSql = "SELECT key, content FROM brain_knowledge WHERE category='memory_loop' AND (" + likes + ") ORDER BY key DESC LIMIT 5";
           const loops = await env.DB.prepare(loopSql).all();
           if (loops.results?.length) {
             memoryContext += "\nPAST CONVERSATION SUMMARIES:\n" + loops.results.map(l => "- " + l.key + ": " + l.content.slice(0, 500)).join("\n") + "\n";
+          }
+        }
+        // Fallback: if no meaningful keywords matched, show recent activity across all conversations
+        if (!memoryContext && recentMem.length < 5) {
+          const recentAll = await env.DB.prepare("SELECT role, content, conversation_id, created_at FROM brain_memory WHERE conversation_id != ?1 ORDER BY id DESC LIMIT 15").bind(conversationId).all();
+          if (recentAll.results?.length) {
+            memoryContext = "\n\nRECENT ACTIVITY (other conversations):\n" + recentAll.results.map(m => { var c = m.content.slice(0, 1000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.conversation_id + " " + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
           }
         }
       } catch {}
