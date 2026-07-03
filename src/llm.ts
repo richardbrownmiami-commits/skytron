@@ -61,13 +61,13 @@ export async function callLLM(env, body, sessionId) {
       if (!waReturned && errMsg.includes("timeout")) {
         try {
           const fallback = await Promise.race([
-            env.AI.run("@cf/meta/llama-3.2-3b-instruct", {
+            env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
               messages: body.messages, max_tokens: 2000
             }),
-            timeoutRace(8000)
+            timeoutRace(12000)
           ]);
           const fbText = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
-          if (fbText) { await clearWARateLimit(env.DB); return { content: fbText, model: "workers-ai/llama-3.2-3b", tokens: { total: 0 } }; }
+          if (fbText) { await clearWARateLimit(env.DB); return { content: fbText, model: "workers-ai/gemma-4-26b-a4b-it", tokens: { total: 0 } }; }
         } catch (fbErr) { errors.push("WA fallback: " + (fbErr.message || "timeout")); }
       }
       // Mark rate limit if WA hit its daily limit
