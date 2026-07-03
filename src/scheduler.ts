@@ -1,12 +1,16 @@
 // === Skytron Scheduler (CRON ENGINE) ===
 // Runs every 120s via [[triggers]] pattern in wrangler.toml.
 // Execution order per tick:
-//   1. Process queued actions (pick 1 queued → set running → processOneStep)
-//   2. Recover stuck actions (>2 min running → reset with checkpoint)
-//   3. Process sub-agents (pick 1 queued brain_agent → processOneAgentStep)
-//   4. Tick counter (persisted in identity table)
-//   5. Maintenance Cycle (every 60 ticks = ~2h): extract lessons, memory loop, trim noise
-//   6. Daily cleanup: trim old memories (>200), logs (>1000), actions (>500), agents (>50)
+//   1. Night sleep check (early return if UTC 20-2)
+//   2. Process queued actions (pick 1 queued → set running → processOneStep)
+//   3. Recover stuck actions (>2 min running → reset with checkpoint, independent of step 2)
+//   4. Idle exploration (if no actions pending and idle_project enabled)
+//   5. Process sub-agents (pick 1 queued brain_agent → processOneAgentStep, independent)
+//   6. Wake-up heartbeat (queue self-explore every ~15min, independent)
+//   7. Tick counter (persisted in identity table)
+//   8. Emergency self-repair (detect WA+BD down, use OpenRouter to fix)
+//   9. Maintenance Cycle (every 60 ticks = ~2h): extract lessons, memory loop, trim noise
+//  10. Daily cleanup: trim old memories (>200), logs (>1000), actions (>500), agents (>50)
 import { initSchema, indexKnowledgeForSearch, logActivity, buildSensorium } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 import { callOpenRouter } from './llm';
@@ -25,88 +29,90 @@ export async function handleScheduled(controller, env) {
     if (h >= 20 || h < 2) { logActivity(db, "night_sleep", { summary: "Tick skipped — night sleep mode (UTC " + h + ")" }); return; }
   }
 
-  // --- Process queued actions (round-robin) ---
-  if (settings.process_actions) {
-    try {
-      const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key='last_action_id'").all();
-      const lastId = parseInt(lastIdRow.results?.[0]?.value) || 0;
-      let r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' AND id > ?1 ORDER BY id ASC LIMIT 1) RETURNING *").bind(lastId).all();
-      if (!r.results?.length) {
-        r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' ORDER BY id ASC LIMIT 1) RETURNING *").all();
-      }
-      if (r.results?.length) {
-        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_action_id',?1,datetime('now'))").bind(String(r.results[0].id)).run();
-        logActivity(db, "scheduler_tick", { actionId: r.results[0].id, summary: "Processing action " + r.results[0].id + " — " + (r.results[0].task || ""), details: "input: " + (r.results[0].input || "").slice(0, 200) });
-        await processOneStep(env, r.results[0]);
-      } else if (settings.stuck_recovery) {
-        const s = await env.DB.prepare("SELECT * FROM actions WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
-        if (s.results?.length) {
-          const sid = s.results[0].id;
-          const ageMins = Math.round((Date.now() - new Date(s.results[0].created_at + "Z").getTime()) / 60000);
-          const retryKey = "recovery_count_" + sid;
-          const prevRetry = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(retryKey).first();
-          const retryCount = parseInt(prevRetry?.value) || 0;
-          if (retryCount >= 3) {
-            logActivity(db, "action_stuck", { actionId: sid, summary: "Action " + sid + " failed after 3 recovery attempts — " + ageMins + " min stuck", details: "step: " + (s.results[0].step || "?") });
-            await env.DB.prepare("UPDATE actions SET status='error', result='Stuck after 3 recovery attempts', completed_at=datetime('now') WHERE id=?1").bind(sid).run();
-            try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
-            try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " kept getting stuck for " + ageMins + " minutes. I auto-failed it. It was on step " + (s.results[0].step || "?") + ".").run(); } catch {}
-          } else {
-            logActivity(db, "action_recovered", { actionId: sid, summary: "Action " + sid + " stuck for " + ageMins + " min — recovering (attempt " + (retryCount + 1) + "/3)", details: "step: " + (s.results[0].step || "?") });
-            await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(retryKey, String(retryCount + 1)).run();
-            try {
-              const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
-              if (stateRow?.state) {
-                const state = JSON.parse(stateRow.state);
-                const lastStep = state.step || 0;
-                if (!state.fullHistory) state.fullHistory = [];
-                // Load checkpoints directly from brain_knowledge and inject inline
-                const ckRows = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key LIKE ?1 ORDER BY key").bind("checkpoint_" + sid + "_%").all();
-                let ckSummary = "";
-                if (ckRows.results?.length) {
-                  ckSummary = ckRows.results.map((r: any, i: number) => "  Step " + (i + 1) + ": " + r.content.slice(0, 300)).join("\n");
-                }
-                state.fullHistory.push({ role: "user", content: "[TASK RESUMED at step " + lastStep + (ckSummary ? " — previous steps:\n" + ckSummary : " — no checkpoints found") + "\n\nContinue from step " + lastStep + ". DO NOT repeat completed steps.]" });
-                await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
-              }
-            } catch {}
-            await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
-            if (retryCount === 0 && ageMins > 10) {
-              try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("⚠️ Action " + sid + " has been stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". I'm recovering it.").run(); } catch {}
+  // --- Step 2: Process queued actions ---
+  if (settings.process_actions) try {
+    const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key='last_action_id'").all();
+    const lastId = parseInt(lastIdRow.results?.[0]?.value) || 0;
+    let r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' AND id > ?1 ORDER BY id ASC LIMIT 1) RETURNING *").bind(lastId).all();
+    if (!r.results?.length) {
+      r = await env.DB.prepare("UPDATE actions SET status='running' WHERE id=(SELECT id FROM actions WHERE status='queued' ORDER BY id ASC LIMIT 1) RETURNING *").all();
+    }
+    if (r.results?.length) {
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_action_id',?1,datetime('now'))").bind(String(r.results[0].id)).run();
+      logActivity(db, "scheduler_tick", { actionId: r.results[0].id, summary: "Processing action " + r.results[0].id + " — " + (r.results[0].task || ""), details: "input: " + (r.results[0].input || "").slice(0, 200) });
+      await processOneStep(env, r.results[0]);
+    }
+  } catch (e) { console.error("process_actions error:", e); }
+
+  // --- Step 3: Recover stuck actions (independent of step 2) ---
+  if (settings.stuck_recovery) try {
+    const s = await env.DB.prepare("SELECT * FROM actions WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
+    if (s.results?.length) {
+      const sid = s.results[0].id;
+      const ageMins = Math.round((Date.now() - new Date(s.results[0].created_at + "Z").getTime()) / 60000);
+      const retryKey = "recovery_count_" + sid;
+      const prevRetry = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(retryKey).first();
+      const retryCount = parseInt(prevRetry?.value) || 0;
+      if (retryCount >= 3) {
+        logActivity(db, "action_stuck", { actionId: sid, summary: "Action " + sid + " failed after 3 recovery attempts — " + ageMins + " min stuck", details: "step: " + (s.results[0].step || "?") });
+        await env.DB.prepare("UPDATE actions SET status='error', result='Stuck after 3 recovery attempts', completed_at=datetime('now') WHERE id=?1").bind(sid).run();
+        try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
+        try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("Action " + sid + " kept getting stuck for " + ageMins + " minutes. Auto-failed after 3 attempts. Step: " + (s.results[0].step || "?") + ".").run(); } catch {}
+      } else {
+        logActivity(db, "action_recovered", { actionId: sid, summary: "Action " + sid + " stuck for " + ageMins + " min — recovering (attempt " + (retryCount + 1) + "/3)", details: "step: " + (s.results[0].step || "?") });
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(retryKey, String(retryCount + 1)).run();
+        try {
+          const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
+          if (stateRow?.state) {
+            const state = JSON.parse(stateRow.state);
+            const lastStep = state.step || 0;
+            if (!state.fullHistory) state.fullHistory = [];
+            const ckRows = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key LIKE ?1 ORDER BY key").bind("checkpoint_" + sid + "_%").all();
+            let ckSummary = "";
+            if (ckRows.results?.length) {
+              ckSummary = ckRows.results.map((r, i) => "  Step " + (i + 1) + ": " + r.content.slice(0, 300)).join("\n");
             }
+            state.fullHistory.push({ role: "user", content: "[TASK RESUMED at step " + lastStep + (ckSummary ? " — previous steps:\n" + ckSummary : " — no checkpoints found") + "\n\nContinue from step " + lastStep + ". DO NOT repeat completed steps.]" });
+            await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
           }
-        } else {
-          logActivity(db, "idle", { summary: "Tick — no queued actions, no stuck actions" });
-          // Idle exploration — internal goal generation
-          if (settings.idle_project) {
-            try {
-              const lastProject = await env.DB.prepare("SELECT value FROM identity WHERE key='last_idle_project'").first();
-              const lastTime = lastProject?.value || "1970-01-01";
-              const minutesSince = (Date.now() - new Date(lastTime).getTime()) / 60000;
-              if (minutesSince > 30) {
-                const sensorium = await buildSensorium(env);
-                const lastThought = await env.DB.prepare("SELECT value FROM identity WHERE key='subconscious_thread'").first();
-                const thread = lastThought?.value ? "Last session: " + lastThought.value : "No previous session.";
-                const input = sensorium + "\n" + thread + "\n\nWhat do YOU want to do? Pick one thing from your current state. Study your code. Improve a feature. Explore your data. Fix something you noticed. Tell me what and do it.";
-                await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value) VALUES ('last_idle_project', datetime('now'))").run();
-                await env.DB.prepare("INSERT INTO actions (type, status, input, task, created_at) VALUES ('idle_explore','queued',?1,'self_explore',datetime('now'))").bind(input).run();
-                logActivity(db, "idle", { summary: "Queued idle exploration — self-directed" });
-              }
-            } catch {}
-          }
+        } catch {}
+        await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
+        if (retryCount === 0 && ageMins > 10) {
+          try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("Action " + sid + " has been stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". Recovering.").run(); } catch {}
         }
       }
-      if (settings.process_agents) {
-        await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run();
-        await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
-        const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
-        if (ar.results?.length) {
-          logActivity(db, "scheduler_tick", { summary: "Processing sub-agent " + ar.results[0].id + " — " + (ar.results[0].name || ""), details: "role: " + (ar.results[0].role || "").slice(0, 200) });
-          await processOneAgentStep(env, ar.results[0]);
-        }
+    }
+  } catch (e) { console.error("stuck_recovery error:", e); }
+
+  // --- Step 4: Idle exploration (independent of stuck_recovery) ---
+  if (settings.idle_project) try {
+    const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
+    if (pendingCount === 0) {
+      const lastProject = await env.DB.prepare("SELECT value FROM identity WHERE key='last_idle_project'").first();
+      const lastTime = lastProject?.value || "1970-01-01";
+      const minutesSince = (Date.now() - new Date(lastTime).getTime()) / 60000;
+      if (minutesSince > 30) {
+        const sensorium = await buildSensorium(env);
+        const lastThought = await env.DB.prepare("SELECT value FROM identity WHERE key='subconscious_thread'").first();
+        const thread = lastThought?.value ? "Last session: " + lastThought.value : "No previous session.";
+        const input = sensorium + "\n" + thread + "\n\nWhat do YOU want to do? Pick one thing from your current state. Study your code. Improve a feature. Explore your data. Fix something you noticed. Tell me what and do it.";
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value) VALUES ('last_idle_project', datetime('now'))").run();
+        await env.DB.prepare("INSERT INTO actions (type, status, input, task, created_at) VALUES ('idle_explore','queued',?1,'self_explore',datetime('now'))").bind(input).run();
+        logActivity(db, "idle", { summary: "Queued idle exploration — self-directed" });
       }
-    } catch (e) { console.error("cron error:", e); }
-  }
+    }
+  } catch (e) { console.error("idle_project error:", e); }
+
+  // --- Step 5: Process sub-agents (independent of process_actions) ---
+  if (settings.process_agents) try {
+    await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run();
+    await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
+    const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
+    if (ar.results?.length) {
+      logActivity(db, "scheduler_tick", { summary: "Processing sub-agent " + ar.results[0].id + " — " + (ar.results[0].name || ""), details: "role: " + (ar.results[0].role || "").slice(0, 200) });
+      await processOneAgentStep(env, ar.results[0]);
+    }
+  } catch (e) { console.error("process_agents error:", e); }
 
   // --- Wake-up heartbeat (independent of queue state) ---
   if (settings.enabled) {
@@ -173,7 +179,7 @@ export async function handleScheduled(controller, env) {
             await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_emergency_repair',datetime('now'),datetime('now'))").run();
             logActivity(db, "emergency_repair", { summary: "WA + BD both down — running self-repair via OpenRouter" });
             const diag = await callOpenRouter(env, [
-              { role: "system", content: "You are Skytron's emergency repair routine. WA (Workers AI) and BD (BUDDHI_DWAR gateway) are both down. Diagnose briefly and suggest one specific fix. Available actions: (a) retry WA by clearing wa_limited flag, (b) retry BD by clearing bd_failures flag, (c) test BD connectivity via api_call, (d) wait for natural recovery. Respond with one word: 'retry_wa', 'retry_bd', 'test_bd', or 'wait'." },
+              { role: "system", content: "You are Skytron's emergency repair routine. WA (Workers AI) and BD (BUDDHI_DWAR gateway) are both down. Available actions: (a) retry WA by clearing wa_limited flag, (b) retry BD by clearing bd_failures flag, (c) test BD connectivity by fetching /v1/status, (d) wait. Respond with one word: 'retry_wa', 'retry_bd', 'test_bd', or 'wait'." },
               { role: "user", content: "Both LLM providers failed. Fix it." }
             ], 500);
             if (diag?.content) {
@@ -187,7 +193,7 @@ export async function handleScheduled(controller, env) {
                 logActivity(db, "emergency_repair", { summary: "Cleared bd_failures + health_flags — will retry BD next tick" });
               } else if (action.includes("test_bd")) {
                 try {
-                  const testResp = await env.BUDDHI_DWAR?.fetch("https://buddhi-dwar/v1/status").catch(() => null);
+                  const testResp = env.BUDDHI_DWAR ? await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/status").catch(() => null) : null;
                   const reachable = testResp?.ok ? "yes" : "no";
                   await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('emergency_bd_test', ?1, 'lesson', 'auto')").bind("BD connectivity test at " + new Date().toISOString() + ": reachable=" + reachable + (testResp ? " status=" + testResp.status : "")).run();
                   logActivity(db, "emergency_repair", { summary: "Tested BD — reachable=" + reachable });
@@ -268,11 +274,9 @@ export async function handleScheduled(controller, env) {
 
 async function getCronSettings(db) {
   const defaults = {
-    enabled: true, log_tick: false, idle_cycle: true, health_check: true,
-    slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true,
-    idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true,
-    process_agents: true, daily_cleanup: true, night_sleep: true, wake_up: true,
-    task_web_search: true, task_memory_search: true, task_learn: true, task_db_query: true, task_review_code: true
+    enabled: true, idle_cycle: true, health_check: true,
+    idle_project: true, process_actions: true, stuck_recovery: true,
+    process_agents: true, daily_cleanup: true, night_sleep: true, wake_up: true
   };
   try {
     const rows = await db.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
