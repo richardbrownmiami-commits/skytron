@@ -223,16 +223,82 @@ export async function handleScheduled(controller, env) {
           }
         } catch {}
 
-        // 2. Memory loop: summarize recent conversations → durable knowledge
+        // 2. Memory loop: summarize recent conversations → durable knowledge (code-based, no LLM)
         try {
+          const SW = new Set(["you","your","this","that","with","from","have","been","were","they","their","what","about","which","when","where","how","why","just","like","know","think","want","need","can","will","would","should","could","did","does","doing","done","make","made","gets","got","get","say","says","said","tell","told","ask","asked","use","used","using","look","looking","found","find","help","need","take","took","thing","things","much","many","some","any","all","each","every","both","few","more","most","other","into","over","after","before","between","under","again","further","then","once","here","there","very","too","also","not","yes","no","maybe","always","never","sometimes","often","usually","well","back","still","already","yet","because","though","although","while","during","until","since","result","answer","question","previous","last","next","first","second","new","old","good","bad","big","small","long","short","high","low","same","different","own","very","really","actually","basically","literally","probably","maybe","perhaps","please","thank","thanks","ok","okay","hi","hello","hey","yes","no","yeah","nope","sure","fine","great","nice","cool","awesome","amazing","perfect","love","hate","sorry","wait","stop","go","come","let","put","set","run","move","show","try","keep","start","end","begin","done","doing","going","coming","taking","making","giving","using","working","looking","trying","asking","telling","saying","thinking","feeling","knowing","seeing","hearing","being","having","test","testing","check","checking","okay","gonna","wanna","gotta","kinda","sorta","lots","stuff","thing","bit","got","let","shall","may","might","must","dont","doesnt","wont","cant","couldnt","shouldnt","wouldnt","isnt","arent","wasnt","werent","hasnt","havent","hadnt"]);
           const convs = await env.DB.prepare("SELECT DISTINCT conversation_id FROM brain_memory WHERE created_at > datetime('now', '-2 hours')").all();
           for (const c of (convs.results || [])) {
             const msgs = await env.DB.prepare("SELECT role, content, created_at FROM brain_memory WHERE conversation_id=?1 AND created_at > datetime('now', '-2 hours') ORDER BY id ASC").bind(c.conversation_id).all();
             if (msgs.results?.length) {
+              function isJunk(text) {
+                const t = text.trim().toLowerCase();
+                if (t.length < 5) return true;
+                if (t.startsWith("{\"tool\"") || t.startsWith("{\"tool\":") || t.startsWith("[tool") || t.startsWith("[max steps")) return true;
+                if (t.startsWith("tool:") || t.match(/^TOOL:\w+[\(\[\{]/)) return true;
+                if (t.includes("i don't have personal memorie") || t.includes("i don't recall") || t.includes("i don't have a personal memory") || t.includes("i don't have personal memories")) return true;
+                if (t === "hi" || t === "hello" || t === "hey" || t === "ok" || t === "okay" || t === "thanks" || t === "thank you" || t === "sure" || t === "yes" || t === "no" || t === "yeah" || t === "nope" || t.startsWith("max steps reached")) return true;
+                if (t.startsWith("{\"error") || t.includes("\"status\":\"running\"") || t.includes("\"gateway error\"")) return true;
+                return false;
+              }
+              function extractTopics(texts, maxWords = 8) {
+                const freq = {};
+                const parts = texts.join(" ").toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/);
+                for (const w of parts) {
+                  if (w.length > 2 && !SW.has(w) && w !== "creator" && !w.startsWith("202") && !w.startsWith("19") && !w.startsWith("20")) {
+                    freq[w] = (freq[w] || 0) + 1;
+                  }
+                }
+                return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, maxWords).map(e => e[0]);
+              }
+              function extractTools(texts) {
+                const tools = new Set();
+                const all = texts.join(" ");
+                const known = ["db_query","web_search","memory_search","github_get_file","github_write_file","create_tool","prompt_edit","review_code","learn","cron_control","search_code","chat"];
+                for (const k of known) { if (all.includes(k)) tools.add(k); }
+                return [...tools];
+              }
+              function cleanContent(text) {
+                let t = text.replace(/\{\\"tool\\"[^}]+}/g, " ").replace(/\{"tool"[^}]+}/g, " ");
+                t = t.replace(/TOOL:\w+[\(\[][\s\S]{0,200}[\)\]\]]/g, " ");
+                t = t.replace(/\[TOOL CALL\]/g, " ");
+                t = t.replace(/\[Max steps reached[^\]]*\]/gi, " ");
+                t = t.replace(/@(?:cf|hf)\/[^\s]+/g, " ");
+                t = t.replace(/\b(datetime|datetime\(\)|datetime\('now'\)|from brain_|select .*? from|insert into|update .*? set)\b/gi, " ");
+                return t.replace(/\s+/g, " ").trim();
+              }
+              function hasSubstance(text) {
+                const t = cleanContent(text);
+                const meaningful = t.split(/\s+/).filter(w => w.length > 3 && !SW.has(w) && w !== "Creator");
+                return meaningful.length >= 2;
+              }
+
               const dateStr = new Date().toISOString().split("T")[0];
               const safeConv = (c.conversation_id || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
-              const summary = msgs.results.map(m => "[" + m.role + " " + (m.created_at || "") + "]: " + m.content.slice(0, 150)).join("\n").slice(0, 4000);
-              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'memory_loop', 'auto')").bind("memory_loop_" + dateStr + "_" + safeConv, "Conversation: " + c.conversation_id + " | " + msgs.results.length + " messages in last 2h\n" + summary).run();
+              const goodMsgs = msgs.results.filter(m => !isJunk(m.content));
+              const userMsgs = goodMsgs.filter(m => m.role === "user").map(m => cleanContent(m.content)).filter(Boolean);
+              const asstMsgs = goodMsgs.filter(m => m.role === "assistant").map(m => cleanContent(m.content)).filter(Boolean);
+              const allTexts = [...userMsgs, ...asstMsgs];
+
+              let summary = "";
+              const topics = extractTopics(allTexts);
+              const tools = extractTools(msgs.results.map(m => m.content));
+
+              if (topics.length) summary += "Topics: " + topics.join(", ") + "\n";
+              if (tools.length) summary += "Tools: " + tools.join(", ") + "\n";
+
+              const questions = userMsgs.filter(hasSubstance).slice(0, 3);
+              if (questions.length) summary += "Questions: " + questions.map(q => q.length > 100 ? q.slice(0, 97) + "..." : q).join(" | ") + "\n";
+
+              const answers = asstMsgs.filter(hasSubstance).slice(0, 2);
+              if (answers.length) summary += "Answers: " + answers.map(a => a.length > 200 ? a.slice(0, 197) + "..." : a).join(" | ");
+
+              if (!summary) {
+                const allRaw = msgs.results.map(m => cleanContent(m.content)).filter(Boolean);
+                const rawTopics = extractTopics(allRaw);
+                summary = "Topics: " + (rawTopics.length ? rawTopics.join(", ") : "no meaningful topics extracted") + "\nMessages: " + msgs.results.length + " (no substantive content found)";
+              }
+
+              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'memory_loop', 'auto')").bind("memory_loop_" + dateStr + "_" + safeConv, "Conversation: " + c.conversation_id + " | " + msgs.results.length + " messages, " + goodMsgs.length + " substantive\n" + summary).run();
               convCount++;
             }
           }
