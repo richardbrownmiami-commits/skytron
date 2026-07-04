@@ -53,3 +53,5 @@ replace.js
 .DS_Store
 Thumbs.db
 *.log
+
+RESOURCES.md

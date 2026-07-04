@@ -234,8 +234,9 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
   if (url.pathname === "/brain/health" && req.method === "GET") {
     try {
-      const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/providers/health", {
-        headers: { Authorization: "Bearer " + env.BRAIN_KEY }
+      const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/health", {
+        headers: { Authorization: "Bearer " + env.BRAIN_KEY },
+        signal: AbortSignal.timeout(10000)
       });
       return new Response(resp.body, { status: resp.status, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
     } catch (e) { return json({ error: e.message }, 500); }
@@ -244,8 +245,9 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   if (url.pathname === "/brain/usage" && req.method === "GET") {
     try {
       const days = parseInt(url.searchParams.get("days")) || 1;
-      const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/analytics?days=" + days, {
-        headers: { Authorization: "Bearer " + env.BRAIN_KEY }
+      const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/analytics?days=" + days, {
+        headers: { Authorization: "Bearer " + env.BRAIN_KEY },
+        signal: AbortSignal.timeout(15000)
       });
       if (!resp.ok) return json({ error: "failed to fetch usage" }, 502);
       const data = await resp.json();

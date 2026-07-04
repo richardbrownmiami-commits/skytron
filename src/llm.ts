@@ -42,7 +42,7 @@ export async function callLLM(env, body, sessionId) {
   const waLimited = await isWARateLimited(env.DB);
 
   // Priority 1: Workers AI — skip if rate limited today
-  if (!waLimited && env.AI) {
+  if (false) { // TEST: BD-only mode — re-enable: (!waLimited && env.AI)
     let waReturned = false;
     try {
       const waResult = await Promise.race([
@@ -78,18 +78,21 @@ export async function callLLM(env, body, sessionId) {
     }
   }
 
-  // Priority 2: BUDDHI_DWAR gateway
+  // Priority 2: BUDDHI_DWAR gateway via standard HTTP fetch
   let bdOk = false;
-  if (env.BUDDHI_DWAR) {
+  const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
+  if (env.BRAIN_KEY) {
     try {
-      const reqBody = { messages: body.messages, model: body.model || "", max_tokens: 3000, task: body.task || "chat" };
-      const resp = await Promise.race([
-        env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/chat/completions", {
-          method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
-          body: JSON.stringify(reqBody)
-        }),
-        timeoutRace(waLimited ? 15000 : 30000)
-      ]);
+      const task = body.task || "chat";
+      const model = body.model || (task === "coding" ? "" : "llama-3.3-70b-versatile");
+      const reqBody = { messages: body.messages, model, max_tokens: 3000, task };
+      const timeoutMs = task === "coding" ? 30000 : 15000;
+      const resp = await fetch(BD_URL + "/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
+        body: JSON.stringify(reqBody),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
       if (resp.ok) {
         const data = await resp.json();
         const msgContent = data.choices?.[0]?.message?.content;
@@ -104,7 +107,7 @@ export async function callLLM(env, body, sessionId) {
         errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
       }
     } catch (e) { errors.push("BUDDHI_DWAR: " + (e.message || "timeout")); }
-  } else { errors.push("BUDDHI_DWAR: binding not available"); }
+  } else { errors.push("BUDDHI_DWAR: BRAIN_KEY not available"); }
 
   // Track consecutive BD failures
   if (!bdOk && env.DB) try {
@@ -115,7 +118,7 @@ export async function callLLM(env, body, sessionId) {
   } catch {}
 
   // Priority 3: OpenRouter direct — last resort when both WA and BD are down
-  if (env.OPENROUTER_API_KEY) {
+  if (false) { // TEST: BD-only mode — re-enable: (env.OPENROUTER_API_KEY)
     const orResult = await callOpenRouter(env, body.messages, 2000, body.model || "openrouter/free");
     if (orResult?.content) {
       if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
@@ -132,19 +135,17 @@ export async function callLLM(env, body, sessionId) {
 export async function callOpenRouter(env, messages, maxTokens = 2000, model = "openrouter/free") {
   if (!env.OPENROUTER_API_KEY) return { content: null, error: "OPENROUTER_API_KEY not set" };
   try {
-    const resp = await Promise.race([
-      fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer " + env.OPENROUTER_API_KEY,
-          "HTTP-Referer": "https://github.com/richardbrownmiami-commits/skytron",
-          "X-Title": "Skytron"
-        },
-        body: JSON.stringify({ messages, model, max_tokens: maxTokens })
-      }),
-      timeoutRace(15000)
-    ]);
+    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + env.OPENROUTER_API_KEY,
+        "HTTP-Referer": "https://github.com/richardbrownmiami-commits/skytron",
+        "X-Title": "Skytron"
+      },
+      body: JSON.stringify({ messages, model, max_tokens: maxTokens }),
+      signal: AbortSignal.timeout(15000)
+    });
     if (resp.ok) {
       const data = await resp.json();
       const msgContent = data.choices?.[0]?.message?.content;
@@ -157,6 +158,47 @@ export async function callOpenRouter(env, messages, maxTokens = 2000, model = "o
       return { content: null, error: "OpenRouter: HTTP " + resp.status + " " + errBody.slice(0, 100) };
     }
   } catch (e) { return { content: null, error: "OpenRouter: " + (e.message || "timeout") }; }
+}
+
+// === Chat Agent ===
+// Simple one-shot LLM call with NO tools in the prompt.
+// Used by classifyIntent when no tools are needed — fast path (~5s).
+// Strips tool definitions from system message to prevent tool hallucination.
+export async function callChatAgent(env, fullHistory, task = "chat") {
+  // Remove tool definitions from system message to prevent tool calls
+  const cleanedHistory = fullHistory.map((msg, i) => {
+    if (i !== 0 || msg.role !== "system") return msg;
+    let content = msg.content;
+    // Strip tool descriptions, JSON examples, and tool-related instructions
+    content = content.replace(/\n## Available Tools[\s\S]*?(?=\n# |\n## [A-Z]|\n\nCRITICAL|\n# NOW RESPOND)/gi, "");
+    content = content.replace(/\nTool call format[\s\S]*?(?=\n# |\n## [A-Z]|\n\nCRITICAL|\n# NOW RESPOND)/gi, "");
+    content = content.replace(/\nJSON tool call[\s\S]*?(?=\n# |\n## [A-Z]|\n\nCRITICAL|\n# NOW RESPOND)/gi, "");
+    content = content.replace(/Output tool calls as JSON[\s\S]{0,200}/gi, "");
+    content = content.replace(/CRITICAL: You must[\s\S]{0,500}/gi, "CRITICAL: Answer directly in plain text. No tools available.");
+    content = content.replace(/Tool:[\w_]+\([\s\S]{0,100}\)/g, "");
+    return { ...msg, content: content.slice(0, 32000) };
+  });
+
+  const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
+  const model = task === "coding" ? "deepseek-v4-flash-free" : "llama-3.3-70b-versatile";
+
+  // Single try with 15s timeout — fast path
+  try {
+    const resp = await fetch(BD_URL + "/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
+      body: JSON.stringify({ messages: cleanedHistory, model, max_tokens: 2000, task }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const msgContent = data.choices?.[0]?.message?.content;
+      if (typeof msgContent === "string" && msgContent.length > 0) {
+        return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 } };
+      }
+    }
+  } catch {}
+  return null;
 }
 
 export function parseLLMJson(text) {

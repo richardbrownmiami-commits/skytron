@@ -19,7 +19,6 @@ const metadata = JSON.stringify({
   bindings: [
     { name: "BRAIN_KEY", type: "plain_text", text: "Saraha-Brain-Key" },
     { name: "BRAVE_API_KEY", type: "plain_text", text: "" },
-    { name: "BUDDHI_DWAR", type: "service", service: "buddhi-dwar", environment: "production" },
     { name: "CF_API_TOKEN", type: "plain_text", text: "" }, // REDACTED - set via GitHub Secrets / wrangler secret
     { name: "DB", type: "d1", database_id: "4e4e5fde-2207-478a-b1ed-d55d6cc35a91" },
     { name: "GH_PAT", type: "plain_text", text: "" }, // REDACTED - set via GitHub Secrets / wrangler secret

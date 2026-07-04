@@ -94,14 +94,21 @@ export async function buildSensorium(env) {
     
     let bdScores = "";
     try {
-      if (env.BUDDHI_DWAR) {
-        const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar/v1/providers/scores", {
-          headers: { Authorization: "Bearer " + (env.BRAIN_KEY || "") }
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          const top = (data.scores || []).slice(0, 3).map((s: any) => `${s.provider}:${(s.score * 100).toFixed(0)}% cap:${s.remainingCap > 0.9 ? "high" : s.remainingCap > 0.5 ? "mid" : "low"} cb:${s.openCBs}/${s.totalKeys}`).join(" ");
-          if (top) bdScores = "\nBD providers: " + top;
+      if (env.BRAIN_KEY) {
+        const cached = env.DB ? await env.DB.prepare("SELECT value, updated_at FROM identity WHERE key='bd_scores_cache'").first() as any : null;
+        const cacheAge = cached ? (Date.now() - new Date(cached.updated_at + "Z").getTime()) / 1000 : 999;
+        if (cached && cacheAge < 30) {
+          bdScores = cached.value;
+        } else {
+          const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/scores", {
+            headers: { Authorization: "Bearer " + env.BRAIN_KEY },
+            signal: AbortSignal.timeout(3000)
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            const top = (data.scores || []).slice(0, 3).map((s: any) => `${s.provider}:${(s.score * 100).toFixed(0)}% cap:${s.remainingCap > 0.9 ? "high" : s.remainingCap > 0.5 ? "mid" : "low"} cb:${s.openCBs}/${s.totalKeys}`).join(" ");
+            if (top) { bdScores = "\nBD providers: " + top; if (env.DB) try { await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_scores_cache',?1,datetime('now'))").bind(bdScores).run(); } catch {} }
+          }
         }
       }
     } catch {}
