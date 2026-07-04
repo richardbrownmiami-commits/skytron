@@ -356,7 +356,9 @@ function buildToolInput(toolName, desc) {
 // Routes user input to Chat Agent (direct) or Tool Agent (tools).
 // Runs BEFORE any LLM call — zero latency, zero cost.
 export function classifyIntent(input) {
-  const lower = input.toLowerCase().trim();
+  // Strip [Creator] / [username] prefix that /think endpoint adds
+  let stripped = input.replace(/^\[[^\]]+\]\s*/, "");
+  const lower = stripped.toLowerCase().trim();
   if (lower.length === 0) return "tool";
 
   // Direct patterns — answer from training data, no tools needed
