@@ -10,6 +10,7 @@
 // CRITICAL: systemMsg assembly at ~line 250 controls what Skytron sees as its identity and instructions.
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buildSensorium, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState, logActivity } from './db';
+import { getScratchpad } from './consolidate';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
 
@@ -63,7 +64,6 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
   }
 
   if (url.pathname === "/brain/scratchpad" && req.method === "GET") {
-    const { getScratchpad } = await import('./consolidate');
     const batchId = url.searchParams.get("batch");
     const data = await getScratchpad(env, batchId);
     const count = data.results?.length || 0;
