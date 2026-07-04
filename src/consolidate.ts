@@ -10,13 +10,13 @@ const SCRATCHPAD_DDL = `CREATE TABLE IF NOT EXISTS consolidation_scratchpad (
 )`;
 
 const SOURCE_TABLES = [
-  { name: 'brain_memory', select: 'id, role, content, conversation_id, created_at' },
-  { name: 'actions', select: 'id, type, status, input, task, result, error, created_at, completed_at' },
-  { name: 'activity_log', select: 'id, event_type, action_id, tool_name, summary, details, created_at' },
-  { name: 'brain_knowledge', select: 'id, key, content, category, source, created_at' },
-  { name: 'brain_vectors', select: 'id, ref_key, category, created_at' },
-  { name: 'identity', select: 'key, value, updated_at' },
-  { name: 'brain_agents', select: 'id, name, status, step, instruction, result, created_at, updated_at' },
+  { name: 'brain_memory', select: 'id, role, content, conversation_id, created_at', idCol: 'id' },
+  { name: 'actions', select: 'id, type, status, input, task, result, error, created_at, completed_at', idCol: 'id' },
+  { name: 'activity_log', select: 'id, event_type, action_id, tool_name, summary, details, created_at', idCol: 'id' },
+  { name: 'brain_knowledge', select: 'id, key, content, category, source, created_at', idCol: 'id' },
+  { name: 'brain_vectors', select: 'id, ref_key, category, created_at', idCol: 'id' },
+  { name: 'identity', select: 'rowid, key, value, updated_at', idCol: 'rowid' },
+  { name: 'brain_agents', select: 'id, name, status, step, instruction, result, created_at, updated_at', idCol: 'id' },
 ];
 
 export async function ensureScratchpadTable(env) {
@@ -33,14 +33,15 @@ export async function collectToScratchpad(env) {
     const maxKey = 'consolidate_last_' + table.name + '_id';
     const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(maxKey).first();
     const lastId = parseInt(lastIdRow?.value) || 0;
+    const idCol = table.idCol || 'id';
 
-    const rows = await env.DB.prepare("SELECT " + table.select + " FROM " + table.name + " WHERE id > ?1 ORDER BY id ASC LIMIT ?2").bind(lastId, MAX_PER_TABLE).all();
+    const rows = await env.DB.prepare("SELECT " + table.select + " FROM " + table.name + " WHERE " + idCol + " > ?1 ORDER BY " + idCol + " ASC LIMIT ?2").bind(lastId, MAX_PER_TABLE).all();
     if (!rows.results?.length) continue;
 
     let newMaxId = lastId;
     const batch = [];
     for (const row of rows.results) {
-      const rid = row.id || 0;
+      const rid = row[idCol] || 0;
       if (rid > newMaxId) newMaxId = rid;
       batch.push(env.DB.prepare(
         "INSERT INTO consolidation_scratchpad (source_table, record_id, content, batch_id) VALUES (?1, ?2, ?3, ?4)"
