@@ -12,7 +12,7 @@ function timeoutRace(ms) {
 
 // Retry wrapper — handles DNS throttling and transient errors
 // Cloudflare Workers get DNS throttled after ~6 rapid fetch() calls to same zone
-async function fetchWithRetry(url, opts, maxRetries = 2) {
+async function fetchWithRetry(url, opts, maxRetries = 3) {
   let lastErr;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -22,9 +22,10 @@ async function fetchWithRetry(url, opts, maxRetries = 2) {
       const msg = (e.message || "").toLowerCase();
       const isTransient = msg.includes("dns") || msg.includes("resolve") || msg.includes("enotfound")
         || msg.includes("fetch failed") || msg.includes("network") || msg.includes("timeout")
-        || msg.includes("abort") || msg.includes("1042");
+        || msg.includes("abort") || msg.includes("1042") || msg.includes("remote name");
       if (isTransient && attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        const delay = 3000 * Math.pow(2, attempt); // 3s, 6s, 12s
+        await new Promise(r => setTimeout(r, delay));
         continue;
       }
       throw e;
