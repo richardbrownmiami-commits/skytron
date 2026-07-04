@@ -839,4 +839,12 @@ export const toolDefinitions = {
       return "Priority queue tool: not yet implemented (stub)";
     },
   },
+
+  send_notification: {
+    description: "Send a notification via webhook/REST API",
+    schema: {"type":"object","properties":{"webhookUrl":{"type":"string"},"message":{"type":"string"}},"required":["webhookUrl","message"]},
+    execute: async (env, input) => {
+async function({webhookUrl, message}, env) { try { const resp = await fetch(webhookUrl, { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message}), signal: AbortSignal.timeout(10000) }); if (!resp.ok) throw new Error(`Notification failed: ${resp.status}`); return "Notification sent successfully"; } catch (error) { return "Notification error: " + error.message; } }
+    },
+  },
 }; // --- End tool definitions ---
