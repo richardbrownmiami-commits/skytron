@@ -384,8 +384,8 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   // --- /think/process — manually process the next queued/running action (step-by-step, one batch at a time) ---
   if (url.pathname === "/think/process" && req.method === "POST") {
     try {
-      // Re-queue stale running actions (stuck for > 1 minute)
-      await env.DB.prepare("UPDATE actions SET status='queued' WHERE status='running' AND created_at < datetime('now', '-1 minute') AND id NOT IN (SELECT action_id FROM brain_memory WHERE created_at > datetime('now', '-1 minute'))").run();
+      // Re-queue stale running actions (running for > 1 minute with no result)
+      await env.DB.prepare("UPDATE actions SET status='queued' WHERE status='running' AND result IS NULL AND created_at < datetime('now', '-1 minute')").run();
       // Grab the next queued action
       await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run();
       const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
