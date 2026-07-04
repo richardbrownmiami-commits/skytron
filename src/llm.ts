@@ -190,17 +190,23 @@ export async function callOpenRouter(env, messages, maxTokens = 2000, model = "o
 export async function callChatAgent(env, fullHistory, task = "chat") {
   if (!env.AI) return null;
   try {
-    const result = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
-      messages: fullHistory, max_tokens: 2000
-    });
+    const result = await Promise.race([
+      env.AI.run("@cf/zai-org/glm-4.7-flash", {
+        messages: fullHistory, max_tokens: 2000
+      }),
+      timeoutRace(10000)
+    ]);
     const content = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
     if (content) return { content, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
   } catch {}
   // Try fallback on timeout
   try {
-    const fallback = await env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
-      messages: fullHistory, max_tokens: 2000
-    });
+    const fallback = await Promise.race([
+      env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
+        messages: fullHistory, max_tokens: 2000
+      }),
+      timeoutRace(12000)
+    ]);
     const fbContent = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
     if (fbContent) return { content: fbContent, model: "workers-ai/gemma-4-26b-a4b-it", tokens: { total: 0 } };
   } catch {}
