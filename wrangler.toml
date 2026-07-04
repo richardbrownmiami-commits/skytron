@@ -18,10 +18,6 @@ binding = "AI"
 type = "cron"
 pattern = "*/2 * * * *"
 
-[[services]]
-binding = "BUDDHI_DWAR"
-service = "buddhi-dwar"
-
 [vars]
 BRAIN_KEY = "Saraha-Brain-Key"
 BRAVE_API_KEY = ""

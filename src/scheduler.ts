@@ -193,7 +193,7 @@ export async function handleScheduled(controller, env) {
                 logActivity(db, "emergency_repair", { summary: "Cleared bd_failures + health_flags — will retry BD next tick" });
               } else if (action.includes("test_bd")) {
                 try {
-                  const testResp = env.BRAIN_KEY && env.BUDDHI_DWAR ? await env.BUDDHI_DWAR.fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/status", { signal: AbortSignal.timeout(5000) }).catch(() => null) : null;
+                  const testResp = env.BRAIN_KEY ? await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/status", { signal: AbortSignal.timeout(5000) }).catch(() => null) : null;
                   const reachable = testResp?.ok ? "yes" : "no";
                   await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('emergency_bd_test', ?1, 'lesson', 'auto')").bind("BD connectivity test at " + new Date().toISOString() + ": reachable=" + reachable + (testResp ? " status=" + testResp.status : "")).run();
                   logActivity(db, "emergency_repair", { summary: "Tested BD — reachable=" + reachable });

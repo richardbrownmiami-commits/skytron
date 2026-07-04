@@ -234,7 +234,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
   if (url.pathname === "/brain/health" && req.method === "GET") {
     try {
-      const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/health", {
+      const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/health", {
         headers: { Authorization: "Bearer " + env.BRAIN_KEY },
         signal: AbortSignal.timeout(10000)
       });
@@ -245,7 +245,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   if (url.pathname === "/brain/usage" && req.method === "GET") {
     try {
       const days = parseInt(url.searchParams.get("days")) || 1;
-      const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/analytics?days=" + days, {
+      const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/analytics?days=" + days, {
         headers: { Authorization: "Bearer " + env.BRAIN_KEY },
         signal: AbortSignal.timeout(15000)
       });

@@ -580,7 +580,7 @@ export const toolDefinitions = {
       ];
       for (const rp of reviewProviders) {
         try {
-          const rResp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
+          const rResp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
             method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
             body: JSON.stringify({ provider: rp.provider, model: rp.model, messages: [{ role: "user", content: reviewPrompt }], max_tokens: 2000 }), signal: AbortSignal.timeout(30000)
           });
