@@ -84,7 +84,7 @@ export async function callLLM(env, body, sessionId) {
   if (env.BRAIN_KEY) {
     try {
       const task = body.task || "chat";
-      const model = body.model || (task === "coding" ? "" : "llama-3.3-70b-versatile");
+      const model = body.model || (task === "coding" ? "" : "");
       const reqBody = { messages: body.messages, model, max_tokens: 3000, task };
       const timeoutMs = task === "coding" ? 30000 : 15000;
       const resp = await fetch(BD_URL + "/v1/chat/completions", {
@@ -180,7 +180,7 @@ export async function callChatAgent(env, fullHistory, task = "chat") {
   });
 
   const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
-  const model = task === "coding" ? "deepseek-v4-flash-free" : "llama-3.3-70b-versatile";
+  const model = task === "coding" ? "deepseek-v4-flash-free" : "";
 
   // Single try with 15s timeout — fast path
   try {
