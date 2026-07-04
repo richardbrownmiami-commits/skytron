@@ -73,7 +73,7 @@ export async function callLLM(env, body, sessionId) {
         env.AI.run("@cf/zai-org/glm-4.7-flash", {
           messages: body.messages, max_tokens: 2000
         }),
-        timeoutRace(10000)
+        timeoutRace(25000)
       ]);
       waReturned = true;
       const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
@@ -88,7 +88,7 @@ export async function callLLM(env, body, sessionId) {
             env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
               messages: body.messages, max_tokens: 2000
             }),
-            timeoutRace(12000)
+            timeoutRace(30000)
           ]);
           const fbText = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
           if (fbText) { await clearWARateLimit(env.DB); return { content: fbText, model: "workers-ai/gemma-4-26b-a4b-it", tokens: { total: 0 } }; }
@@ -141,8 +141,8 @@ export async function callLLM(env, body, sessionId) {
     if (count >= 3) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('health_flags','bd_unreachable',datetime('now'))").run();
   } catch {}
 
-  // Priority 3: OpenRouter direct — last resort when both WA and BD are down
-  if (false) { // TEST: BD-only mode — re-enable: (env.OPENROUTER_API_KEY)
+  // Priority 3: OpenRouter direct — last resort when WA times out
+  if (env.OPENROUTER_API_KEY) {
     const orResult = await callOpenRouter(env, body.messages, 2000, body.model || "openrouter/free");
     if (orResult?.content) {
       if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
@@ -168,7 +168,7 @@ export async function callOpenRouter(env, messages, maxTokens = 2000, model = "o
         "X-Title": "Skytron"
       },
       body: JSON.stringify({ messages, model, max_tokens: maxTokens }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(25000)
     });
     if (resp.ok) {
       const data = await resp.json();
@@ -194,7 +194,7 @@ export async function callChatAgent(env, fullHistory, task = "chat") {
       env.AI.run("@cf/zai-org/glm-4.7-flash", {
         messages: fullHistory, max_tokens: 2000
       }),
-      timeoutRace(10000)
+      timeoutRace(25000)
     ]);
     const content = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
     if (content) return { content, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
@@ -205,7 +205,7 @@ export async function callChatAgent(env, fullHistory, task = "chat") {
       env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
         messages: fullHistory, max_tokens: 2000
       }),
-      timeoutRace(12000)
+      timeoutRace(30000)
     ]);
     const fbContent = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
     if (fbContent) return { content: fbContent, model: "workers-ai/gemma-4-26b-a4b-it", tokens: { total: 0 } };

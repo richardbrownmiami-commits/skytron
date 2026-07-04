@@ -49,7 +49,7 @@ export async function processOneStep(env, action) {
   // Skip classifyIntent — always use tools
 
   const startTime = Date.now();
-  const MAX_BATCH_MS = 25000;
+  const MAX_BATCH_MS = 60000;
   let codingModel = action.task === "coding" ? "deepseek-v4-flash-free" : "";
 
   while (!state.done && state.step < 15 && (Date.now() - startTime) < MAX_BATCH_MS) {
