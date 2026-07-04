@@ -10,7 +10,7 @@
 // CRITICAL: systemMsg assembly at ~line 250 controls what Skytron sees as its identity and instructions.
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buildSensorium, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState, logActivity } from './db';
-import { getScratchpad } from './consolidate';
+import { getScratchpad, ensureScratchpadTable } from './consolidate';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
 
@@ -64,12 +64,15 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
   }
 
   if (url.pathname === "/brain/scratchpad" && req.method === "GET") {
-    const batchId = url.searchParams.get("batch");
-    const data = await getScratchpad(env, batchId);
-    const count = data.results?.length || 0;
-    const tables = {};
-    if (data.results) for (const row of data.results) { tables[row.source_table] = (tables[row.source_table] || 0) + 1; }
-    return json({ batch_id: batchId || "latest", total_rows: count, per_table: tables, rows: data.results || [] });
+    try {
+      await ensureScratchpadTable(env);
+      const batchId = url.searchParams.get("batch");
+      const data = await getScratchpad(env, batchId);
+      const count = data.results?.length || 0;
+      const tables = {};
+      if (data.results) for (const row of data.results) { tables[row.source_table] = (tables[row.source_table] || 0) + 1; }
+      return json({ batch_id: batchId || "latest", total_rows: count, per_table: tables, rows: data.results || [] });
+    } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
   }
 
   if (url.pathname === "/cron/settings") {
