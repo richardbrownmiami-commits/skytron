@@ -27,31 +27,36 @@ export async function collectToScratchpad(env) {
   await ensureScratchpadTable(env);
   const batchId = new Date().toISOString().replace('T', ' ').slice(0, 19);
   let totalRows = 0;
+  const MAX_PER_TABLE = 20; // Collect max 20 per table per tick to stay within API limits
 
   for (const table of SOURCE_TABLES) {
     const maxKey = 'consolidate_last_' + table.name + '_id';
     const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(maxKey).first();
     const lastId = parseInt(lastIdRow?.value) || 0;
 
-    const rows = await env.DB.prepare("SELECT " + table.select + " FROM " + table.name + " WHERE id > ?1 ORDER BY id ASC").bind(lastId).all();
+    const rows = await env.DB.prepare("SELECT " + table.select + " FROM " + table.name + " WHERE id > ?1 ORDER BY id ASC LIMIT ?2").bind(lastId, MAX_PER_TABLE).all();
     if (!rows.results?.length) continue;
 
-    // Find max id in this batch
     let newMaxId = lastId;
+    const batch = [];
     for (const row of rows.results) {
       const rid = row.id || 0;
       if (rid > newMaxId) newMaxId = rid;
-      await env.DB.prepare(
+      batch.push(env.DB.prepare(
         "INSERT INTO consolidation_scratchpad (source_table, record_id, content, batch_id) VALUES (?1, ?2, ?3, ?4)"
-      ).bind(table.name, rid, JSON.stringify(row), batchId).run();
-      totalRows++;
+      ).bind(table.name, rid, JSON.stringify(row), batchId));
     }
-
-    // Update max id
-    await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(maxKey, String(newMaxId)).run();
+    try {
+      if (batch.length > 0) await env.DB.batch(batch);
+      totalRows += batch.length;
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(maxKey, String(newMaxId)).run();
+    } catch (e) {
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(maxKey, String(newMaxId)).run();
+      break;
+    }
   }
 
-  return { batchId, totalRows };
+    return { batchId, totalRows };
 }
 
 export async function getScratchpad(env, batchId = null) {
