@@ -76,48 +76,22 @@ export function describeMood(emotions, energy) {
 export async function buildSensorium(env) {
   try {
     const db = env.DB;
-    const [tickR, memR, knowR, lastActionR, lastProjectR, energyR] = await Promise.all([
-      db.prepare("SELECT value FROM identity WHERE key='tick_count'").first(),
-      db.prepare("SELECT COUNT(*) as c FROM brain_memory").first(),
-      db.prepare("SELECT COUNT(*) as c FROM brain_knowledge").first(),
-      db.prepare("SELECT id, type, status, task, created_at FROM actions ORDER BY id DESC LIMIT 1").first(),
-      db.prepare("SELECT value FROM identity WHERE key='last_idle_project'").first(),
-      db.prepare("SELECT value FROM identity WHERE key='energy'").first(),
-    ]);
-    const tick = tickR?.value || "?";
-    const memCount = memR?.c || 0;
-    const knowCount = knowR?.c || 0;
-    const energy = parseInt(energyR?.value) || 100;
-    const lastAction = lastActionR?.id ? `#${lastActionR.id} ${lastActionR.status} (${(lastActionR.task || "").slice(0, 30)})` : "none";
-    const lastProject = lastProjectR?.value || "never";
     const now = new Date().toISOString().replace("T", " ").slice(0, 19);
-    
-    let bdScores = "";
+
+    // Get last few messages from current conversation for context
+    let recentSnippet = "";
     try {
-      if (env.BRAIN_KEY) {
-        const cached = env.DB ? await env.DB.prepare("SELECT value, updated_at FROM identity WHERE key='bd_scores_cache'").first() as any : null;
-        const cacheAge = cached ? (Date.now() - new Date(cached.updated_at + "Z").getTime()) / 1000 : 999;
-        if (cached && cacheAge < 30) {
-          bdScores = cached.value;
-        } else {
-          const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/scores", {
-            headers: { Authorization: "Bearer " + env.BRAIN_KEY },
-            signal: AbortSignal.timeout(3000)
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            const top = (data.scores || []).slice(0, 3).map((s: any) => `${s.provider}:${(s.score * 100).toFixed(0)}% cap:${s.remainingCap > 0.9 ? "high" : s.remainingCap > 0.5 ? "mid" : "low"} cb:${s.openCBs}/${s.totalKeys}`).join(" ");
-            if (top) { bdScores = "\nBD providers: " + top; if (env.DB) try { await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_scores_cache',?1,datetime('now'))").bind(bdScores).run(); } catch {} }
-          }
-        }
+      const recent = await db.prepare("SELECT role, content FROM brain_memory WHERE conversation_id='default' ORDER BY id DESC LIMIT 3").all();
+      if (recent.results?.length) {
+        recentSnippet = "\nRecent conversation:\n" + recent.results.reverse().map(m => {
+          const c = m.content.replace(/\[Creator\]\s*/g, "").slice(0, 300);
+          return (m.role === "user" ? "  Creator: " : "  Skytron: ") + c;
+        }).join("\n");
       }
     } catch {}
-    
+
     return `[SENSORIUM]
-Time: ${now} UTC | Tick: #${tick}
-Energy: ${energy}% | Memory: ${memCount}msgs | Knowledge: ${knowCount}facts
-Last action: ${lastAction}
-Last idle: ${lastProject}${bdScores}`;
+Time: ${now} UTC${recentSnippet}`;
   } catch { return ""; }
 }
 

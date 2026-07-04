@@ -307,12 +307,12 @@ export async function handleScheduled(controller, env) {
 
               let summary = parts.join(" ");
               if (!summary) {
-                const allRaw = msgs.results.map(m => cleanContent(m.content)).filter(Boolean);
-                const rawTopics = extractTopics(allRaw);
-                summary = rawTopics.length ? "Discussed " + rawTopics.join(", ") + "." : "No meaningful topics extracted.";
+                const rawSamples = msgs.results.filter(m => m.role === "user" && m.content.length > 10).map(m => m.content.replace(/\[Creator\]\s*/g, "").slice(0, 200)).filter(Boolean).slice(0, 3);
+                summary = rawSamples.length ? "User said: " + rawSamples.join(" | ") : "Conversation with tool operations";
               }
 
-              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'memory_loop', 'auto')").bind("memory_loop_" + dateStr + "_" + safeConv, "Conversation: " + c.conversation_id + " | " + msgs.results.length + " messages, " + goodMsgs.length + " substantive\n" + summary).run();
+              const convLabel = c.conversation_id === "default" ? "Main" : c.conversation_id;
+              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'memory_loop', 'auto')").bind("memory_loop_" + dateStr + "_" + safeConv, convLabel + " conversation\n" + summary).run();
               convCount++;
             }
           }
