@@ -100,7 +100,7 @@ export async function buildSensorium(env) {
         if (cached && cacheAge < 30) {
           bdScores = cached.value;
         } else {
-          const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/scores", {
+          const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/scores", {
             headers: { Authorization: "Bearer " + env.BRAIN_KEY },
             signal: AbortSignal.timeout(3000)
           });

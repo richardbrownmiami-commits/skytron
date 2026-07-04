@@ -78,16 +78,15 @@ export async function callLLM(env, body, sessionId) {
     }
   }
 
-  // Priority 2: BUDDHI_DWAR gateway via standard HTTP fetch
+  // Priority 2: BUDDHI_DWAR gateway via service binding
   let bdOk = false;
-  const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
-  if (env.BRAIN_KEY) {
+  if (env.BUDDHI_DWAR) {
     try {
       const task = body.task || "chat";
       const model = body.model || (task === "coding" ? "" : "");
       const reqBody = { messages: body.messages, model, max_tokens: 3000, task };
       const timeoutMs = task === "coding" ? 30000 : 15000;
-      const resp = await fetch(BD_URL + "/v1/chat/completions", {
+      const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
         body: JSON.stringify(reqBody),
@@ -107,7 +106,7 @@ export async function callLLM(env, body, sessionId) {
         errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
       }
     } catch (e) { errors.push("BUDDHI_DWAR: " + (e.message || "timeout")); }
-  } else { errors.push("BUDDHI_DWAR: BRAIN_KEY not available"); }
+  } else { errors.push("BUDDHI_DWAR: service binding not available"); }
 
   // Track consecutive BD failures
   if (!bdOk && env.DB) try {
@@ -179,12 +178,13 @@ export async function callChatAgent(env, fullHistory, task = "chat") {
     return { ...msg, content: content.slice(0, 32000) };
   });
 
-  const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
   const model = task === "coding" ? "deepseek-v4-flash-free" : "";
+
+  if (!env.BUDDHI_DWAR) return null;
 
   // Single try with 15s timeout — fast path
   try {
-    const resp = await fetch(BD_URL + "/v1/chat/completions", {
+    const resp = await env.BUDDHI_DWAR.fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
       body: JSON.stringify({ messages: cleanedHistory, model, max_tokens: 2000, task }),
