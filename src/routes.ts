@@ -262,9 +262,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   // --- ASYNC /think — enqueue, return immediately ---
   if (url.pathname === "/think" && req.method === "POST") {
     try {
-      let input, from;
-      try { const body = await req.json(); input = body.input; from = body.from; } catch { return json({ error: "invalid JSON body" }, 400); }
+      let input, from, mode;
+      try { const body = await req.json(); input = body.input; from = body.from; mode = body.mode || "discussion"; } catch { return json({ error: "invalid JSON body" }, 400); }
       if (!input || typeof input !== "string") return json({ error: "input required" }, 400);
+      if (!["discussion", "build"].includes(mode)) mode = "discussion";
 
       const creatorMatch = input.match(/^@creator\s+(.+)/i);
       if (creatorMatch) { from = "Creator"; input = creatorMatch[1]; }
@@ -277,7 +278,8 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       const taskType = detectTaskType(input);
       const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', 'running', ?1, ?2) RETURNING id").bind(input, taskType).all();
       const aid = r.results[0].id;
-      logActivity(env.DB, "user_action", { actionId: aid, summary: "User asked: " + input.slice(0, 150), details: JSON.stringify({ from: from || "Creator", taskType, input: input.slice(0, 500) }) });
+      // Store mode in agent state for processOneStep to read
+      logActivity(env.DB, "user_action", { actionId: aid, summary: "User asked: " + input.slice(0, 150), details: JSON.stringify({ from: from || "Creator", taskType, mode, input: input.slice(0, 500) }) });
 
       let slotContent = await getPromptSlot(env.DB, taskType);
       if (!slotContent) {
@@ -342,7 +344,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         { role: "user", content: llmInput }
       ];
 
-      await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false });
+      await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false, mode });
 
       ctx.waitUntil((async () => {
         try {

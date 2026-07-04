@@ -17,14 +17,13 @@ export async function processOneStep(env, action) {
 
   if (state.done) { await finalizeAction(db, action.id, state); return; }
 
-  // === Two-tier routing: Chat Agent fast path ===
-  // Classify intent BEFORE any LLM call — zero cost, zero latency
+  // === Mode-based routing ===
+  const mode = state.mode || "discussion";
   const lastUserMsg = state.fullHistory[state.fullHistory.length - 1]?.content || "";
-  const intent = classifyIntent(lastUserMsg);
   const isCodingTask = action.task === "coding" || action.task === "research";
 
-  // Chat Agent: fast path for direct answers (no tools needed)
-  if (intent === "direct" && !isCodingTask) {
+  // DISCUSSION MODE: Force Chat Agent (no tools, fast 5-10s)
+  if (mode === "discussion") {
     const chatResp = await callChatAgent(env, state.fullHistory, action.task || "chat");
     if (chatResp?.content) {
       const cleaned = cleanseIdentity(chatResp.content);
@@ -32,13 +31,22 @@ export async function processOneStep(env, action) {
       state.modelName = chatResp.model;
       state.totalTokens += chatResp.tokens?.total || 0;
       state.done = true;
-      logActivity(db, "chat_agent", { actionId: action.id, summary: "Chat Agent (fast path) — " + (chatResp.model || "?"), details: cleaned.slice(0, 500) });
+      logActivity(db, "chat_agent", { actionId: action.id, summary: "Discussion mode — " + (chatResp.model || "?"), details: cleaned.slice(0, 500) });
       await saveAgentState(db, action.id, state);
       await finalizeAction(db, action.id, state);
       return;
     }
-    // Chat Agent failed — fall through to Tool Agent
+    // Chat Agent failed — respond with "enable build mode" message
+    state.finalContent = "I need tools for this. Enable Build mode to continue.";
+    state.done = true;
+    logActivity(db, "chat_agent", { actionId: action.id, summary: "Discussion mode — tools needed", details: "Chat Agent failed, suggesting Build mode" });
+    await saveAgentState(db, action.id, state);
+    await finalizeAction(db, action.id, state);
+    return;
   }
+
+  // BUILD MODE: Full Tool Agent (tools, multi-step, 20-60s)
+  // Skip classifyIntent — always use tools
 
   const startTime = Date.now();
   const MAX_BATCH_MS = 25000;
