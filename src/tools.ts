@@ -734,7 +734,18 @@ export const toolDefinitions = {
         }
       } catch {}
       if (!results.length) return "No results found for '" + input.query + "'. Try a different query or use learn() to store what you know first.";
-      return results.map((r, i) => (i + 1) + ". [" + r.category + "] " + r.key + " (score: " + r.score + ", " + r.method + ")\n   " + r.content.slice(0, 200)).join("\n\n");
+      // Filter journal entries unless explicitly asked
+      let filtered = results;
+      if (input.category !== "journal") {
+        filtered = results.filter(r => r.category !== "journal");
+        if (!filtered.length) { filtered = results; } // fallback to journals if nothing else
+      }
+      return filtered.map((r, i) => {
+        let c = r.content.slice(0, 200);
+        // Strip numeric journal prefixes from old entries
+        if (r.category === "journal") c = c.replace(/^Step \d+ \| Model: .+? \| Tokens: \d+ \| Last tool: \w+ \| Repeat: \d+ \| /, "");
+        return (i + 1) + ". [" + r.category + "] " + r.key + " (score: " + r.score + ", " + r.method + ")\n   " + c;
+      }).join("\n\n");
     },
   },
   memory_forget: {

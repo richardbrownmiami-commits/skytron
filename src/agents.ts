@@ -186,10 +186,8 @@ export async function finalizeAction(db, actionId, state) {
   logActivity(db, "action_done", { actionId, summary: (state.finalContent || "").slice(0, 150), details: "Step: " + state.step + " | Model: " + (state.modelName || "?") + " | Tokens: " + (state.totalTokens || 0) });
   try {
     const date = new Date().toISOString().split("T")[0];
-    const lastTool = state.lastToolCall ? state.lastToolCall.split(":")[0] : "none";
-    const summary = (state.finalContent || "").slice(0, 300).replace(/\n/g, " ");
     const key = "journal_" + date + "_" + actionId;
-    const content = "Step " + state.step + " | Model: " + (state.modelName || "?") + " | Tokens: " + (state.totalTokens || 0) + " | Last tool: " + lastTool + " | Repeat: " + (state.repeatCount || 0) + " | " + summary;
+    const content = (state.finalContent || "").slice(0, 500).replace(/\n/g, " ");
     await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'journal', 'learned')").bind(key, content.slice(0, 2000)).run();
     // Store subconscious thread for idle_explore actions — so next idle tick continues from here
     const actionType = await db.prepare("SELECT type FROM actions WHERE id=?1").bind(actionId).first().catch(() => ({}));
