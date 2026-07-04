@@ -10,6 +10,29 @@ function timeoutRace(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
 }
 
+// Retry wrapper — handles DNS throttling and transient errors
+// Cloudflare Workers get DNS throttled after ~6 rapid fetch() calls to same zone
+async function fetchWithRetry(url, opts, maxRetries = 2) {
+  let lastErr;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fetch(url, opts);
+    } catch (e) {
+      lastErr = e;
+      const msg = (e.message || "").toLowerCase();
+      const isTransient = msg.includes("dns") || msg.includes("resolve") || msg.includes("enotfound")
+        || msg.includes("fetch failed") || msg.includes("network") || msg.includes("timeout")
+        || msg.includes("abort") || msg.includes("1042");
+      if (isTransient && attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
 async function isWARateLimited(db) {
   if (!db) return false;
   try {
@@ -87,12 +110,12 @@ export async function callLLM(env, body, sessionId) {
       const model = body.model || (task === "coding" ? "" : "");
       const reqBody = { messages: body.messages, model, max_tokens: 3000, task };
       const timeoutMs = task === "coding" ? 30000 : 15000;
-      const resp = await fetch(BD_URL + "/v1/chat/completions", {
+      const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
         body: JSON.stringify(reqBody),
         signal: AbortSignal.timeout(timeoutMs)
-      });
+      }, 2);
       if (resp.ok) {
         const data = await resp.json();
         const msgContent = data.choices?.[0]?.message?.content;
@@ -184,12 +207,12 @@ export async function callChatAgent(env, fullHistory, task = "chat") {
 
   // Single try with 15s timeout — fast path
   try {
-    const resp = await fetch(BD_URL + "/v1/chat/completions", {
+    const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
       body: JSON.stringify({ messages: cleanedHistory, model, max_tokens: 2000, task }),
       signal: AbortSignal.timeout(15000)
-    });
+    }, 2);
     if (resp.ok) {
       const data = await resp.json();
       const msgContent = data.choices?.[0]?.message?.content;
