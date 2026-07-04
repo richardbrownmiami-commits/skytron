@@ -10,7 +10,7 @@
 // CRITICAL: systemMsg assembly at ~line 250 controls what Skytron sees as its identity and instructions.
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buildSensorium, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState, logActivity } from './db';
-import { getScratchpad, ensureScratchpadTable } from './consolidate';
+import { getScratchpad, ensureScratchpadTable, collectToScratchpad } from './consolidate';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
 
@@ -73,6 +73,14 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       if (data.results) for (const row of data.results) { tables[row.source_table] = (tables[row.source_table] || 0) + 1; }
       return json({ batch_id: batchId || "latest", total_rows: count, per_table: tables, rows: data.results || [] });
     } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
+  }
+
+  // --- Manual collect trigger for testing ---
+  if (url.pathname === "/brain/scratchpad/collect" && req.method === "POST") {
+    try {
+      const result = await collectToScratchpad(env);
+      return json({ collected: true, batch_id: result.batchId, total_rows: result.totalRows });
+    } catch (e) { return json({ error: e.message }, 500); }
   }
 
   if (url.pathname === "/cron/settings") {
