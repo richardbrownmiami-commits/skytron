@@ -65,8 +65,8 @@ export async function callLLM(env, body, sessionId) {
   const errors = [];
   const waLimited = await isWARateLimited(env.DB);
 
-  // Priority 1: Workers AI — skip if rate limited today
-  if (false) { // TEST: BD-only mode — re-enable: (!waLimited && env.AI)
+  // Priority 1: Workers AI
+  if (!waLimited && env.AI) {
     let waReturned = false;
     try {
       const waResult = await Promise.race([
@@ -102,10 +102,10 @@ export async function callLLM(env, body, sessionId) {
     }
   }
 
-  // Priority 2: BUDDHI_DWAR gateway via public fetch
+  // Priority 2: BUDDHI_DWAR gateway via public fetch (disabled — WA only mode)
   let bdOk = false;
   const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
-  if (env.BRAIN_KEY) {
+  if (false && env.BRAIN_KEY) {
     try {
       const task = body.task || "chat";
       const model = body.model || (task === "coding" ? "" : "");

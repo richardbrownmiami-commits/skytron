@@ -1,8 +1,8 @@
 const DEFAULTS = {
   apiKey: 'Saraha-Brain-Key',
-  gatewayUrl: 'https://buddhi-dwar.richard-brown-miami.workers.dev',
+  gatewayUrl: 'https://saraha-brain.richard-brown-miami.workers.dev',
   brainUrl: 'https://saraha-brain.richard-brown-miami.workers.dev',
-  model: 'llama-3.3-70b-versatile',
+  model: '@cf/zai-org/glm-4.7-flash',
   temperature: 0.7,
   maxTokens: 4096,
   stream: true,

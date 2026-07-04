@@ -259,6 +259,35 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     try { await ensureVectorizeIndex(env); await indexAllKnowledge(env, env.DB); return json({ ok: true, indexed: true }); } catch (e) { return json({ error: e.message }, 500); }
   }
 
+  // --- OpenAI-compatible /v1/chat/completions proxy (Workers AI only) ---
+  if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
+    try {
+      const body = await req.json();
+      const messages = body.messages || [];
+      if (!messages.length) return json({ error: "messages required" }, 400);
+      const model = body.model || "@cf/zai-org/glm-4.7-flash";
+      const maxTokens = body.max_tokens || 2000;
+      const stream = body.stream || false;
+      if (stream) return json({ error: "streaming not supported" }, 400);
+      let result;
+      if (env.AI) {
+        result = await env.AI.run(model, { messages, max_tokens: maxTokens });
+      } else {
+        return json({ error: "AI binding not configured" }, 500);
+      }
+      const content = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
+      if (!content) return json({ error: "empty response from Workers AI" }, 502);
+      return json({
+        id: "chatcmpl-" + Date.now(),
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: "workers-ai/glm-4.7-flash",
+        choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total: 0 }
+      });
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
   // --- ASYNC /think — enqueue, return immediately ---
   if (url.pathname === "/think" && req.method === "POST") {
     try {

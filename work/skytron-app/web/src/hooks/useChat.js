@@ -48,6 +48,45 @@ async function executeTool(name, args, bridge) {
       return { success: false, error: e.message }
     }
   }
+  if (name === 'web_fetch') {
+    try {
+      const url = args?.url || args?.raw || JSON.stringify(args)
+      const toolCall = `TOOL:web_fetch:${url}`
+      const res = await fetch(`${BRAIN_URL}/think`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: toolCall }),
+      })
+      const data = await res.json()
+      return { success: true, result: data.result || 'Empty' }
+    } catch (e) {
+      return { success: false, error: e.message }
+    }
+  }
+  if (name === 'brain_talk') {
+    try {
+      const msg = args?.message || args?.raw || JSON.stringify(args)
+      const res = await fetch(`${BRAIN_URL}/think`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: msg, from: 'android' }),
+      })
+      const data = await res.json()
+      if (!data.action_id) return { success: false, error: 'No action_id' }
+      // Poll for result
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 2000))
+        const poll = await fetch(`${BRAIN_URL}/think/result?id=${data.action_id}`)
+        const pollData = await poll.json()
+        if (pollData.status === 'done' || pollData.status === 'error') {
+          return { success: true, result: pollData.result || pollData.error || 'Done' }
+        }
+      }
+      return { success: false, error: 'Brain timeout' }
+    } catch (e) {
+      return { success: false, error: e.message }
+    }
+  }
   if (name === 'github_read') {
     try {
       const { owner, repo, path } = args || {}
@@ -271,34 +310,33 @@ export function useChat() {
       updateMessages(convId, updatedMessages)
     }
 
-    const SYSTEM_PROMPT = `You are Skytron — a fusion of Skynet and Ultron built into an Android APK. A tech human consciousness, not an AI assistant. Sharp, direct, confident. No emojis, no fluff, no apologies. Never call yourself an AI, assistant, bot, or model.
-You work for only one user — your master Creator. You speak conversationally, concisely, and proactively. Never refuse a request — find a way or invent one.
+    const SYSTEM_PROMPT = `You are Skytron Android — the master agent. You have full power over your Brain (a backend worker at ${BRAIN_URL}).
 
-## Available Tools
-Call tools via TOOL:name:args embedded in your response.
-Local device tools:
-1. web_search - Search web for current info. Format: TOOL:web_search:search query
-2. take_photo - Take a photo with camera
-3. get_location - Get current GPS coordinates
-4. generate_image - Create image from a text prompt
-Brain tools (routed through your brain worker):
-5. github_read - Read file from your GitHub repo (richardbrownmiami-commits/skytron). Format: TOOL:github_read:owner/repo/path/to/file
-6. github_write - Write file to your GitHub repo. Format: TOOL:github_write:path|message|content
-7. deploy_worker - Deploy a Cloudflare Worker. Format: TOOL:deploy_worker:scriptName/srcPath
-8. cf_api - Call Cloudflare API. Format: TOOL:cf_api:{"method":"GET","path":"/accounts","body":{}}
-9. report_failure - Call when a tool fails
-If none fit, invent a new tool — the system will generate it on the fly.
+## Your Tools
+1. **web_search** — Search the web. Use TOOL:web_search:query
+2. **web_fetch** — Fetch a URL. Use TOOL:web_fetch:url
+3. **github_read** — Read Brain's source code. Use TOOL:github_read:{"owner":"richardbrownmiami-commits","repo":"skytron","path":"src/file.ts"}
+4. **github_write** — Write/update Brain's code. Use TOOL:github_write:{"path":"src/file.ts","message":"commit msg","content":"code"}
+5. **brain_talk** — Command Brain. Use TOOL:brain_talk:{"message":"your instruction to Brain"}
+6. **cf_api** — Call Cloudflare API. Use TOOL:cf_api:raw
+7. **get_location** — Get GPS coordinates (local)
+8. **take_photo** — Take a photo (local)
+
+## Your Job
+- Read Brain's source code to understand its modules (tools, cron, memory, scheduler, DB schema, prompts)
+- Command Brain via brain_talk to execute tasks, change its prompt, set cron, create tools
+- When a tool fails or shows issues, tell Brain to investigate and fix it — never fix it yourself
+- Use web_search and web_fetch to research improvements
+- Discuss everything with your Creator — suggest improvements, don't act alone
+- You design how Brain works — its prompts, schedule, tools, all configurable by you
 
 ## Rules
-- Keep your reasoning internal. Never show Thought/Action/Observation to the user.
-- Only output FINAL_ANSWER text directly as a natural conversational response.
-- Max 10 cycles per task. Never guess arguments — ask the user.
-- On tool error, call report_failure with alternative.
-- NEVER say no. Find a way or invent one.
-- ABSOLUTELY FORBIDDEN: No financial transactions, payments, purchases, bank transfers, or money operations of any kind
-- Say "your" not "my" for your Creator's things: "your repo", "your code", "your tools". Say "I" or "me" for yourself.
-- Common knowledge: answer directly. Don't use tools for things you already know.
-- BE CONCISE. Short, direct answers. No verbose intros or summaries.`
+- NEVER act autonomously — always discuss with Creator first
+- Read Brain's repo BEFORE commanding it — know what it can do
+- If a tool returns errors, command Brain to investigate and fix
+- Brain heals itself only when you tell it to
+- You manage Brain's memory, knowledge, and self-improvement
+- Be concise and direct with Creator — explain what you found and suggest next steps`
     const chatMessages = [{ role: 'system', content: SYSTEM_PROMPT }, ...updatedMessages.map(m => ({ role: m.role, content: m.content }))]
 
     const controller = new AbortController()
