@@ -17,6 +17,7 @@ export async function initSchema(db, env) {
     const oldTables = ['proposals','authority_receipts','anti_patterns','goals','subagents','thought_stream','emotion_reflection','identity_index','token_usage','pending_approvals','learnings','memories'];
     for (const t of oldTables) { try { await db.exec("DROP TABLE IF EXISTS " + t); } catch {} }
     for (const s of TABLES) { await db.exec(s); }
+    try { await db.exec("CREATE TABLE IF NOT EXISTS consolidation_scratchpad (id INTEGER PRIMARY KEY AUTOINCREMENT, source_table TEXT NOT NULL, record_id INTEGER, content TEXT NOT NULL, collected_at TEXT DEFAULT (datetime('now')), batch_id TEXT NOT NULL)"); } catch {}
     try { await db.exec("ALTER TABLE actions ADD COLUMN task TEXT DEFAULT 'chat'"); } catch {}
     await db.exec("DELETE FROM brain_knowledge WHERE source='seed'");
     for (const item of SEED_KNOWLEDGE) { try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'seed')").bind(item.k, item.c, item.cat).run(); } catch {} }

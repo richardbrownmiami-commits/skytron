@@ -62,6 +62,16 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     return json({ query: q, results: r.results || [] });
   }
 
+  if (url.pathname === "/brain/scratchpad" && req.method === "GET") {
+    const { getScratchpad } = await import('./consolidate');
+    const batchId = url.searchParams.get("batch");
+    const data = await getScratchpad(env, batchId);
+    const count = data.results?.length || 0;
+    const tables = {};
+    if (data.results) for (const row of data.results) { tables[row.source_table] = (tables[row.source_table] || 0) + 1; }
+    return json({ batch_id: batchId || "latest", total_rows: count, per_table: tables, rows: data.results || [] });
+  }
+
   if (url.pathname === "/cron/settings") {
     if (req.method === "POST") {
       let body; try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }

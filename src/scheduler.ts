@@ -139,6 +139,13 @@ export async function handleScheduled(controller, env) {
     logActivity(db, "scheduler_tick", { summary: "Tick #" + tickCount });
   } catch { tickCount = 1; }
 
+  // --- Consolidation: collect new data to scratchpad (every tick) ---
+  try {
+    const { collectToScratchpad } = await import('./consolidate');
+    const result = await collectToScratchpad(env);
+    if (result.totalRows > 0) logActivity(db, "consolidation_collect", { summary: "Collected " + result.totalRows + " new records to scratchpad (batch: " + result.batchId + ")" });
+  } catch (e) { console.error("consolidation collect error:", e); }
+
   // --- Maintenance Cycle (every 60 ticks = ~2 hours) ---
   // Replaces the old idle LLM cycle that ran every 60 seconds.
   // Instead of polling the LLM for busywork, this runs deterministic
