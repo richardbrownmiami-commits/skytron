@@ -375,22 +375,26 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false, mode });
 
-      ctx.waitUntil((async () => {
-        try {
-          await processOneStep(env, { id: aid });
-        } catch (e) { console.error("background /think processing error:", e); }
-        try {
-          const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 3").all();
-          for (const agent of (ar.results || [])) {
-            try { await processOneAgentStep(env, agent); } catch (e2) { console.error("post-action agent error:", e2); }
-          }
-        } catch (e3) { console.error("post-action agent query error:", e3); }
-      })());
-
       return json({ action_id: aid, status: "queued", message: "Request queued. Poll /think/result?id=" + aid + " for result." });
     } catch (e) {
       return json({ error: e.message }, 500);
     }
+  }
+
+  // --- /think/process — manually process the next queued/running action (step-by-step, one batch at a time) ---
+  if (url.pathname === "/think/process" && req.method === "POST") {
+    try {
+      // Re-queue stale running actions (stuck for > 1 minute)
+      await env.DB.prepare("UPDATE actions SET status='queued' WHERE status='running' AND created_at < datetime('now', '-1 minute') AND id NOT IN (SELECT action_id FROM brain_memory WHERE created_at > datetime('now', '-1 minute'))").run();
+      // Grab the next queued action
+      await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run();
+      const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
+      if (q.results?.length) {
+        await processOneStep(env, q.results[0]);
+        return json({ processed: true, action_id: q.results[0].id, status: "batch_complete" });
+      }
+      return json({ processed: false, message: "no queued actions" });
+    } catch (e) { return json({ error: e.message }, 500); }
   }
 
   if (url.pathname === "/__cron" && req.method === "GET") {
