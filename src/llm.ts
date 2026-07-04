@@ -185,42 +185,24 @@ export async function callOpenRouter(env, messages, maxTokens = 2000, model = "o
 }
 
 // === Chat Agent ===
-// Simple one-shot LLM call with NO tools in the prompt.
-// Used by classifyIntent when no tools are needed — fast path (~5s).
-// Strips tool definitions from system message to prevent tool hallucination.
+// Simple one-shot LLM call using Workers AI (no tool context).
+// Used by the agent loop fast path.
 export async function callChatAgent(env, fullHistory, task = "chat") {
-  // Remove tool definitions from system message to prevent tool calls
-  const cleanedHistory = fullHistory.map((msg, i) => {
-    if (i !== 0 || msg.role !== "system") return msg;
-    let content = msg.content;
-    // Strip tool descriptions, JSON examples, and tool-related instructions
-    content = content.replace(/\n## Available Tools[\s\S]*?(?=\n# |\n## [A-Z]|\n\nCRITICAL|\n# NOW RESPOND)/gi, "");
-    content = content.replace(/\nTool call format[\s\S]*?(?=\n# |\n## [A-Z]|\n\nCRITICAL|\n# NOW RESPOND)/gi, "");
-    content = content.replace(/\nJSON tool call[\s\S]*?(?=\n# |\n## [A-Z]|\n\nCRITICAL|\n# NOW RESPOND)/gi, "");
-    content = content.replace(/Output tool calls as JSON[\s\S]{0,200}/gi, "");
-    content = content.replace(/CRITICAL: You must[\s\S]{0,500}/gi, "CRITICAL: Answer directly in plain text. No tools available.");
-    content = content.replace(/Tool:[\w_]+\([\s\S]{0,100}\)/g, "");
-    return { ...msg, content: content.slice(0, 32000) };
-  });
-
-  const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
-  const model = task === "coding" ? "deepseek-v4-flash-free" : "";
-
-  // Single try with 15s timeout — fast path
+  if (!env.AI) return null;
   try {
-    const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
-      body: JSON.stringify({ messages: cleanedHistory, model, max_tokens: 2000, task }),
-      signal: AbortSignal.timeout(15000)
-    }, 2);
-    if (resp.ok) {
-      const data = await resp.json();
-      const msgContent = data.choices?.[0]?.message?.content;
-      if (typeof msgContent === "string" && msgContent.length > 0) {
-        return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 } };
-      }
-    }
+    const result = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
+      messages: fullHistory, max_tokens: 2000
+    });
+    const content = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
+    if (content) return { content, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
+  } catch {}
+  // Try fallback on timeout
+  try {
+    const fallback = await env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
+      messages: fullHistory, max_tokens: 2000
+    });
+    const fbContent = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
+    if (fbContent) return { content: fbContent, model: "workers-ai/gemma-4-26b-a4b-it", tokens: { total: 0 } };
   } catch {}
   return null;
 }
