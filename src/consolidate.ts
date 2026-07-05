@@ -129,28 +129,9 @@ function extractEvents(rows) {
     }
   }
 
-  // Sort by date then id
+  // Sort by date then id, keep last 20
   events.sort((a, b) => (a.sortKey || a.date).localeCompare(b.sortKey || b.date));
-
-  // Keep last 15, merge same-date same-status into one line
-  const recent = events.slice(-15);
-  const merged = [];
-  const groups = {};
-  for (const e of recent) {
-    const key = e.date + "|" + e.status;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(e);
-  }
-  for (const key of Object.keys(groups).sort()) {
-    const list = groups[key];
-    const e = list[0];
-    const topics = list.map(x => x.topic);
-    // If 3+ similar items on same date, summarize
-    const topic = topics.length > 2 ? topics[0] + " (+" + (topics.length - 1) + " more)" : topics.join("; ");
-    merged.push({ date: e.date, topic: topic.slice(0, 90), status: e.status, details: e.details });
-  }
-
-  return merged;
+  return events.slice(-20);
 }
 
 // Build memory pack from scratchpad — deterministic, no LLM
