@@ -189,9 +189,9 @@ export async function buildMemoryPack(env) {
   const content = lines.join("\n");
 
   try {
-    await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('memory_pack_auto', ?1, 'memory_pack', 'learned')").bind(content).run();
-    try { await env.DB.prepare("INSERT OR REPLACE INTO knowledge_fts (key, content, category) VALUES ('memory_pack_auto', ?1, 'memory_pack')").bind(content).run(); } catch {}
-    return { ok: true, key_used: "memory_pack_auto", events: events.length, chars: content.length, preview: content.slice(0, 200) };
+    await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('memory_pack_main', ?1, 'memory_pack', 'learned')").bind(content).run();
+    try { await env.DB.prepare("INSERT OR REPLACE INTO knowledge_fts (key, content, category) VALUES ('memory_pack_main', ?1, 'memory_pack')").bind(content).run(); } catch {}
+    return { ok: true, events: events.length, chars: content.length, preview: content.slice(0, 200) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
