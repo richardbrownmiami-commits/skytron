@@ -697,12 +697,14 @@ h1{color:#58a6ff;margin-bottom:4px;font-size:20px}
 #loading{color:#8b949e;text-align:center;padding:40px;font-size:14px}
 .refresh{float:right;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer}
 .refresh:hover{background:#30363d}
+.btn{background:#238636;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;float:right;margin-left:6px}
+.btn:hover{background:#2ea043}
 .count{color:#8b949e;font-size:12px;margin-left:8px}
 </style>
 </head>
 <body>
 <h1>Brain Scratchpad</h1>
-<p class="sub">All collected D1 data grouped by table — <span id="totalRows">0</span> total rows <button class="refresh" onclick="location.reload()">Refresh</button></p>
+<p class="sub">All collected D1 data grouped by table — <span id="totalRows">0</span> total rows <button class="btn" onclick="location.href='?export=json'">Download JSON</button> <button class="btn" onclick="location.reload()">Refresh</button></p>
 <div id="app"><div id="loading">Loading scratchpad data...</div></div>
 <script>
 (async()=>{
