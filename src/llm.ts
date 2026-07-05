@@ -109,9 +109,10 @@ export async function callLLM(env, body, sessionId) {
   if (env.BRAIN_KEY) {
     try {
       const task = body.task || "chat";
-      const model = body.model || (task === "coding" ? "" : "");
-      const reqBody = { messages: body.messages, model, max_tokens: 3000, task };
-      const timeoutMs = task === "coding" ? 30000 : 15000;
+      // Use requested model, or default to gemini-2.5-flash (Google — less rate-limited than Groq)
+      const model = body.model || "gemini-2.5-flash";
+      const reqBody = { messages: body.messages, model, max_tokens: body.max_tokens || 3000, task };
+      const timeoutMs = Math.max(30000, (body.max_tokens || 3000) * 8);
       const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
