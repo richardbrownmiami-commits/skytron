@@ -10,7 +10,7 @@
 // CRITICAL: systemMsg assembly at ~line 250 controls what Skytron sees as its identity and instructions.
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buildSensorium, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState, logActivity } from './db';
-import { getScratchpad, ensureScratchpadTable, collectToScratchpad, cleanScratchpad, getCleaned, clearCleaned } from './consolidate';
+import { getScratchpad, ensureScratchpadTable, collectToScratchpad } from './consolidate';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
 
@@ -114,34 +114,6 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     try {
       const result = await collectToScratchpad(env);
       return json({ collected: true, batch_id: result.batchId, total_rows: result.totalRows });
-    } catch (e) { return json({ error: e.message }, 500); }
-  }
-
-  // --- Clean scratchpad (Phase 2) ---
-  if (url.pathname === "/brain/scratchpad/clean" && req.method === "POST") {
-    try {
-      const result = await cleanScratchpad(env);
-      return json({ cleaned: true, ...result });
-    } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
-  }
-
-  // --- View cleaned data ---
-  if (url.pathname === "/brain/scratchpad/cleaned" && req.method === "GET") {
-    try {
-      const classification = url.searchParams.get("type");
-      const data = await getCleaned(env, classification);
-      const count = data.results?.length || 0;
-      const clsCounts = {};
-      if (data.results) for (const row of data.results) { clsCounts[row.classification] = (clsCounts[row.classification] || 0) + 1; }
-      return json({ classification: classification || "all", total_rows: count, classifications: clsCounts, rows: data.results || [] });
-    } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
-  }
-
-  // --- Clear cleaned data ---
-  if (url.pathname === "/brain/scratchpad/cleared" && req.method === "POST") {
-    try {
-      await clearCleaned(env);
-      return json({ cleared: true });
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
