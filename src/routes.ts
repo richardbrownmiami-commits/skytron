@@ -70,6 +70,18 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     if (accept.includes("text/html")) {
       return new Response(SCRATCHPAD_UI_HTML, { headers: { "content-type": "text/html;charset=utf-8" } });
     }
+    // JSON export if ?export=json
+    if (url.searchParams.get("export") === "json") {
+      try {
+        await ensureScratchpadTable(env);
+        const data = await getScratchpad(env, null);
+        const exportData = { exported_at: new Date().toISOString(), total_rows: data.results?.length || 0, rows: data.results || [] };
+        const body = JSON.stringify(exportData);
+        return new Response(body, {
+          headers: { "content-type": "application/json", "content-disposition": "attachment; filename=scratchpad-export.json" }
+        });
+      } catch (e) { return json({ error: e.message }, 500); }
+    }
     try {
       await ensureScratchpadTable(env);
       const batchId = url.searchParams.get("batch") || null;
