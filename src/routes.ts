@@ -135,27 +135,27 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       for (const [table, rows] of Object.entries(tableRows)) {
         const sample = [];
         const len = rows.length;
-        if (len <= 30) { sample.push(...rows); }
+        if (len <= 20) { sample.push(...rows); }
         else {
-          // Take first 15 + last 15 for coverage
-          sample.push(...rows.slice(0, 15));
-          sample.push(...rows.slice(len - 15));
+          sample.push(...rows.slice(0, 10));
+          sample.push(...rows.slice(Math.floor(len / 2) - 5, Math.floor(len / 2) + 5));
+          sample.push(...rows.slice(len - 10));
         }
         groups[table] = [];
         for (const row of sample) {
-          if (groups[table].length >= 30) break;
+          if (groups[table].length >= 25) break;
           let c;
           try { c = JSON.parse(row.content); } catch { c = {}; }
           const ts = (c.created_at || c.updated_at || row.collected_at || "").replace("T", " ").slice(0, 16);
           let text = "";
           if (table === "brain_memory") text = "[" + c.role + "] " + (c.content || "");
-          else if (table === "actions") text = (c.input || c.result || c.error || "empty").slice(0, 150);
+          else if (table === "actions") text = (c.input || c.result || c.error || "empty").slice(0, 80);
           else if (table === "activity_log") text = c.summary || "";
-          else if (table === "brain_knowledge") text = "[" + (c.category || c.source) + "] " + (c.content || "").slice(0, 150);
-          else if (table === "identity") text = c.key + " = " + (c.value || "").slice(0, 80);
+          else if (table === "brain_knowledge") text = "[" + (c.category || c.source) + "] " + (c.content || "").slice(0, 100);
+          else if (table === "identity") text = c.key + " = " + (c.value || "").slice(0, 60);
           else if (table === "brain_vectors") text = c.ref_key || "";
-          else if (table === "brain_agents") text = (c.instruction || c.result || "").slice(0, 150);
-          else text = JSON.stringify(c).slice(0, 150);
+          else if (table === "brain_agents") text = (c.instruction || c.result || "").slice(0, 100);
+          else text = JSON.stringify(c).slice(0, 100);
           groups[table].push(ts + " " + text);
         }
       }
@@ -184,7 +184,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
         "- One-word answers, '[Reached max steps]', connection errors to LLM providers\n\n" +
         condensed + "\n\n---\nWrite the detailed narrative summary now. Full paragraphs, organized by date/topic:";
 
-      const result = await callLLM(env, { messages: [{ role: "user", content: prompt }], max_tokens: 2000 });
+      const result = await callLLM(env, { messages: [{ role: "user", content: prompt }], max_tokens: 1000 });
       return json({ summary: result.content, model: result.model, rows_sampled: raw.results.length, errors: result.errors });
     } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
   }
