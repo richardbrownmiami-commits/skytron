@@ -6,6 +6,7 @@ import BrainPage from './pages/BrainPage'
 import MonitorPage from './pages/MonitorPage'
 import PromptPage from './pages/PromptPage'
 import SettingsPage from './pages/SettingsPage'
+import JournalPage from './pages/JournalPage'
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/brain" element={<BrainPage />} />
           <Route path="/monitor" element={<MonitorPage />} />
           <Route path="/prompt" element={<PromptPage />} />
+          <Route path="/journal" element={<JournalPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
