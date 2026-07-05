@@ -65,12 +65,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
   }
 
   if (url.pathname === "/brain/scratchpad" && req.method === "GET") {
-    // Serve HTML UI if client accepts HTML
-    const accept = req.headers.get("accept") || "";
-    if (accept.includes("text/html")) {
-      return new Response(SCRATCHPAD_UI_HTML, { headers: { "content-type": "text/html;charset=utf-8" } });
-    }
-    // JSON export if ?export=json
+    // JSON export if ?export=json (check before HTML so browsers can download)
     if (url.searchParams.get("export") === "json") {
       try {
         await ensureScratchpadTable(env);
@@ -81,6 +76,11 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
           headers: { "content-type": "application/json", "content-disposition": "attachment; filename=scratchpad-export.json" }
         });
       } catch (e) { return json({ error: e.message }, 500); }
+    }
+    // Serve HTML UI if client accepts HTML
+    const accept = req.headers.get("accept") || "";
+    if (accept.includes("text/html")) {
+      return new Response(SCRATCHPAD_UI_HTML, { headers: { "content-type": "text/html;charset=utf-8" } });
     }
     try {
       await ensureScratchpadTable(env);
