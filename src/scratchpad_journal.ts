@@ -354,18 +354,6 @@ function inferNextTopic(group: NormalizedEvent[], allEvents: NormalizedEvent[]):
   return undefined;
 }
 
-function buildJournalSummary(input: { date: string; topic: string; status: string; whatHappened: string; completed?: string; unfinished?: string; incidents?: string[]; nextTopic?: string }): string {
-  const parts: string[] = [
-    `On ${input.date}, we worked on ${humanizeTopic(input.topic)}.`,
-    input.whatHappened
-  ];
-  if (input.completed) parts.push(`Completed: ${input.completed}.`);
-  if (input.unfinished) parts.push(`Unfinished / uncertain: ${input.unfinished}.`);
-  if (input.nextTopic) parts.push(`After that, we moved to ${humanizeTopic(input.nextTopic)}.`);
-  parts.push(`Current memory status: ${input.status}.`);
-  return parts.join(" ");
-}
-
 export function buildJournalEntries(events: NormalizedEvent[]): JournalEntry[] {
   const groups = new Map<string, NormalizedEvent[]>();
   for (const e of events) {
