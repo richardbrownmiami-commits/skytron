@@ -130,20 +130,11 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
-  // --- LLM provider test (parallel, quick) ---
+  // --- Quick LLM provider test ---
   if (url.pathname === "/brain/llmtest" && req.method === "GET") {
-    const models = [
-      "deepseek-v4-flash-free", "nemotron-3-ultra-free",
-      "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
-      "gemini-2.5-flash", "gemini-1.5-flash",
-      "mistral-small-latest",
-      "llama-3.3-70b-versatile", "mixtral-8x7b-32768"
-    ];
-    const results = await Promise.all(models.map(async (model) => {
-      const r = await callLLM(env, { messages: [{ role: "user", content: "hi" }], max_tokens: 5, model, task: "test" });
-      return { model, status: r.content ? "OK" : (r.errors?.[0]?.slice(0, 40) || "fail") };
-    }));
-    return json({ results });
+    const model = url.searchParams.get("model") || "gemini-2.5-flash";
+    const r = await callLLM(env, { messages: [{ role: "user", content: "reply exactly: ok" }], max_tokens: 5, model, task: "test" });
+    return json({ model, status: r.content === "ok" ? "OK" : (r.errors?.[0]?.slice(0, 60) || "no content"), content: r.content });
   }
   if (url.pathname === "/brain/scratchpad/summarize" && req.method === "POST") {
     try {
