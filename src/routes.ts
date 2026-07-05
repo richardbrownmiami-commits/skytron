@@ -11,6 +11,7 @@
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buildSensorium, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState, logActivity } from './db';
 import { getScratchpad, ensureScratchpadTable, collectToScratchpad } from './consolidate';
+import { buildScratchpadJournal } from './scratchpad_journal';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
 import { callLLM } from './llm';
@@ -128,6 +129,20 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     try {
       const result = await collectToScratchpad(env);
       return json({ collected: true, batch_id: result.batchId, total_rows: result.totalRows });
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
+  if (url.pathname === "/brain/scratchpad/journal" && req.method === "POST") {
+    try {
+      const result = await buildScratchpadJournal(env);
+      return json(result);
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
+  if (url.pathname === "/brain/journal" && req.method === "GET") {
+    try {
+      const r = await env.DB.prepare("SELECT key, content, updated_at FROM brain_knowledge WHERE category='journal' ORDER BY updated_at DESC LIMIT 200").all();
+      return json({ entries: r.results || [] });
     } catch (e) { return json({ error: e.message }, 500); }
   }
 

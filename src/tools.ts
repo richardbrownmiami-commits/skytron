@@ -11,6 +11,7 @@
 import { z } from "zod";
 import { CF_AI } from './constants';
 import { embedText, indexKnowledgeForSearch, searchKnowledge, storeVector, searchVectors, warmVectorCache, logActivity } from './db';
+import { buildScratchpadJournal } from './scratchpad_journal';
 
 async function tavilySearch(apiKey, query) {
   try {
@@ -706,6 +707,14 @@ export const toolDefinitions = {
         return "Agent '" + a.name + "' (ID " + input.id + ") failed: " + (a.result || "unknown error");
       }
       return "Agent '" + a.name + "' (ID " + input.id + ") completed. Result: " + (a.result || "(empty)").slice(0, 2000);
+    },
+  },
+  scratchpad_to_journal: {
+    description: "Read the consolidation scratchpad, dedupe rows, convert them into chronological journal entries grouped by topic/day, and save them into brain_knowledge as journal entries. After running, Skytron can read those journal entries to recall what happened, what was completed, and what was left unfinished. No parameters needed — call it as scratchpad_to_journal({}).",
+    schema: z.object({}),
+    execute: async (env) => {
+      const result = await buildScratchpadJournal(env);
+      return JSON.stringify(result);
     },
   },
   memory_search: {
