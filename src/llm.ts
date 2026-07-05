@@ -103,10 +103,10 @@ export async function callLLM(env, body, sessionId) {
     }
   }
 
-  // Priority 2: BUDDHI_DWAR gateway via public fetch (disabled — WA only mode)
+  // Priority 2: BUDDHI_DWAR gateway via public fetch
   let bdOk = false;
   const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
-  if (false && env.BRAIN_KEY) {
+  if (env.BRAIN_KEY) {
     try {
       const task = body.task || "chat";
       const model = body.model || (task === "coding" ? "" : "");
