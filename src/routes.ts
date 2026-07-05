@@ -10,7 +10,7 @@
 // CRITICAL: systemMsg assembly at ~line 250 controls what Skytron sees as its identity and instructions.
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buildSensorium, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState, logActivity } from './db';
-import { getScratchpad, ensureScratchpadTable, collectToScratchpad, buildMemoryPack } from './consolidate';
+import { getScratchpad, ensureScratchpadTable, collectToScratchpad } from './consolidate';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
 import { callLLM } from './llm';
@@ -128,13 +128,6 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     try {
       const result = await collectToScratchpad(env);
       return json({ collected: true, batch_id: result.batchId, total_rows: result.totalRows });
-    } catch (e) { return json({ error: e.message }, 500); }
-  }
-
-  if (url.pathname === "/brain/scratchpad/build" && req.method === "POST") {
-    try {
-      const result = await buildMemoryPack(env);
-      return json(result);
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
