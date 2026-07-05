@@ -292,7 +292,7 @@ export async function saveJournalToKnowledge(env: any, entries: JournalEntry[]) 
   for (const entry of entries) {
     const key = `journal_${entry.date_start.slice(0, 10)}_${entry.topic}`;
     stmts.push(env.DB.prepare(
-      "INSERT OR REPLACE INTO brain_knowledge (key, category, content, created_at, updated_at) VALUES (?1, 'journal', ?2, datetime('now'), datetime('now'))"
+      "INSERT OR REPLACE INTO brain_knowledge (key, category, content) VALUES (?1, 'journal', ?2)"
     ).bind(key, JSON.stringify(entry)));
   }
   if (stmts.length) await env.DB.batch(stmts);

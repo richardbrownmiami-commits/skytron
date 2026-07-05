@@ -141,7 +141,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
 
   if (url.pathname === "/brain/journal" && req.method === "GET") {
     try {
-      const r = await env.DB.prepare("SELECT key, content, updated_at FROM brain_knowledge WHERE category='journal' ORDER BY updated_at DESC LIMIT 200").all();
+      const r = await env.DB.prepare("SELECT key, content, created_at FROM brain_knowledge WHERE category='journal' ORDER BY created_at DESC LIMIT 200").all();
       return json({ entries: r.results || [] });
     } catch (e) { return json({ error: e.message }, 500); }
   }
