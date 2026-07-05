@@ -210,7 +210,8 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
         "- One-word answers, '[Reached max steps]', connection errors to LLM providers\n\n" +
         condensed + "\n\n---\nWrite the detailed narrative summary now. Full paragraphs, organized by date/topic:";
 
-      const result = await callLLM(env, { messages: [{ role: "user", content: prompt }], max_tokens: 3000, model: "gemini-2.5-flash", task: "summarize" });
+      const model = url.searchParams.get("model") || "gemini-2.5-flash";
+      const result = await callLLM(env, { messages: [{ role: "user", content: prompt }], max_tokens: 3000, model, task: "summarize" });
       return json({ summary: result.content, model: result.model, rows_sampled: raw.results.length, errors: result.errors });
     } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
   }
