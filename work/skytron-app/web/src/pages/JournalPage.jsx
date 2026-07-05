@@ -1,4 +1,3 @@
-import { useTranslation } from 'react-i18next'
 import { useState, useEffect } from 'react'
 import { useSettings } from '../context/SettingsContext'
 
@@ -16,7 +15,6 @@ const STATUS_COLORS = {
 }
 
 export default function JournalPage() {
-  const { t } = useTranslation()
   const { settings } = useSettings()
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
@@ -103,7 +101,7 @@ export default function JournalPage() {
                       className="text-[10px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wide">{e.status}</span>
                   </div>
                   <p className="text-xs text-[var(--color-text-muted)]">{dateLabel}</p>
-                  <p className="text-sm text-[var(--color-text-sec)] mt-1.5 line-clamp-2">{e.summary}</p>
+                  <p className="text-sm text-[var(--color-text-sec)] mt-1.5 line-clamp-2">{e.recall_response}</p>
                 </div>
                 <div className="shrink-0 mt-1">
                   <svg className={`w-4 h-4 text-[var(--color-text-muted)] transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -113,22 +111,56 @@ export default function JournalPage() {
               </button>
 
               {isExpanded && (
-                <div className="px-4 pb-4 border-t border-[var(--color-border)]/50 pt-3 space-y-3">
+                <div className="px-4 pb-4 border-t border-[var(--color-border)]/50 pt-3 space-y-4">
+
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Topic</p>
+                    <p className="text-sm font-semibold text-[var(--color-text)]">{e.title || e.topic}</p>
+                    <p className="text-[10px] text-[var(--color-text-muted)]">{dateLabel}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Status</p>
+                    <span style={{ background: statusColor, color: '#0b1120' }}
+                      className="inline-block text-xs font-bold px-2 py-0.5 rounded-full">{e.status}</span>
+                  </div>
+
                   <Section label="What happened">
                     {e.what_happened}
                   </Section>
 
-                  {e.completed && (
+                  {e.confirmed_facts && (
                     <Section label="Confirmed facts" color="#3fb950">
-                      {e.completed}
+                      {e.confirmed_facts}
                     </Section>
                   )}
 
-                  {e.unfinished && (
+                  {e.not_confirmed && (
                     <Section label="Not confirmed / caution" color="#f85149">
-                      {e.unfinished}
+                      {e.not_confirmed}
                     </Section>
                   )}
+
+                  {e.what_i_should_remember && (
+                    <Section label="What I should remember" color="#58a6ff">
+                      {e.what_i_should_remember}
+                    </Section>
+                  )}
+
+                  {e.tags?.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">Tags</p>
+                      <div className="flex flex-wrap gap-1">
+                        {e.tags.map(tag => (
+                          <span key={tag} className="text-[10px] bg-[var(--color-bg)] text-[var(--color-text-sec)] px-1.5 py-0.5 rounded-full">{tag}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <Section label="Correct recall response if asked later" color="#d29922">
+                    {e.recall_response}
+                  </Section>
 
                   {e.incidents?.length > 0 && (
                     <div>
@@ -140,14 +172,6 @@ export default function JournalPage() {
                       </div>
                     </div>
                   )}
-
-                  <Section label="Correct recall response">
-                    On <strong>{dateLabel}</strong>, we worked on <strong>{e.title || e.topic}</strong>.
-                    From my current memory, the status is <strong style={{ color: statusColor }}>{e.status}</strong>.
-                    {e.completed && ` I can confirm: ${e.completed}.`}
-                    {e.unfinished && ` I cannot safely claim: ${e.unfinished}.`}
-                    {e.next_topic && ` After that, we moved to ${e.next_topic.replace(/_/g, ' ')}.`}
-                  </Section>
 
                   {e.next_topic && (
                     <div className="flex items-center gap-1 text-xs text-[var(--color-text-muted)]">
@@ -180,7 +204,7 @@ function Section({ label, color, children }) {
       <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: color || 'var(--color-text-muted)' }}>
         {label}
       </p>
-      <p className="text-sm mt-0.5 text-[var(--color-text)]">{children}</p>
+      <p className="text-sm mt-0.5 text-[var(--color-text)] leading-relaxed">{children}</p>
     </div>
   )
 }

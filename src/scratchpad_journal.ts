@@ -27,11 +27,13 @@ type JournalEntry = {
   date_end?: string;
   topic: string;
   title: string;
-  summary: string;
   status: string;
   what_happened: string;
-  completed?: string;
-  unfinished?: string;
+  confirmed_facts?: string;
+  not_confirmed?: string;
+  what_i_should_remember?: string;
+  recall_response: string;
+  tags: string[];
   incidents?: string[];
   next_topic?: string;
   source_refs: string[];
@@ -252,96 +254,144 @@ function inferJournalStatus(group: NormalizedEvent[]): string {
   return "discussed";
 }
 
-function buildCompleted(group: NormalizedEvent[], status: string): string | undefined {
-  const done = group.filter(g => g.event_type === "action_done");
-  const built = group.filter(g => g.event_type === "assistant_message" && (g.summary.toLowerCase().includes("created") || g.summary.toLowerCase().includes("implemented")));
-  const parts: string[] = [];
-
-  if (done.length) parts.push(`${done.length} action(s) completed`);
-  if (built.length) parts.push(`discussion produced implementation ideas`);
-
-  const text = group.map(g => g.summary).join("\n").toLowerCase();
-  if (text.includes("architecture") || text.includes("design")) parts.push("architecture / design was produced");
-  if (text.includes("plan")) parts.push("plan was outlined");
-
-  if (!parts.length) {
-    if (status === "completed" || status === "tested") return "Work completed successfully.";
-    if (status === "built") return "Implementation was created.";
-    if (status === "planned") return "Discussion produced a plan or design.";
-    return undefined;
-  }
-  return parts.join("; ") + ".";
-}
-
 function buildWhatHappened(group: NormalizedEvent[], topic: string): string {
   const h = humanizeTopic(topic);
   const text = group.map(g => g.summary).join("\n").toLowerCase();
-  const hasImplementation = text.includes("created") || text.includes("implemented") || text.includes("built") || text.includes("wrote code") || text.includes("tool");
+  const messages = group.filter(g => g.event_type === "user_message" || g.event_type === "assistant_message");
+  const actions = group.filter(g => g.event_type.startsWith("action_"));
   const hasPlan = text.includes("plan") || text.includes("architecture") || text.includes("design") || text.includes("proposed") || text.includes("step");
+  const hasImplementation = text.includes("created") || text.includes("implemented") || text.includes("built") || text.includes("wrote code") || text.includes("tool");
   const hasError = text.includes("error") || text.includes("fail") || text.includes("timeout");
   const hasCompleted = text.includes("completed") || text.includes("done") || text.includes("finished");
 
-  if (hasError && !hasPlan && !hasImplementation) return `We tried to work on ${h} but hit problems.`;
-  if (hasPlan && !hasImplementation) return `We discussed and planned ${h}.`;
-  if (hasImplementation && !text.includes("test")) return `We built or created something for ${h} but no confirmation it was tested.`;
-  if (hasImplementation && hasCompleted) return `We built ${h} and completed the work.`;
-  if (hasPlan && hasError) return `We planned ${h} but ran into issues during implementation.`;
-  return `We had activity related to ${h}.`;
-}
+  let narrative = `We worked on ${h}`;
+  if (messages.length > 1) {
+    const userMsgs = messages.filter(m => m.event_type === "user_message");
+    if (userMsgs.length) narrative += `. The creator asked about ${h}`;
+  }
+  if (hasPlan && !hasImplementation) narrative += `. We discussed and planned the work, including architecture and design steps`;
+  if (hasImplementation && hasCompleted) narrative += `. We built and completed the implementation`;
+  if (hasImplementation && !hasCompleted) narrative += `. We created or built something for ${h}`;
+  if (hasError) narrative += `. We encountered errors during the work`;
+  if (actions.length >= 3) narrative += `, with ${actions.length} tool actions performed`;
+  narrative += `.`;
 
-function buildJournalSummary(input: { date: string; topic: string; status: string; completed?: string; unfinished?: string; incidents?: string[]; nextTopic?: string }): string {
-  const h = humanizeTopic(input.topic);
-  const parts: string[] = [];
-
-  if (input.status === "planned") {
-    parts.push(`We planned ${h} on ${input.date} but never built or tested it.`);
-  } else if (input.status === "built") {
-    parts.push(`We built ${h} on ${input.date} but it wasn't fully tested.`);
-  } else if (input.status === "completed") {
-    parts.push(`We finished ${h} on ${input.date}.`);
-  } else if (input.status === "failed") {
-    parts.push(`${h} failed on ${input.date} — the task couldn't be completed.`);
-  } else if (input.status === "discussed") {
-    parts.push(`We talked about ${h} on ${input.date} but didn't make a clear plan.`);
-  } else if (input.status === "unfinished") {
-    parts.push(`We worked on ${h} on ${input.date} but left it incomplete.`);
-  } else {
-    parts.push(`On ${input.date}, we worked on ${h}.`);
+  if (messages.length) {
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.event_type === "user_message" && lastMsg.summary.length < 200) {
+      narrative += ` The creator's last message was: "${lastMsg.summary.slice(0, 150)}".`;
+    }
   }
 
-  if (input.completed && input.status !== "discussed") parts.push(input.completed);
-  if (input.unfinished && input.status !== "completed") parts.push(input.unfinished);
-  if (input.incidents?.length && input.status !== "completed") parts.push(`(Note: ${input.incidents.join(", ")})`);
-  if (input.nextTopic) parts.push(`After that, we moved to ${humanizeTopic(input.nextTopic)}.`);
-
-  return parts.join(" ");
+  return narrative;
 }
 
-function buildUnfinished(group: NormalizedEvent[], status: string, incidents: string[]): string | undefined {
+function buildConfirmedFacts(group: NormalizedEvent[], status: string): string | undefined {
+  const done = group.filter(g => g.event_type === "action_done");
+  const parts: string[] = [];
+
+  if (done.length) parts.push(`${done.length} tool action(s) were completed successfully`);
+  const text = group.map(g => g.summary).join("\n").toLowerCase();
+  if (text.includes("architecture") || text.includes("design")) parts.push("Architecture or design was produced");
+  if (text.includes("plan")) parts.push("A plan or implementation steps were outlined");
+
+  const userMsgs = group.filter(g => g.event_type === "user_message");
+  const assistMsgs = group.filter(g => g.event_type === "assistant_message");
+  if (userMsgs.length) parts.push(`The creator participated with ${userMsgs.length} message(s)`);
+  if (assistMsgs.length) parts.push(`I responded with ${assistMsgs.length} message(s)`);
+
+  const implementations = group.filter(g => g.summary.toLowerCase().includes("created") || g.summary.toLowerCase().includes("implemented"));
+  if (implementations.length) parts.push(`Implementation work was done`);
+
+  if (!parts.length) {
+    if (status === "completed" || status === "tested") return "The work was completed successfully with confirmed results.";
+    if (status === "built") return "Implementation was created.";
+    if (status === "planned") return "A plan or design proposal was produced during discussion.";
+    return undefined;
+  }
+  return parts.join(". ") + ".";
+}
+
+function buildNotConfirmed(group: NormalizedEvent[], status: string, incidents: string[]): string | undefined {
   if (status === "completed" || status === "tested") return undefined;
 
   const gapParts: string[] = [];
   const text = group.map(g => g.summary).join("\n").toLowerCase();
-
   const hasImplementation = text.includes("created") || text.includes("implemented") || text.includes("built") || text.includes("wrote");
   const hasTested = text.includes("tested") || text.includes("test ") || text.includes("working") || text.includes("confirmed");
   const hasPlan = text.includes("plan") || text.includes("architecture") || text.includes("design") || text.includes("proposed");
   const hasAction = group.some(g => g.event_type.startsWith("action_"));
   const hasMovedOn = text.includes("moved on") || text.includes("moved to");
 
-  if (hasMovedOn) gapParts.push("We switched topics before reaching closure");
-  if (hasPlan && !hasImplementation) gapParts.push("No confirmed implementation — still at planning stage");
-  if (hasImplementation && !hasTested) gapParts.push("Implementation exists but no confirmed test result");
-  if (!hasAction && hasPlan) gapParts.push("Discussion ended without actionable steps");
+  if (hasMovedOn) gapParts.push("The topic changed before reaching closure — we switched away before confirming completion");
+  if (hasPlan && !hasImplementation) gapParts.push("No confirmed implementation — the work is still at planning stage");
+  if (hasImplementation && !hasTested) gapParts.push("Implementation exists but there is no confirmed test result — I cannot safely claim it was tested successfully");
+  if (!hasAction && hasPlan) gapParts.push("The discussion ended without actionable steps — no tool actions were performed");
   if (!gapParts.length && hasPlan) gapParts.push("No confirmed implementation or testing appears in this episode");
   if (!gapParts.length && status === "failed") gapParts.push("The task could not be completed successfully");
-  if (!gapParts.length) gapParts.push("Work was left incomplete");
+  if (!gapParts.length) gapParts.push("Work was left incomplete — I should not claim it was finished");
 
   if (incidents.length) {
-    gapParts.push(`incidents: ${incidents.join(", ")}`);
+    gapParts.push(`Incidents encountered: ${incidents.join(", ")}`);
   }
 
   return gapParts.join(". ") + ".";
+}
+
+function buildWhatIShouldRemember(group: NormalizedEvent[], topic: string, status: string): string {
+  const h = humanizeTopic(topic);
+  const text = group.map(g => g.summary).join("\n").toLowerCase();
+  const hasError = text.includes("error") || text.includes("fail") || text.includes("timeout");
+
+  const reasonParts: string[] = [`This entry about ${h} is important because`];
+  const reasons: string[] = [];
+
+  if (hasError) reasons.push("it shows a failure pattern or risk I should remember");
+  if (status === "planned") reasons.push("it represents work that was designed but not yet realized — a future opportunity");
+  if (status === "completed") reasons.push("it represents a successfully completed task I can reference");
+  if (status === "built" || status === "unfinished") reasons.push("it represents work-in-progress that may need follow-up");
+  if (status === "failed") reasons.push("it is a cautionary memory of something that didn't work");
+  if (status === "discussed") reasons.push("it was discussed but never actioned — a potential gap");
+
+  reasonParts.push(reasons.length ? reasons.join(", ") + ".");
+  reasonParts.push(`I should remember what state ${h} was left in and avoid overclaiming completion unless I find later evidence.`);
+
+  return reasonParts.join(" ");
+}
+
+function buildTags(topic: string, status: string): string[] {
+  const tags = new Set<string>();
+  tags.add(topic);
+  tags.add(status);
+  if (status === "planned") tags.add("not_tested");
+  if (status === "built") tags.add("not_tested");
+  if (status === "unfinished") tags.add("needs_followup");
+  if (status === "failed") tags.add("caution");
+  if (status === "discussed") tags.add("no_action");
+  return [...tags];
+}
+
+function buildRecallResponse(input: { date: string; topic: string; status: string; nextTopic?: string }): string {
+  const h = humanizeTopic(input.topic);
+  const statusDesc: Record<string, string> = {
+    discussed: "we discussed it but I have no confirmation it was built or actioned",
+    planned: "we planned it in detail but it was not confirmed built or tested",
+    built: "we built or created it but testing was not confirmed",
+    tested: "we tested it and it was confirmed working",
+    completed: "we finished this work",
+    failed: "we attempted it but it failed or got stuck",
+    unfinished: "we worked on it but left it incomplete",
+  };
+
+  const desc = statusDesc[input.status] || `the status is ${input.status}`;
+
+  let response = `Yes. On ${input.date}, we worked on ${h}. From my current memory, ${desc}.`;
+  if (input.nextTopic) {
+    response += ` After that, we moved to ${humanizeTopic(input.nextTopic)}. I should note that we may not have returned to close the loop on ${h}.`;
+  }
+  response += ` I should treat this as ${input.status} work unless I find a later completion or test record.`;
+
+  return response;
 }
 
 function inferNextTopic(group: NormalizedEvent[], allEvents: NormalizedEvent[]): string | undefined {
@@ -373,17 +423,26 @@ export function buildJournalEntries(events: NormalizedEvent[]): JournalEntry[] {
     const status = inferJournalStatus(group);
     const incidents = extractIncidents(group);
     const whatHappened = buildWhatHappened(group, topic);
-    const completed = buildCompleted(group, status);
-    const unfinished = buildUnfinished(group, status, incidents);
+    const confirmedFacts = buildConfirmedFacts(group, status);
+    const notConfirmed = buildNotConfirmed(group, status, incidents);
+    const whatIShouldRemember = buildWhatIShouldRemember(group, topic, status);
+    const tags = buildTags(topic, status);
     const nextTopic = inferNextTopic(group, events);
-    const summary = buildJournalSummary({ date: first.ts.slice(0, 10), topic, status, completed, unfinished, incidents, nextTopic });
+    const recallResponse = buildRecallResponse({ date: first.ts.slice(0, 10), topic, status, nextTopic });
+    const dateStr = first.ts.slice(0, 10) + (last.ts.slice(0, 10) !== first.ts.slice(0, 10) ? ` to ${last.ts.slice(0, 10)}` : "");
+    const shortSummary = `${title} — ${status}. ${dateStr}.`;
     out.push({
       journal_key: `${first.ts.slice(0, 10)}:${topic}`,
       date_start: first.ts,
       date_end: last.ts,
-      topic, title, summary, status,
+      topic, title, status,
+      summary: shortSummary,
       what_happened: whatHappened,
-      completed, unfinished,
+      confirmed_facts: confirmedFacts,
+      not_confirmed: notConfirmed,
+      what_i_should_remember: whatIShouldRemember,
+      recall_response: recallResponse,
+      tags,
       incidents: incidents.length ? incidents : undefined,
       next_topic: nextTopic,
       source_refs: group.map(g => `${g.source_table}:${g.source_record_id}`).filter(Boolean)
@@ -422,7 +481,7 @@ export async function buildScratchpadJournal(env: any) {
     event_count: events.length,
     journal_count: journal.length,
     journal_preview: journal.slice(0, 20).map(j => ({
-      key: j.journal_key, topic: j.topic, status: j.status, summary: j.summary.slice(0, 120)
+      key: j.journal_key, topic: j.topic, status: j.status, summary: j.recall_response.slice(0, 120)
     }))
   };
 }
