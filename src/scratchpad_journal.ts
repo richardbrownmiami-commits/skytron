@@ -286,19 +286,6 @@ function buildWhatHappened(group: NormalizedEvent[], topic: string): string {
   return `${humanizeTopic(topic)}: ${desc}.`;
 }
 
-function buildCompleted(group: NormalizedEvent[], status: string): string | undefined {
-  if (status === "completed") {
-    const done = group.filter(g => g.event_type === "action_done" || g.event_type === "assistant_message");
-    if (done.length) return `${done.length} action(s) completed.`;
-    return "Work appeared to complete successfully.";
-  }
-  if (status === "unfinished" || status === "failed") {
-    const done = group.filter(g => g.event_type === "action_done");
-    if (done.length) return `${done.length} action(s) completed before interruption.`;
-  }
-  return undefined;
-}
-
 function buildUnfinished(group: NormalizedEvent[], status: string, incidents: string[]): string | undefined {
   if (status === "completed" || status === "tested") return undefined;
 
