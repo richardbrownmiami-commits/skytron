@@ -64,6 +64,11 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
   }
 
   if (url.pathname === "/brain/scratchpad" && req.method === "GET") {
+    // Serve HTML UI if client accepts HTML
+    const accept = req.headers.get("accept") || "";
+    if (accept.includes("text/html")) {
+      return new Response(SCRATCHPAD_UI_HTML, { headers: { "content-type": "text/html;charset=utf-8" } });
+    }
     try {
       await ensureScratchpadTable(env);
       const batchId = url.searchParams.get("batch") || null;
@@ -567,7 +572,100 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       }
       return json({ ok: true, repo, branch, files_processed: results.length, results });
     } catch (e) { return json({ error: e.message }, 500); }
-  }
+    }
 
   return json({ error: "not found" }, 404);
 }
+
+const SCRATCHPAD_UI_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Brain Scratchpad</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px}
+h1{color:#58a6ff;margin-bottom:4px;font-size:20px}
+.sub{color:#8b949e;font-size:13px;margin-bottom:20px}
+.section{margin-bottom:24px}
+.section h2{color:#f0f6fc;font-size:15px;padding:8px 12px;background:#161b22;border-radius:6px 6px 0 0;border:1px solid #30363d;border-bottom:0}
+.section .desc{color:#8b949e;font-size:12px;padding:4px 12px 8px;background:#161b22;border-left:1px solid #30363d;border-right:1px solid #30363d}
+.rows{background:#0d1117;border:1px solid #30363d;border-top:0;border-radius:0 0 6px 6px;max-height:70vh;overflow-y:auto}
+.row{padding:6px 12px;border-bottom:1px solid #21262d;font-size:12px;line-height:1.4;font-family:'SFMono-Regular',Consolas,'Liberation Mono',monospace;word-break:break-all}
+.row:last-child{border-bottom:0}
+.row:hover{background:#161b22}
+.time{color:#58a6ff;margin-right:8px;white-space:nowrap}
+.tag{display:inline-block;padding:0 5px;border-radius:3px;font-size:10px;font-weight:600;margin-right:6px}
+.tag.user{color:#d2a8ff;background:#2a1a4a}
+.tag.assistant{color:#7ee787;background:#1b3a1b}
+.tag.journal{color:#f0883e;background:#3d2200}
+.tag.lesson{color:#79c0ff;background:#0a2e4a}
+.tag.auto_learned{color:#ffa657;background:#3d2500}
+.tag.rule{color:#ff7b72;background:#3d1111}
+.tag.backup{color:#8b949e;background:#1c1f26}
+.tag.source{color:#7ee787;background:#1b3a1b}
+.tag.error{color:#f85149;background:#3d1212}
+.tag.tick{color:#58a6ff;background:#0a2e4a}
+.tag.done{color:#7ee787;background:#1b3a1b}
+.tag.emotion{color:#ffa657;background:#3d2500}
+.continue{color:#8b949e;font-style:italic;padding:6px 12px;font-size:11px;text-align:center}
+#loading{color:#8b949e;text-align:center;padding:40px;font-size:14px}
+.refresh{float:right;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer}
+.refresh:hover{background:#30363d}
+.count{color:#8b949e;font-size:12px;margin-left:8px}
+</style>
+</head>
+<body>
+<h1>Brain Scratchpad</h1>
+<p class="sub">All collected D1 data grouped by table — <span id="totalRows">0</span> total rows <button class="refresh" onclick="location.reload()">Refresh</button></p>
+<div id="app"><div id="loading">Loading scratchpad data...</div></div>
+<script>
+(async()=>{
+  const r=await fetch('/brain/scratchpad');
+  if(!r.ok){document.getElementById('app').innerHTML='<div style="color:#f85149;padding:20px">Error: '+r.status+'</div>';return}
+  const d=await r.json();
+  if(!d.formatted){document.getElementById('app').innerHTML='<div style="color:#f85149;padding:20px">No formatted data returned</div>';return}
+  document.getElementById('totalRows').textContent=d.total_rows;
+  const labels={
+    brain_memory:'Conversation messages (user/assistant)',
+    actions:'Action history — queries, sensorium noise, results',
+    activity_log:'System activity — tool calls, errors, ticks',
+    brain_knowledge:'Knowledge base — rules, lessons, journals, stats, auto-learned',
+    identity:'Key-value settings & tracking counters',
+    brain_vectors:'Semantic vector fingerprints',
+    brain_agents:'Agent step execution records'
+  };
+  const html=Object.entries(d.formatted).map(([table,data])=>{
+    const label=labels[table]||table;
+    const rows=data.rows.map((r,i)=>{
+      let text=r.text.slice(0,300);
+      let extra='';
+      if(table==='brain_memory'){
+        const isUser=r.text.startsWith('[user]');
+        extra='<span class="tag '+(isUser?'user':'assistant')+'">'+(isUser?'user':'asst')+'</span>';
+        text=r.text.replace(/^\[(user|assistant)\]\s*/,'');
+      }else if(table==='brain_knowledge'){
+        const m=r.text.match(/^\[(\w+)\]/);
+        if(m)extra='<span class="tag '+m[1]+'">'+m[1]+'</span>';
+      }else if(table==='identity'){
+        if(r.text.startsWith('emotion_'))extra='<span class="tag emotion">emotion</span>';
+      }else if(table==='actions'){
+        const isSensorium=r.text.includes('[SENSORIUM]');
+        if(isSensorium)extra='<span class="tag tick">sensorium</span>';
+        else extra='<span class="tag done">query</span>';
+      }else if(table==='activity_log'){
+        const isError=r.text.includes('failed')||r.text.includes('error')||r.text.includes('ERROR');
+        if(isError)extra='<span class="tag error">error</span>';
+        else extra='<span class="tag tick">event</span>';
+      }
+      return '<div class="row"><span class="time">'+(r.time||'')+'</span>'+extra+' '+text+'</div>';
+    }).join('');
+    const more=data.rows.length>30?'<div class="continue">\u2014 showing first 30 of '+data.rows.length+' rows \u2014</div>':'';
+    return '<div class="section"><h2>'+table+' <span class="count">('+data.rows.length+')</span></h2><div class="desc">'+label+'</div><div class="rows">'+rows.slice(0,30*999)+more+'</div></div>';
+  }).join('');
+  document.getElementById('app').innerHTML=html;
+})();
+</script>
+</body>
+</html>`;
