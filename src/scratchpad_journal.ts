@@ -343,17 +343,20 @@ function buildWhatIShouldRemember(group: NormalizedEvent[], topic: string, statu
   const text = group.map(g => g.summary).join("\n").toLowerCase();
   const hasError = text.includes("error") || text.includes("fail") || text.includes("timeout");
 
-  const reasonParts: string[] = [`This entry about ${h} is important because`];
+  const reasonParts: string[] = [];
+  reasonParts.push(`This entry about ${h} is important because`);
   const reasons: string[] = [];
 
   if (hasError) reasons.push("it shows a failure pattern or risk I should remember");
-  if (status === "planned") reasons.push("it represents work that was designed but not yet realized — a future opportunity");
+  if (status === "planned") reasons.push("it represents work that was designed but not yet realized -- a future opportunity");
   if (status === "completed") reasons.push("it represents a successfully completed task I can reference");
   if (status === "built" || status === "unfinished") reasons.push("it represents work-in-progress that may need follow-up");
   if (status === "failed") reasons.push("it is a cautionary memory of something that didn't work");
-  if (status === "discussed") reasons.push("it was discussed but never actioned — a potential gap");
+  if (status === "discussed") reasons.push("it was discussed but never actioned -- a potential gap");
 
-  reasonParts.push(reasons.length ? reasons.join(", ") + ".");
+  if (reasons.length > 0) {
+    reasonParts.push(reasons.join(", ") + ".");
+  }
   reasonParts.push(`I should remember what state ${h} was left in and avoid overclaiming completion unless I find later evidence.`);
 
   return reasonParts.join(" ");
