@@ -164,16 +164,25 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
         "=== " + table + " ===\n" + rows.join("\n")
       ).join("\n\n");
 
-      const prompt = "You are reviewing raw data from an autonomous AI agent's database. Below is a sample of data from each table.\n\n" +
-        "INSTRUCTIONS:\n" +
-        "- Write a clear, topic-based narrative summary organized by day/week\n" +
-        "- Focus on periods where lots of activity happened (many actions in short time spans)\n" +
-        "- Mention specific topics discussed, tools built, problems encountered, and knowledge gained\n" +
-        "- IGNORE: greetings (hello/hi/hey), simple math Q&A (what is 2+2), sensorium ticks, duplicate entries, raw tool JSON blobs, empty/failed actions without meaningful content\n" +
-        "- IGNORE: one-word answers, "[Reached max steps]", connection errors to LLM providers\n" +
-        "- Include interesting patterns: repeated failures followed by fixes, busy periods vs quiet periods\n" +
-        "- Be specific: mention exact dates, conversation topics, and tool actions\n\n" +
-        condensed + "\n\n---\nWrite a detailed topic-based summary organized by time period (1-2 paragraphs per active day/week). Focus on what was actually discussed and built:";
+      const prompt = "You are reviewing raw data from an autonomous AI agent called Skytron. Below is a comprehensive sample of data from each of its database tables.\n\n" +
+        "YOUR TASK: Write a DETAILED, ELABORATE narrative summary of everything this agent has done. This is NOT a bullet list or tl;dr — write full paragraphs organized by day and topic. Be thorough.\n\n" +
+        "REQUIREMENTS:\n" +
+        "- ORGANIZE by day/week with clear date headings (e.g., 'June 1-10: Initial Setup')\n" +
+        "- For EACH day, describe: what conversations happened, what tools were built/modified, what problems occurred, what knowledge was learned\n" +
+        "- Highlight periods of intense activity (many actions clustered in short time)\n" +
+        "- Mention specific tool names, error messages, conversation topics, and knowledge entries\n" +
+        "- Describe the progression: how the agent evolved over time (early bugs → later fixes → new capabilities)\n" +
+        "- Be specific: include exact dates (June 19), exact tool names (db_query, web_search, github_write), exact error messages\n" +
+        "- Each period should get 3-8 full sentences, not 1-2 lines\n\n" +
+        "IGNORE (skip these entirely, don't mention them):\n" +
+        "- Greetings (hello/hi/hey)\n" +
+        "- Simple math Q&A (what is 2+2)\n" +
+        "- Sensorium ticks (periodic energy/memory status checks)\n" +
+        "- Duplicate entries\n" +
+        "- Raw tool JSON blobs\n" +
+        "- Empty/failed actions without meaningful content\n" +
+        "- One-word answers, '[Reached max steps]', connection errors to LLM providers\n\n" +
+        condensed + "\n\n---\nWrite the detailed narrative summary now. Full paragraphs, organized by date/topic:";
 
       const result = await callLLM(env, { messages: [{ role: "user", content: prompt }] });
       return json({ summary: result.content, model: result.model, rows_sampled: raw.results.length });
