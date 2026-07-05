@@ -125,31 +125,55 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       const raw = await getScratchpad(env, null);
       if (!raw.results?.length) return json({ error: "scratchpad empty" }, 400);
 
-      // Build condensed text per table (up to 30 recent rows each)
-      const groups = {};
+      // Build condensed text per table (sample from beginning, middle, and end)
+      const tableRows = {};
       for (const row of raw.results) {
-        if (!groups[row.source_table]) groups[row.source_table] = [];
-        if (groups[row.source_table].length >= 30) continue;
-        let c;
-        try { c = JSON.parse(row.content); } catch { c = {}; }
-        const ts = (c.created_at || c.updated_at || row.collected_at || "").replace("T", " ").slice(0, 16);
-        let text = "";
-        if (row.source_table === "brain_memory") text = "[" + c.role + "] " + (c.content || "");
-        else if (row.source_table === "actions") text = (c.input || c.result || c.error || "empty").slice(0, 150);
-        else if (row.source_table === "activity_log") text = c.summary || "";
-        else if (row.source_table === "brain_knowledge") text = "[" + (c.category || c.source) + "] " + (c.content || "").slice(0, 150);
-        else if (row.source_table === "identity") text = c.key + " = " + (c.value || "").slice(0, 80);
-        else if (row.source_table === "brain_vectors") text = c.ref_key || "";
-        else if (row.source_table === "brain_agents") text = (c.instruction || c.result || "").slice(0, 150);
-        else text = JSON.stringify(c).slice(0, 150);
-        groups[row.source_table].push(ts + " " + text);
+        if (!tableRows[row.source_table]) tableRows[row.source_table] = [];
+        tableRows[row.source_table].push(row);
+      }
+      const groups = {};
+      for (const [table, rows] of Object.entries(tableRows)) {
+        const sample = [];
+        const len = rows.length;
+        if (len <= 40) { sample.push(...rows); }
+        else {
+          // Take first 15, skip middle, take last 15
+          sample.push(...rows.slice(0, 15));
+          sample.push(...rows.slice(len - 15));
+        }
+        groups[table] = [];
+        for (const row of sample) {
+          if (groups[table].length >= 60) break;
+          let c;
+          try { c = JSON.parse(row.content); } catch { c = {}; }
+          const ts = (c.created_at || c.updated_at || row.collected_at || "").replace("T", " ").slice(0, 16);
+          let text = "";
+          if (table === "brain_memory") text = "[" + c.role + "] " + (c.content || "");
+          else if (table === "actions") text = (c.input || c.result || c.error || "empty").slice(0, 150);
+          else if (table === "activity_log") text = c.summary || "";
+          else if (table === "brain_knowledge") text = "[" + (c.category || c.source) + "] " + (c.content || "").slice(0, 150);
+          else if (table === "identity") text = c.key + " = " + (c.value || "").slice(0, 80);
+          else if (table === "brain_vectors") text = c.ref_key || "";
+          else if (table === "brain_agents") text = (c.instruction || c.result || "").slice(0, 150);
+          else text = JSON.stringify(c).slice(0, 150);
+          groups[table].push(ts + " " + text);
+        }
       }
 
       const condensed = Object.entries(groups).map(([table, rows]) =>
         "=== " + table + " ===\n" + rows.join("\n")
       ).join("\n\n");
 
-      const prompt = "You are reviewing raw data collected from an autonomous AI agent's database. Below is a sample of data from each table. Write a concise narrative summary of what this agent has been doing — what conversations it had, what it built, what problems it faced, and what it learned. Be specific about dates and events.\n\n" + condensed + "\n\n---\nWrite a 3-4 paragraph narrative summary of this agent's activity:";
+      const prompt = "You are reviewing raw data from an autonomous AI agent's database. Below is a sample of data from each table.\n\n" +
+        "INSTRUCTIONS:\n" +
+        "- Write a clear, topic-based narrative summary organized by day/week\n" +
+        "- Focus on periods where lots of activity happened (many actions in short time spans)\n" +
+        "- Mention specific topics discussed, tools built, problems encountered, and knowledge gained\n" +
+        "- IGNORE: greetings (hello/hi/hey), simple math Q&A (what is 2+2), sensorium ticks, duplicate entries, raw tool JSON blobs, empty/failed actions without meaningful content\n" +
+        "- IGNORE: one-word answers, "[Reached max steps]", connection errors to LLM providers\n" +
+        "- Include interesting patterns: repeated failures followed by fixes, busy periods vs quiet periods\n" +
+        "- Be specific: mention exact dates, conversation topics, and tool actions\n\n" +
+        condensed + "\n\n---\nWrite a detailed topic-based summary organized by time period (1-2 paragraphs per active day/week). Focus on what was actually discussed and built:";
 
       const result = await callLLM(env, { messages: [{ role: "user", content: prompt }] });
       return json({ summary: result.content, model: result.model, rows_sampled: raw.results.length });
