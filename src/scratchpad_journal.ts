@@ -32,6 +32,7 @@ type JournalEntry = {
   what_happened: string;
   completed?: string;
   unfinished?: string;
+  incidents?: string[];
   next_topic?: string;
   source_refs: string[];
 };
@@ -172,23 +173,104 @@ function makeTitle(topic: string): string {
   return humanizeTopic(topic).replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function inferJournalStatus(group: NormalizedEvent[]): string {
-  const text = group.map(g => `${g.summary} ${JSON.stringify(g.details)}`).join("\n").toLowerCase();
-  const hasUser = group.some(g => g.event_type === "user_message");
-  const hasAction = group.some(g => g.event_type.startsWith("action_"));
-  const hasError = group.some(g => g.event_type === "action_failed") || text.includes("error") || text.includes("fail");
-  const hasCompleted = group.some(g => g.event_type === "action_done") || text.includes("completed") || text.includes("done");
-  const hasTested = text.includes("tested") || text.includes("test ") || text.includes("working");
-  const hasNextTopic = text.includes("moved on") || text.includes("moved to") || text.includes("switched to");
-  const hasPlan = text.includes("plan") || text.includes("proposed") || text.includes("step") || text.includes("todo");
+function isIncidentalFailureEvent(e: NormalizedEvent): boolean {
+  const text = `${e.summary} ${JSON.stringify(e.details || {})}`.toLowerCase();
+  return (
+    text.includes("timed out") ||
+    text.includes("timeout") ||
+    text.includes("max steps reached") ||
+    text.includes("rate limit") ||
+    text.includes("temporary error") ||
+    text.includes("network error") ||
+    text.includes("search failed")
+  );
+}
 
-  if (hasError) return "failed";
-  if (hasPlan && !hasAction) return "planned";
-  if (hasCompleted && hasTested) return "completed";
-  if (hasCompleted && !hasTested) return "unfinished";
-  if (hasNextTopic) return "unfinished";
-  if (hasUser && !hasAction) return "discussed";
-  return "ongoing";
+function isHardFailureEvent(e: NormalizedEvent): boolean {
+  const text = `${e.summary} ${JSON.stringify(e.details || {})}`.toLowerCase();
+  return (
+    text.includes("could not complete the task") ||
+    text.includes("failed to implement") ||
+    text.includes("implementation failed") ||
+    text.includes("deployment failed") ||
+    text.includes("prompt_edit invalid input") ||
+    text.includes("stuck in repair loop") ||
+    text.includes("aborted without completing")
+  );
+}
+
+function extractIncidents(group: NormalizedEvent[]): string[] {
+  const incidents = new Set<string>();
+  for (const e of group) {
+    const text = `${e.summary} ${JSON.stringify(e.details || {})}`.toLowerCase();
+    if (text.includes("timeout") || text.includes("timed out")) incidents.add("timeout");
+    if (text.includes("max steps reached")) incidents.add("max_steps");
+    if (text.includes("invalid input")) incidents.add("invalid_input");
+    if (text.includes("rate limit")) incidents.add("rate_limit");
+    if (text.includes("network error")) incidents.add("network_error");
+    if (text.includes("tool error")) incidents.add("tool_error");
+  }
+  return [...incidents];
+}
+
+function inferJournalStatus(group: NormalizedEvent[]): string {
+  let score = { completed: 0, tested: 0, built: 0, planned: 0, discussed: 0, unfinished: 0, failed: 0 };
+
+  for (const e of group) {
+    const text = `${e.summary} ${JSON.stringify(e.details || {})}`.toLowerCase();
+
+    if (isHardFailureEvent(e)) score.failed += 4;
+    if (isIncidentalFailureEvent(e)) score.unfinished += 1;
+
+    if (text.includes("plan") || text.includes("proposed") || text.includes("architecture") || text.includes("design"))
+      score.planned += 3;
+
+    if (e.event_type === "user_message" || e.event_type === "assistant_message")
+      score.discussed += 1;
+
+    if (text.includes("created") || text.includes("implemented") || text.includes("added tool") || text.includes("opened pr") || text.includes("wrote code"))
+      score.built += 4;
+
+    if (text.includes("tested successfully") || text.includes("confirmed working"))
+      score.tested += 4;
+
+    if (text.includes("completed") || text.includes("done") || text.includes("finished"))
+      score.completed += 3;
+
+    if (text.includes("not tested") || text.includes("unfinished") || text.includes("moved on") || text.includes("never returned") || text.includes("not confirmed"))
+      score.unfinished += 3;
+  }
+
+  const hasPositiveWork = score.completed > 0 || score.tested > 0 || score.built > 0 || score.planned > 0;
+  if (score.failed >= 4 && !hasPositiveWork) return "failed";
+
+  if (score.completed >= 3) return "completed";
+  if (score.tested >= 4) return "tested";
+  if (score.built >= 4) return score.unfinished >= 2 ? "unfinished" : "built";
+  if (score.planned >= 3) return "planned";
+  if (score.unfinished >= 3) return "unfinished";
+  return "discussed";
+}
+
+function buildCompleted(group: NormalizedEvent[], status: string): string | undefined {
+  const done = group.filter(g => g.event_type === "action_done");
+  const built = group.filter(g => g.event_type === "assistant_message" && (g.summary.toLowerCase().includes("created") || g.summary.toLowerCase().includes("implemented")));
+  const parts: string[] = [];
+
+  if (done.length) parts.push(`${done.length} action(s) completed`);
+  if (built.length) parts.push(`discussion produced implementation ideas`);
+
+  const text = group.map(g => `${g.summary} ${JSON.stringify(g.details || {})}`).join("\n").toLowerCase();
+  if (text.includes("architecture") || text.includes("design")) parts.push("architecture / design was produced");
+  if (text.includes("plan")) parts.push("plan was outlined");
+
+  if (!parts.length) {
+    if (status === "completed" || status === "tested") return "Work completed successfully.";
+    if (status === "built") return "Implementation was created.";
+    if (status === "planned") return "Discussion produced a plan or design.";
+    return undefined;
+  }
+  return parts.join("; ") + ".";
 }
 
 function buildWhatHappened(group: NormalizedEvent[], topic: string): string {
@@ -217,15 +299,31 @@ function buildCompleted(group: NormalizedEvent[], status: string): string | unde
   return undefined;
 }
 
-function buildUnfinished(group: NormalizedEvent[], status: string): string | undefined {
-  if (status === "unfinished" || status === "failed" || status === "planned" || status === "discussed") {
-    const failed = group.find(g => g.event_type === "action_failed");
-    if (failed) return `Hit an error: ${failed.summary.slice(0, 120)}`;
-    if (!group.some(g => g.event_type.startsWith("action_"))) return "No confirmed action completed.";
-    if (!group.some(g => g.summary.toLowerCase().includes("test"))) return "No confirmed test result in memory.";
-    return "Work was left incomplete.";
+function buildUnfinished(group: NormalizedEvent[], status: string, incidents: string[]): string | undefined {
+  if (status === "completed" || status === "tested") return undefined;
+
+  const gapParts: string[] = [];
+  const text = group.map(g => `${g.summary} ${JSON.stringify(g.details || {})}`).join("\n").toLowerCase();
+
+  const hasImplementation = text.includes("created") || text.includes("implemented") || text.includes("built") || text.includes("wrote");
+  const hasTested = text.includes("tested") || text.includes("test ") || text.includes("working") || text.includes("confirmed");
+  const hasPlan = text.includes("plan") || text.includes("architecture") || text.includes("design") || text.includes("proposed");
+  const hasAction = group.some(g => g.event_type.startsWith("action_"));
+  const hasMovedOn = text.includes("moved on") || text.includes("moved to");
+
+  if (hasMovedOn) gapParts.push("We switched topics before reaching closure");
+  if (hasPlan && !hasImplementation) gapParts.push("No confirmed implementation — still at planning stage");
+  if (hasImplementation && !hasTested) gapParts.push("Implementation exists but no confirmed test result");
+  if (!hasAction && hasPlan) gapParts.push("Discussion ended without actionable steps");
+  if (!gapParts.length && hasPlan) gapParts.push("No confirmed implementation or testing appears in this episode");
+  if (!gapParts.length && status === "failed") gapParts.push("The task could not be completed successfully");
+  if (!gapParts.length) gapParts.push("Work was left incomplete");
+
+  if (incidents.length) {
+    gapParts.push(`incidents: ${incidents.join(", ")}`);
   }
-  return undefined;
+
+  return gapParts.join(". ") + ".";
 }
 
 function inferNextTopic(group: NormalizedEvent[], allEvents: NormalizedEvent[]): string | undefined {
@@ -238,7 +336,7 @@ function inferNextTopic(group: NormalizedEvent[], allEvents: NormalizedEvent[]):
   return undefined;
 }
 
-function buildJournalSummary(input: { date: string; topic: string; status: string; whatHappened: string; completed?: string; unfinished?: string; nextTopic?: string }): string {
+function buildJournalSummary(input: { date: string; topic: string; status: string; whatHappened: string; completed?: string; unfinished?: string; incidents?: string[]; nextTopic?: string }): string {
   const parts: string[] = [
     `On ${input.date}, we worked on ${humanizeTopic(input.topic)}.`,
     input.whatHappened
@@ -267,11 +365,12 @@ export function buildJournalEntries(events: NormalizedEvent[]): JournalEntry[] {
     const topic = first.topic || inferGroupTopic(group) || "misc";
     const title = makeTitle(topic);
     const status = inferJournalStatus(group);
+    const incidents = extractIncidents(group);
     const whatHappened = buildWhatHappened(group, topic);
     const completed = buildCompleted(group, status);
-    const unfinished = buildUnfinished(group, status);
+    const unfinished = buildUnfinished(group, status, incidents);
     const nextTopic = inferNextTopic(group, events);
-    const summary = buildJournalSummary({ date: first.ts.slice(0, 10), topic, status, whatHappened, completed, unfinished, nextTopic });
+    const summary = buildJournalSummary({ date: first.ts.slice(0, 10), topic, status, whatHappened, completed, unfinished, incidents, nextTopic });
     out.push({
       journal_key: `${first.ts.slice(0, 10)}:${topic}`,
       date_start: first.ts,
@@ -279,6 +378,7 @@ export function buildJournalEntries(events: NormalizedEvent[]): JournalEntry[] {
       topic, title, summary, status,
       what_happened: whatHappened,
       completed, unfinished,
+      incidents: incidents.length ? incidents : undefined,
       next_topic: nextTopic,
       source_refs: group.map(g => `${g.source_table}:${g.source_record_id}`).filter(Boolean)
     });
