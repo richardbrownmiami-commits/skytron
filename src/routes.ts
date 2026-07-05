@@ -135,15 +135,15 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       for (const [table, rows] of Object.entries(tableRows)) {
         const sample = [];
         const len = rows.length;
-        if (len <= 40) { sample.push(...rows); }
+        if (len <= 30) { sample.push(...rows); }
         else {
-          // Take first 15, skip middle, take last 15
+          // Take first 15 + last 15 for coverage
           sample.push(...rows.slice(0, 15));
           sample.push(...rows.slice(len - 15));
         }
         groups[table] = [];
         for (const row of sample) {
-          if (groups[table].length >= 60) break;
+          if (groups[table].length >= 30) break;
           let c;
           try { c = JSON.parse(row.content); } catch { c = {}; }
           const ts = (c.created_at || c.updated_at || row.collected_at || "").replace("T", " ").slice(0, 16);
@@ -184,8 +184,8 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
         "- One-word answers, '[Reached max steps]', connection errors to LLM providers\n\n" +
         condensed + "\n\n---\nWrite the detailed narrative summary now. Full paragraphs, organized by date/topic:";
 
-      const result = await callLLM(env, { messages: [{ role: "user", content: prompt }], max_tokens: 4000 });
-      return json({ summary: result.content, model: result.model, rows_sampled: raw.results.length });
+      const result = await callLLM(env, { messages: [{ role: "user", content: prompt }], max_tokens: 2000 });
+      return json({ summary: result.content, model: result.model, rows_sampled: raw.results.length, errors: result.errors });
     } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
   }
 
