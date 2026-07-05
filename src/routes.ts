@@ -46,6 +46,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     if (!body.key || !body.content) return json({ error: "key and content required" }, 400);
     try {
       await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'learned')").bind(body.key, body.content, body.category || 'general').run();
+      try { await env.DB.prepare("INSERT OR REPLACE INTO knowledge_fts (key, content, category) VALUES (?1, ?2, ?3)").bind(body.key, body.content, body.category || 'general').run(); } catch {}
       try { await indexKnowledgeForSearch(env, body.key, body.content, body.category || 'general'); } catch {}
       return json({ ok: true, key: body.key });
     } catch (e) { return json({ error: e.message }, 400); }
