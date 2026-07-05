@@ -64,6 +64,7 @@ async function clearWARateLimit(db) {
 export async function callLLM(env, body, sessionId) {
   const errors = [];
   const waLimited = await isWARateLimited(env.DB);
+  const maxTokens = body.max_tokens || 2000;
 
   // Priority 1: Workers AI
   if (!waLimited && env.AI) {
@@ -71,7 +72,7 @@ export async function callLLM(env, body, sessionId) {
     try {
       const waResult = await Promise.race([
         env.AI.run("@cf/zai-org/glm-4.7-flash", {
-          messages: body.messages, max_tokens: 2000
+          messages: body.messages, max_tokens: maxTokens
         }),
         timeoutRace(25000)
       ]);
@@ -86,7 +87,7 @@ export async function callLLM(env, body, sessionId) {
         try {
           const fallback = await Promise.race([
             env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
-              messages: body.messages, max_tokens: 2000
+              messages: body.messages, max_tokens: maxTokens
             }),
             timeoutRace(30000)
           ]);
@@ -143,7 +144,7 @@ export async function callLLM(env, body, sessionId) {
 
   // Priority 3: OpenRouter direct — last resort when WA times out
   if (env.OPENROUTER_API_KEY) {
-    const orResult = await callOpenRouter(env, body.messages, 2000, body.model || "openrouter/free");
+    const orResult = await callOpenRouter(env, body.messages, maxTokens, body.model || "openrouter/free");
     if (orResult?.content) {
       if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
       return orResult;

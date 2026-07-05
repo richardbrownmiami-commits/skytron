@@ -184,7 +184,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
         "- One-word answers, '[Reached max steps]', connection errors to LLM providers\n\n" +
         condensed + "\n\n---\nWrite the detailed narrative summary now. Full paragraphs, organized by date/topic:";
 
-      const result = await callLLM(env, { messages: [{ role: "user", content: prompt }] });
+      const result = await callLLM(env, { messages: [{ role: "user", content: prompt }], max_tokens: 4000 });
       return json({ summary: result.content, model: result.model, rows_sampled: raw.results.length });
     } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
   }
