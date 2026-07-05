@@ -70,3 +70,132 @@ export async function getScratchpad(env, batchId = null) {
 export async function clearScratchpad(env) {
   await env.DB.prepare("DELETE FROM consolidation_scratchpad").run();
 }
+
+// Extract notable events from scratchpad rows → [{ date, topic, status, details }]
+function extractEvents(rows) {
+  const events = [];
+  const seen = new Set();
+
+  for (const row of rows) {
+    let data;
+    try { data = JSON.parse(row.content); } catch { continue; }
+    if (!data) continue;
+
+    const date = (data.created_at || data.collected_at || row.collected_at || "").slice(0, 10);
+    if (!date) continue;
+
+    if (row.source_table === 'actions') {
+      const task = (data.task || data.type || data.input || "").slice(0, 120);
+      if (!task || task.length < 3) continue;
+      const dedup = date + "|action|" + task.slice(0, 50);
+      if (seen.has(dedup)) continue;
+      seen.add(dedup);
+      let status = "ongoing";
+      let details = "";
+      if (data.status === "completed" || data.status === "done") { status = "done"; details = "Completed successfully."; }
+      else if (data.status === "error" || data.error) { status = "failed"; details = (data.error || "Hit an error.").slice(0, 120); }
+      else if (data.status === "running" || data.status === "queued") { status = "ongoing"; details = "Still in progress."; }
+      else { status = "done"; details = "Completed."; }
+      const topic = task.length > 60 ? task.slice(0, 57) + "..." : task;
+      events.push({ date, topic, status, details, source: "action" });
+
+    } else if (row.source_table === 'activity_log') {
+      const summary = (data.summary || data.event_type || data.tool_name || "").slice(0, 120);
+      if (!summary || summary.length < 3) continue;
+      const dedup = date + "|log|" + summary.slice(0, 50);
+      if (seen.has(dedup)) continue;
+      seen.add(dedup);
+      let status = "done";
+      let details = summary;
+      if (summary.toLowerCase().includes("error") || summary.toLowerCase().includes("fail")) {
+        status = "failed"; details = "Hit an error: " + summary;
+      }
+      events.push({ date, topic: summary, status, details, source: "log" });
+
+    } else if (row.source_table === 'brain_knowledge') {
+      if ((data.category === "lesson" || data.category === "auto_learned") && data.content && data.content.length > 10) {
+        const dedup = date + "|learn|" + data.content.slice(0, 50);
+        if (seen.has(dedup)) continue;
+        seen.add(dedup);
+        events.push({ date, topic: "Learned: " + data.key, status: "done", details: data.content.slice(0, 200), source: "knowledge" });
+      }
+
+    } else if (row.source_table === 'brain_agents') {
+      const agent = data.name || data.instruction || "";
+      if (!agent || agent.length < 3) continue;
+      const dedup = date + "|agent|" + agent.slice(0, 50);
+      if (seen.has(dedup)) continue;
+      seen.add(dedup);
+      let status = "done", details = "Agent ran.";
+      if (data.status === "error") { status = "failed"; details = "Agent hit an error."; }
+      else if (data.status === "running") { status = "ongoing"; details = "Agent is still running."; }
+      events.push({ date, topic: agent.slice(0, 80), status, details, source: "agent" });
+    }
+  }
+
+  // Merge similar events in same hour window
+  const merged = [];
+  const byDate = {};
+  for (const e of events) {
+    if (!byDate[e.date]) byDate[e.date] = [];
+    byDate[e.date].push(e);
+  }
+  for (const date of Object.keys(byDate).sort()) {
+    const dayEvents = byDate[date];
+    // Group by status within same date
+    const done = dayEvents.filter(e => e.status === "done");
+    const failed = dayEvents.filter(e => e.status === "failed");
+    const ongoing = dayEvents.filter(e => e.status === "ongoing");
+    if (done.length) merged.push({ date, topic: done.map(e => e.topic).join("; "), status: "done", details: done.length + " tasks completed." });
+    if (failed.length) merged.push({ date, topic: failed.map(e => e.topic).join("; "), status: "failed", details: failed.map(e => e.details).join(" | ") });
+    if (ongoing.length) merged.push({ date, topic: ongoing.map(e => e.topic).join("; "), status: "ongoing", details: "Still in progress." });
+  }
+
+  return merged.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Build memory pack from scratchpad — deterministic, no LLM
+export async function buildMemoryPack(env) {
+  await ensureScratchpadTable(env);
+  const scratch = await getScratchpad(env);
+  if (!scratch.results?.length) return { ok: false, reason: "no scratchpad data" };
+
+  const events = extractEvents(scratch.results);
+  if (!events.length) return { ok: false, reason: "no events extracted" };
+
+  let lines = ["# What I Remember About Our Work\n"];
+  const pending = [];
+
+  for (const e of events) {
+    let line;
+    if (e.status === "done") {
+      line = "- " + e.topic + " (" + e.date + "): We worked on this and it completed. " + e.details;
+      if (e.details !== "Completed successfully." && e.details !== "Completed." && e.details !== "1 tasks completed.0 tasks completed.")
+        line = "- " + e.topic + " (" + e.date + "): We finished this. " + e.details;
+    } else if (e.status === "failed") {
+      line = "- " + e.topic + " (" + e.date + "): That hit a problem. " + e.details;
+    } else {
+      line = "- " + e.topic + " (" + e.date + "): Still ongoing. " + e.details;
+      pending.push(e);
+    }
+    lines.push(line);
+  }
+
+  if (pending.length) {
+    lines.push("\n## What's Still Pending\n");
+    lines.push("If someone asks me what's pending or what I need reminding of, these are the ongoing items. I should figure it out from my own memory, not query a database.");
+    for (const e of pending) {
+      lines.push("- " + e.topic + " (" + e.date + "): " + e.details);
+    }
+  }
+
+  const content = lines.join("\n");
+
+  try {
+    await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('memory_pack_main', ?1, 'memory_pack', 'learned')").bind(content).run();
+    try { await env.DB.prepare("INSERT OR REPLACE INTO knowledge_fts (key, content, category) VALUES ('memory_pack_main', ?1, 'memory_pack')").bind(content).run(); } catch {}
+    return { ok: true, events: events.length, chars: content.length, preview: content.slice(0, 200) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
