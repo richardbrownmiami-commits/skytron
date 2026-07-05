@@ -62,11 +62,9 @@ export async function collectToScratchpad(env) {
 
 export async function getScratchpad(env, batchId = null) {
   if (batchId) {
-    return await env.DB.prepare("SELECT * FROM consolidation_scratchpad WHERE batch_id=?1 ORDER BY source_table, id ASC").bind(batchId).all();
+    return await env.DB.prepare("SELECT * FROM consolidation_scratchpad WHERE batch_id=?1 ORDER BY source_table, record_id ASC").bind(batchId).all();
   }
-  const lastBatch = await env.DB.prepare("SELECT batch_id FROM consolidation_scratchpad ORDER BY id DESC LIMIT 1").first();
-  if (!lastBatch) return { results: [] };
-  return await env.DB.prepare("SELECT * FROM consolidation_scratchpad WHERE batch_id=?1 ORDER BY source_table, id ASC").bind(lastBatch.batch_id).all();
+  return await env.DB.prepare("SELECT * FROM consolidation_scratchpad ORDER BY source_table, record_id ASC").all();
 }
 
 export async function clearScratchpad(env) {

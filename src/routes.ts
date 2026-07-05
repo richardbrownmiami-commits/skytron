@@ -66,7 +66,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
   if (url.pathname === "/brain/scratchpad" && req.method === "GET") {
     try {
       await ensureScratchpadTable(env);
-      const batchId = url.searchParams.get("batch");
+      const batchId = url.searchParams.get("batch") || null;
       const data = await getScratchpad(env, batchId);
       const count = data.results?.length || 0;
       const tables = {};
@@ -100,7 +100,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
         else text = (c.content || JSON.stringify(c)).slice(0, 200);
         formatted[t].rows.push({ time: fmt, text });
       }
-      return json({ batch_id: batchId || "latest", total_rows: count, per_table: tables, formatted });
+      return json({ batch_id: batchId || "all", total_rows: count, per_table: tables, formatted });
     } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
   }
 
