@@ -174,7 +174,7 @@ function makeTitle(topic: string): string {
 }
 
 function isIncidentalFailureEvent(e: NormalizedEvent): boolean {
-  const text = `${e.summary} ${JSON.stringify(e.details || {})}`.toLowerCase();
+  const text = e.summary.toLowerCase();
   return (
     text.includes("timed out") ||
     text.includes("timeout") ||
@@ -187,7 +187,7 @@ function isIncidentalFailureEvent(e: NormalizedEvent): boolean {
 }
 
 function isHardFailureEvent(e: NormalizedEvent): boolean {
-  const text = `${e.summary} ${JSON.stringify(e.details || {})}`.toLowerCase();
+  const text = e.summary.toLowerCase();
   return (
     text.includes("could not complete the task") ||
     text.includes("failed to implement") ||
@@ -202,7 +202,7 @@ function isHardFailureEvent(e: NormalizedEvent): boolean {
 function extractIncidents(group: NormalizedEvent[]): string[] {
   const incidents = new Set<string>();
   for (const e of group) {
-    const text = `${e.summary} ${JSON.stringify(e.details || {})}`.toLowerCase();
+    const text = e.summary.toLowerCase();
     if (text.includes("timeout") || text.includes("timed out")) incidents.add("timeout");
     if (text.includes("max steps reached")) incidents.add("max_steps");
     if (text.includes("invalid input")) incidents.add("invalid_input");
@@ -217,7 +217,7 @@ function inferJournalStatus(group: NormalizedEvent[]): string {
   let score = { completed: 0, tested: 0, built: 0, planned: 0, discussed: 0, unfinished: 0, failed: 0 };
 
   for (const e of group) {
-    const text = `${e.summary} ${JSON.stringify(e.details || {})}`.toLowerCase();
+    const text = e.summary.toLowerCase();
 
     if (isHardFailureEvent(e)) score.failed += 4;
     if (isIncidentalFailureEvent(e)) score.unfinished += 1;
@@ -260,7 +260,7 @@ function buildCompleted(group: NormalizedEvent[], status: string): string | unde
   if (done.length) parts.push(`${done.length} action(s) completed`);
   if (built.length) parts.push(`discussion produced implementation ideas`);
 
-  const text = group.map(g => `${g.summary} ${JSON.stringify(g.details || {})}`).join("\n").toLowerCase();
+  const text = group.map(g => g.summary).join("\n").toLowerCase();
   if (text.includes("architecture") || text.includes("design")) parts.push("architecture / design was produced");
   if (text.includes("plan")) parts.push("plan was outlined");
 
@@ -290,7 +290,7 @@ function buildUnfinished(group: NormalizedEvent[], status: string, incidents: st
   if (status === "completed" || status === "tested") return undefined;
 
   const gapParts: string[] = [];
-  const text = group.map(g => `${g.summary} ${JSON.stringify(g.details || {})}`).join("\n").toLowerCase();
+  const text = group.map(g => g.summary).join("\n").toLowerCase();
 
   const hasImplementation = text.includes("created") || text.includes("implemented") || text.includes("built") || text.includes("wrote");
   const hasTested = text.includes("tested") || text.includes("test ") || text.includes("working") || text.includes("confirmed");
