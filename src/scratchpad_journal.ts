@@ -274,16 +274,47 @@ function buildCompleted(group: NormalizedEvent[], status: string): string | unde
 }
 
 function buildWhatHappened(group: NormalizedEvent[], topic: string): string {
-  const main = group.filter(g => g.event_type !== "journal_entry" && g.event_type !== "knowledge");
-  if (!main.length) return `We had activity related to ${humanizeTopic(topic)}.`;
-  const desc = main.slice(0, 3).map(g => {
-    if (g.event_type === "action_done") return `completed ${g.summary}`;
-    if (g.event_type === "action_failed") return `tried ${g.summary} but hit an error`;
-    if (g.event_type === "user_message") return `user said: ${g.summary.slice(0, 100)}`;
-    if (g.event_type === "assistant_message") return `I responded about ${g.topic || "it"}`;
-    return g.summary.slice(0, 100);
-  }).join(". ");
-  return `${humanizeTopic(topic)}: ${desc}.`;
+  const h = humanizeTopic(topic);
+  const text = group.map(g => g.summary).join("\n").toLowerCase();
+  const hasImplementation = text.includes("created") || text.includes("implemented") || text.includes("built") || text.includes("wrote code") || text.includes("tool");
+  const hasPlan = text.includes("plan") || text.includes("architecture") || text.includes("design") || text.includes("proposed") || text.includes("step");
+  const hasError = text.includes("error") || text.includes("fail") || text.includes("timeout");
+  const hasCompleted = text.includes("completed") || text.includes("done") || text.includes("finished");
+
+  if (hasError && !hasPlan && !hasImplementation) return `We tried to work on ${h} but hit problems.`;
+  if (hasPlan && !hasImplementation) return `We discussed and planned ${h}.`;
+  if (hasImplementation && !text.includes("test")) return `We built or created something for ${h} but no confirmation it was tested.`;
+  if (hasImplementation && hasCompleted) return `We built ${h} and completed the work.`;
+  if (hasPlan && hasError) return `We planned ${h} but ran into issues during implementation.`;
+  return `We had activity related to ${h}.`;
+}
+
+function buildJournalSummary(input: { date: string; topic: string; status: string; completed?: string; unfinished?: string; incidents?: string[]; nextTopic?: string }): string {
+  const h = humanizeTopic(input.topic);
+  const parts: string[] = [];
+
+  if (input.status === "planned") {
+    parts.push(`We planned ${h} on ${input.date} but never built or tested it.`);
+  } else if (input.status === "built") {
+    parts.push(`We built ${h} on ${input.date} but it wasn't fully tested.`);
+  } else if (input.status === "completed") {
+    parts.push(`We finished ${h} on ${input.date}.`);
+  } else if (input.status === "failed") {
+    parts.push(`${h} failed on ${input.date} — the task couldn't be completed.`);
+  } else if (input.status === "discussed") {
+    parts.push(`We talked about ${h} on ${input.date} but didn't make a clear plan.`);
+  } else if (input.status === "unfinished") {
+    parts.push(`We worked on ${h} on ${input.date} but left it incomplete.`);
+  } else {
+    parts.push(`On ${input.date}, we worked on ${h}.`);
+  }
+
+  if (input.completed && input.status !== "discussed") parts.push(input.completed);
+  if (input.unfinished && input.status !== "completed") parts.push(input.unfinished);
+  if (input.incidents?.length && input.status !== "completed") parts.push(`(Note: ${input.incidents.join(", ")})`);
+  if (input.nextTopic) parts.push(`After that, we moved to ${humanizeTopic(input.nextTopic)}.`);
+
+  return parts.join(" ");
 }
 
 function buildUnfinished(group: NormalizedEvent[], status: string, incidents: string[]): string | undefined {
@@ -357,7 +388,7 @@ export function buildJournalEntries(events: NormalizedEvent[]): JournalEntry[] {
     const completed = buildCompleted(group, status);
     const unfinished = buildUnfinished(group, status, incidents);
     const nextTopic = inferNextTopic(group, events);
-    const summary = buildJournalSummary({ date: first.ts.slice(0, 10), topic, status, whatHappened, completed, unfinished, incidents, nextTopic });
+    const summary = buildJournalSummary({ date: first.ts.slice(0, 10), topic, status, completed, unfinished, incidents, nextTopic });
     out.push({
       journal_key: `${first.ts.slice(0, 10)}:${topic}`,
       date_start: first.ts,
