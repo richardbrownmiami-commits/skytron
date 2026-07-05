@@ -76,6 +76,9 @@ function extractEvents(rows) {
   const events = [];
   const seen = new Set();
 
+  // Skip common noise patterns
+  const NOISE_WORDS = new Set(["chat", "conversation", "default", "tick", "heartbeat", "status_check"]);
+
   for (const row of rows) {
     let data;
     try { data = JSON.parse(row.content); } catch { continue; }
@@ -85,73 +88,69 @@ function extractEvents(rows) {
     if (!date) continue;
 
     if (row.source_table === 'actions') {
-      const task = (data.task || data.type || data.input || "").slice(0, 120);
-      if (!task || task.length < 3) continue;
-      const dedup = date + "|action|" + task.slice(0, 50);
+      const rawTask = (data.task || data.type || "").trim();
+      // Skip noise
+      if (!rawTask || rawTask.length < 3 || NOISE_WORDS.has(rawTask.toLowerCase())) continue;
+      const input = (data.input || "").replace(/["']/g, "").slice(0, 80).trim();
+      let topic = rawTask;
+      if (input && input !== rawTask) topic = rawTask + (rawTask.length > 40 ? "" : (": " + input));
+      const dedup = date + "|" + topic.slice(0, 60);
       if (seen.has(dedup)) continue;
       seen.add(dedup);
-      let status = "ongoing";
-      let details = "";
-      if (data.status === "completed" || data.status === "done") { status = "done"; details = "Completed successfully."; }
-      else if (data.status === "error" || data.error) { status = "failed"; details = (data.error || "Hit an error.").slice(0, 120); }
+      let status = "done", details = "";
+      if (data.status === "error" || data.error) { status = "failed"; details = (data.error || "").slice(0, 100); }
       else if (data.status === "running" || data.status === "queued") { status = "ongoing"; details = "Still in progress."; }
-      else { status = "done"; details = "Completed."; }
-      const topic = task.length > 60 ? task.slice(0, 57) + "..." : task;
-      events.push({ date, topic, status, details, source: "action" });
+      events.push({ date, topic: topic.slice(0, 70), status, details, sortKey: date + "_" + (data.id || 0) });
 
     } else if (row.source_table === 'activity_log') {
-      const summary = (data.summary || data.event_type || data.tool_name || "").slice(0, 120);
-      if (!summary || summary.length < 3) continue;
-      const dedup = date + "|log|" + summary.slice(0, 50);
+      const summary = (data.summary || data.event_type || data.tool_name || "").trim();
+      if (!summary || summary.length < 5 || NOISE_WORDS.has(summary.toLowerCase().split(" ")[0])) continue;
+      const dedup = date + "|log|" + summary.slice(0, 60);
       if (seen.has(dedup)) continue;
       seen.add(dedup);
-      let status = "done";
-      let details = summary;
-      if (summary.toLowerCase().includes("error") || summary.toLowerCase().includes("fail")) {
-        status = "failed"; details = "Hit an error: " + summary;
-      }
-      events.push({ date, topic: summary, status, details, source: "log" });
+      const isError = summary.toLowerCase().includes("error") || summary.toLowerCase().includes("fail");
+      events.push({
+        date, topic: summary.slice(0, 70),
+        status: isError ? "failed" : "done",
+        details: isError ? "Hit an error." : "",
+        sortKey: date + "_" + (data.id || 0)
+      });
 
     } else if (row.source_table === 'brain_knowledge') {
-      if ((data.category === "lesson" || data.category === "auto_learned") && data.content && data.content.length > 10) {
-        const dedup = date + "|learn|" + data.content.slice(0, 50);
+      if ((data.category === "lesson" || data.category === "auto_learned") && data.content && data.content.length > 20) {
+        const dedup = date + "|learn|" + data.key;
         if (seen.has(dedup)) continue;
         seen.add(dedup);
-        events.push({ date, topic: "Learned: " + data.key, status: "done", details: data.content.slice(0, 200), source: "knowledge" });
+        events.push({
+          date, topic: "Learned: " + data.key, status: "done", details: "",
+          sortKey: date + "_" + (data.id || 0)
+        });
       }
-
-    } else if (row.source_table === 'brain_agents') {
-      const agent = data.name || data.instruction || "";
-      if (!agent || agent.length < 3) continue;
-      const dedup = date + "|agent|" + agent.slice(0, 50);
-      if (seen.has(dedup)) continue;
-      seen.add(dedup);
-      let status = "done", details = "Agent ran.";
-      if (data.status === "error") { status = "failed"; details = "Agent hit an error."; }
-      else if (data.status === "running") { status = "ongoing"; details = "Agent is still running."; }
-      events.push({ date, topic: agent.slice(0, 80), status, details, source: "agent" });
     }
   }
 
-  // Merge similar events in same hour window
+  // Sort by date then id
+  events.sort((a, b) => (a.sortKey || a.date).localeCompare(b.sortKey || b.date));
+
+  // Keep last 15, merge same-date same-status into one line
+  const recent = events.slice(-15);
   const merged = [];
-  const byDate = {};
-  for (const e of events) {
-    if (!byDate[e.date]) byDate[e.date] = [];
-    byDate[e.date].push(e);
+  const groups = {};
+  for (const e of recent) {
+    const key = e.date + "|" + e.status;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(e);
   }
-  for (const date of Object.keys(byDate).sort()) {
-    const dayEvents = byDate[date];
-    // Group by status within same date
-    const done = dayEvents.filter(e => e.status === "done");
-    const failed = dayEvents.filter(e => e.status === "failed");
-    const ongoing = dayEvents.filter(e => e.status === "ongoing");
-    if (done.length) merged.push({ date, topic: done.map(e => e.topic).join("; "), status: "done", details: done.length + " tasks completed." });
-    if (failed.length) merged.push({ date, topic: failed.map(e => e.topic).join("; "), status: "failed", details: failed.map(e => e.details).join(" | ") });
-    if (ongoing.length) merged.push({ date, topic: ongoing.map(e => e.topic).join("; "), status: "ongoing", details: "Still in progress." });
+  for (const key of Object.keys(groups).sort()) {
+    const list = groups[key];
+    const e = list[0];
+    const topics = list.map(x => x.topic);
+    // If 3+ similar items on same date, summarize
+    const topic = topics.length > 2 ? topics[0] + " (+" + (topics.length - 1) + " more)" : topics.join("; ");
+    merged.push({ date: e.date, topic: topic.slice(0, 90), status: e.status, details: e.details });
   }
 
-  return merged.sort((a, b) => a.date.localeCompare(b.date));
+  return merged;
 }
 
 // Build memory pack from scratchpad — deterministic, no LLM
@@ -168,24 +167,22 @@ export async function buildMemoryPack(env) {
 
   for (const e of events) {
     let line;
-    if (e.status === "done") {
-      line = "- " + e.topic + " (" + e.date + "): We worked on this and it completed. " + e.details;
-      if (e.details !== "Completed successfully." && e.details !== "Completed." && e.details !== "1 tasks completed.0 tasks completed.")
-        line = "- " + e.topic + " (" + e.date + "): We finished this. " + e.details;
-    } else if (e.status === "failed") {
-      line = "- " + e.topic + " (" + e.date + "): That hit a problem. " + e.details;
-    } else {
-      line = "- " + e.topic + " (" + e.date + "): Still ongoing. " + e.details;
+    if (e.status === "failed") {
+      line = "- " + e.topic + " (" + e.date + "): " + (e.details || "Didn't go right.");
+    } else if (e.status === "ongoing") {
+      line = "- " + e.topic + " (" + e.date + "): Still ongoing.";
       pending.push(e);
+    } else {
+      line = "- " + e.topic + " (" + e.date + "): Done.";
     }
     lines.push(line);
   }
 
   if (pending.length) {
     lines.push("\n## What's Still Pending\n");
-    lines.push("If someone asks me what's pending or what I need reminding of, these are the ongoing items. I should figure it out from my own memory, not query a database.");
+    lines.push("If someone asks me what's pending, these are the ongoing items.");
     for (const e of pending) {
-      lines.push("- " + e.topic + " (" + e.date + "): " + e.details);
+      lines.push("- " + e.topic + " (" + e.date + "): Not finished yet.");
     }
   }
 
