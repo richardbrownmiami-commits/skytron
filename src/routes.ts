@@ -70,8 +70,37 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       const data = await getScratchpad(env, batchId);
       const count = data.results?.length || 0;
       const tables = {};
-      if (data.results) for (const row of data.results) { tables[row.source_table] = (tables[row.source_table] || 0) + 1; }
-      return json({ batch_id: batchId || "latest", total_rows: count, per_table: tables, rows: data.results || [] });
+      const tableLabels = {
+        brain_memory: "Conversation messages (user/assistant)",
+        actions: "Action history (queries, sensorium noise, results)",
+        activity_log: "System activity log (tool calls, errors, ticks)",
+        brain_knowledge: "Knowledge base (rules, lessons, journals, stats)",
+        identity: "Key-value settings & tracking counters",
+        brain_vectors: "Semantic vector fingerprints",
+        brain_agents: "Agent step execution records"
+      };
+      const formatted = {};
+      if (data.results) for (const row of data.results) {
+        const t = row.source_table;
+        if (!formatted[t]) formatted[t] = { label: tableLabels[t] || t, rows: [] };
+        tables[t] = (tables[t] || 0) + 1;
+        let c;
+        try { c = JSON.parse(row.content); } catch { c = { content: row.content }; }
+        const ts = (c.created_at || c.updated_at || row.collected_at || "").replace("T", " ").slice(0, 19);
+        let d = new Date((ts.endsWith("Z") ? ts : ts + "Z"));
+        const fmt = ('0'+d.getDate()).slice(-2)+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+d.getFullYear()+' '+d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+        let text = "";
+        if (t === "brain_memory") text = "[" + c.role + "] " + (c.content || "");
+        else if (t === "actions") text = (c.input || c.result || c.error || "").slice(0, 200);
+        else if (t === "activity_log") text = c.summary + (c.details ? " | " + JSON.stringify(c.details).slice(0, 100) : "");
+        else if (t === "brain_knowledge") text = "[" + (c.category || c.source) + "] " + (c.content || "").slice(0, 200);
+        else if (t === "identity") text = c.key + " = " + (c.value || "").slice(0, 100);
+        else if (t === "brain_vectors") text = c.ref_key;
+        else if (t === "brain_agents") text = (c.instruction || c.result || "").slice(0, 200);
+        else text = (c.content || JSON.stringify(c)).slice(0, 200);
+        formatted[t].rows.push({ time: fmt, text });
+      }
+      return json({ batch_id: batchId || "latest", total_rows: count, per_table: tables, formatted });
     } catch (e) { return json({ error: e.message, stack: e.stack }, 500); }
   }
 
