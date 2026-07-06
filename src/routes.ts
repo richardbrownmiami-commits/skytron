@@ -141,8 +141,30 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
 
   if (url.pathname === "/brain/journal" && req.method === "GET") {
     try {
+      const jsonOnly = url.searchParams.get("format") === "json";
+      const accept = req.headers.get("accept") || "";
+      if (jsonOnly || !accept.includes("text/html")) {
+        const r = await env.DB.prepare("SELECT key, content, created_at FROM brain_knowledge WHERE category='journal' ORDER BY created_at DESC LIMIT 200").all();
+        return json({ entries: r.results || [] });
+      }
       const r = await env.DB.prepare("SELECT key, content, created_at FROM brain_knowledge WHERE category='journal' ORDER BY created_at DESC LIMIT 200").all();
-      return json({ entries: r.results || [] });
+      const entries = r.results || [];
+      const esc = s => (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      const html = entries.map(e => {
+        let c; try { c = JSON.parse(e.content); } catch { c = {}; }
+        const colors = { completed:"#3fb950", discussed:"#58a6ff", failed:"#f85149", partial:"#d29922", pending:"#8b949e" };
+        const col = colors[c.status] || "#8b949e";
+        const sections = [];
+        if (c.what_happened) sections.push(`<div class="sec"><div class="sl">What Happened</div><div class="st">${esc(c.what_happened)}</div></div>`);
+        if (c.confirmed_facts) sections.push(`<div class="sec"><div class="sl">Confirmed</div><div class="st">${esc(c.confirmed_facts)}</div></div>`);
+        if (c.not_confirmed) sections.push(`<div class="sec"><div class="sl">Not Confirmed</div><div class="st">${esc(c.not_confirmed)}</div></div>`);
+        if (c.what_i_should_remember) sections.push(`<div class="sec"><div class="sl">Remember</div><div class="st">${esc(c.what_i_should_remember)}</div></div>`);
+        if (c.recall_response) sections.push(`<details class="rd"><summary>Recall Response</summary><div class="st rt">${esc(c.recall_response)}</div></details>`);
+        const tags = c.tags?.length ? `<div class="tgs">${c.tags.map(t => `<span class="tg">${esc(t)}</span>`).join("")}</div>` : "";
+        const date = (c.date_start || "").slice(0, 10);
+        return `<div class="e" style="border-left:4px solid ${col}"><div class="eh"><span class="ed">${esc(date)}</span><span class="et">${esc(c.title || c.topic || "Entry")}</span><span class="s" style="background:${col}18;color:${col}">${esc(c.status||"unknown")}</span></div><div class="eb">${sections.join("")}${tags}</div></div>`;
+      }).join("\n");
+      return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skytron Journal</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:1.5rem;max-width:960px;margin:auto}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.3rem}.sub{color:#8b949e;font-size:0.85rem;margin-bottom:1.5rem}.e{background:#161b22;border:1px solid #30363d;border-radius:10px;margin-bottom:0.9rem;overflow:hidden}.eh{display:flex;align-items:center;gap:0.75rem;padding:0.65rem 1rem;background:#1c2333;border-bottom:1px solid #30363d}.ed{color:#8b949e;font-size:0.8rem;white-space:nowrap}.et{flex:1;font-weight:600;font-size:0.95rem}.s{font-size:0.75rem;padding:0.15rem 0.6rem;border-radius:999px;font-weight:500;text-transform:capitalize}.eb{padding:0.75rem 1rem}.sec{margin-bottom:0.7rem}.sl{font-size:0.72rem;color:#8b949e;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.2rem}.st{font-size:0.9rem;line-height:1.55;color:#c9d1d9;white-space:pre-wrap}.rt{background:#0d1526;border:1px solid #1c2940;border-radius:6px;padding:0.6rem;margin-top:0.25rem}.rd summary{cursor:pointer;color:#58a6ff;font-size:0.8rem;padding:0.2rem 0}.rd summary:hover{color:#79c0ff}.tgs{display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.5rem}.tg{background:#1c2540;color:#58a6ff;font-size:0.7rem;padding:0.12rem 0.5rem;border-radius:999px;border:1px solid #2a3a60}.empty{text-align:center;padding:2rem;color:#6b7280}</style></head><body><h1>Skytron Journal</h1><p class="sub">${entries.length} entries</p>${entries.length ? html : '<div class="empty">No entries found</div>'}</body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" } });
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
