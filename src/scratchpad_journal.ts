@@ -154,7 +154,7 @@ function isGarbage(e: NormalizedEvent): boolean {
     if (s.includes("sensorium") || s.includes("energy check") || (e.event_type === "activity" && (s.includes("tick") || s.includes("idle")))) return true;
   }
   if (e.event_type === "action_failed") {
-    if (s.includes("timed out") || s.includes("max steps") || s.includes("rate limit") || s.includes("connection error")) return true;
+    if (s.includes("timeout") || s.includes("timed out") || s.includes("max steps") || s.includes("rate limit") || s.includes("connection error") || s.includes("stuck") || s.includes("auto-repaired")) return true;
   }
   if (e.source_table === "actions" && e.event_type === "action") {
     if (s.length > 0 && s.length < 15) return true;
@@ -243,11 +243,12 @@ export function buildJournalEntries(events: NormalizedEvent[]): JournalEntry[] {
 }
 
 export async function saveJournalToKnowledge(env: any, entries: JournalEntry[]) {
+  await env.DB.prepare("DELETE FROM brain_knowledge WHERE category='journal'").run();
   const stmts: any[] = [];
   for (const entry of entries) {
     const key = `journal_${entry.date}`;
     stmts.push(env.DB.prepare(
-      "INSERT OR REPLACE INTO brain_knowledge (key, category, content) VALUES (?1, 'journal', ?2)"
+      "INSERT INTO brain_knowledge (key, category, content) VALUES (?1, 'journal', ?2)"
     ).bind(key, JSON.stringify(entry)));
   }
   if (stmts.length) await env.DB.batch(stmts);
