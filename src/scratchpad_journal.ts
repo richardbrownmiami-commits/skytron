@@ -374,11 +374,19 @@ export async function buildMemoryPack(env: any) {
     const parts: string[] = [];
     for (const [day, dayEvents] of [...days.entries()].sort()) {
       const topics = [...new Set(dayEvents.map(e => e.topic).filter(Boolean))] as string[];
-      const status = inferDayStatus(dayEvents);
-      const convCount = dayEvents.filter(e => e.event_type === "user_message").length;
-      if (topics.length) parts.push(`${day}: ${topics.slice(0, 4).join(", ")} (${status}, ${convCount} msgs)`);
+      const convMsgs = dayEvents.filter(e => e.event_type === "user_message");
+      const tools = [...new Set(dayEvents.filter(e => e.event_type === "action_done").map(e => (e.details?.task || e.details?.type || "").toLowerCase()).filter(t => t && t !== "chat" && t !== "think"))];
+      const learned = [...new Set(dayEvents.filter(e => e.event_type === "lesson" || e.event_type === "knowledge").map(e => e.details?.key || "").filter(k => !/checkpoint|identity|personality|lesson_\d{4}|memory.?loop|\bstats[_\s\d]|[_.]rule\b/.test(k)).map(k => k.replace(/^(learned_|source_)/, "").replace(/_/g, " ").slice(0, 40)))];
+      const convSnippets = convMsgs.slice(0, 2).map(e => { let t = e.summary; const m = t.match(/^\[([^\]]+)\]\s*/); if (m) t = t.slice(m[0].length); return t.length > 60 ? t.slice(0, 60) + "..." : t; });
+      const desc = [];
+      if (topics.length) desc.push(`worked on ${topics.slice(0, 5).join(", ")}`);
+      if (convMsgs.length) desc.push(`${convMsgs.length} conversations`);
+      if (tools.length) desc.push(`${tools.length} tools used: ${tools.slice(0, 3).join(", ")}`);
+      if (learned.length) desc.push(`learned: ${learned.slice(0, 3).join(", ")}`);
+      parts.push(`${day}: ${desc.join("; ")}.`);
+      if (convSnippets.length) parts.push(`  Asked about: ${convSnippets.join(" | ")}`);
     }
-    content = "Recent activity:\n" + parts.join("\n");
+    content = "What I remember:\n" + parts.join("\n");
   }
 
   await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, category, content) VALUES ('memory_pack_main', 'memory_pack', ?1)").bind(content).run();
