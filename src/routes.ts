@@ -11,7 +11,7 @@
 import { HARDCODED_CORE, SYSTEM_PROMPT, PROMPT_SLOTS } from './constants';
 import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buildSensorium, storeMemory, getRecentMemory, searchKnowledge, semanticSearch, ensureVectorizeIndex, indexAllKnowledge, indexKnowledgeForSearch, saveAgentState, logActivity } from './db';
 import { getScratchpad, ensureScratchpadTable, collectToScratchpad } from './consolidate';
-import { buildScratchpadJournal } from './scratchpad_journal';
+import { buildScratchpadJournal, buildMemoryPack } from './scratchpad_journal';
 import { processOneStep, processOneAgentStep } from './agents';
 import { toolDefinitions } from './tools';
 import { callLLM } from './llm';
@@ -135,6 +135,13 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
   if (url.pathname === "/brain/scratchpad/journal" && req.method === "POST") {
     try {
       const result = await buildScratchpadJournal(env);
+      return json(result);
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
+  if (url.pathname === "/brain/scratchpad/memory" && req.method === "POST") {
+    try {
+      const result = await buildMemoryPack(env);
       return json(result);
     } catch (e) { return json({ error: e.message }, 500); }
   }

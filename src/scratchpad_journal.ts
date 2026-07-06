@@ -303,3 +303,62 @@ export async function buildScratchpadJournal(env: any) {
     }))
   };
 }
+
+export async function buildMemoryPack(env: any) {
+  const raw = await getScratchpad(env);
+  const rows: ScratchpadRow[] = raw.results || raw || [];
+  if (!rows.length) return { ok: false, reason: "no scratchpad data" };
+
+  const deduped = dedupeRows(rows);
+  const events = deduped.map(normalizeRow).filter(Boolean) as NormalizedEvent[];
+  events.sort((a, b) => a.ts.localeCompare(b.ts));
+  const filtered = events.filter(e => !isGarbage(e));
+
+  const days = new Map<string, NormalizedEvent[]>();
+  for (const e of filtered) {
+    const day = e.ts.slice(0, 10);
+    if (!days.has(day)) days.set(day, []);
+    days.get(day)!.push(e);
+  }
+
+  const lines: string[] = [];
+  const completed: string[] = [];
+  const planned: string[] = [];
+  const problems: string[] = [];
+  const daySummaries: string[] = [];
+
+  for (const [day, dayEvents] of [...days.entries()].sort()) {
+    const topics = [...new Set(dayEvents.map(e => e.topic).filter(Boolean))] as string[];
+    const status = inferDayStatus(dayEvents);
+    const convCount = dayEvents.filter(e => e.event_type === "user_message").length;
+    const learnedCount = dayEvents.filter(e => e.event_type === "lesson" || e.event_type === "knowledge").length;
+    const toolCount = dayEvents.filter(e => e.event_type === "action_done").length;
+    const errorCount = dayEvents.filter(e => e.event_type === "action_failed").length;
+
+    if (status === "productive" || status === "built") completed.push(`${day}: ${topics.slice(0, 4).join(", ")} (${convCount} msgs, ${toolCount} actions)`);
+    else if (status === "rough" || status === "failed") problems.push(`${day}: ${topics.slice(0, 3).join(", ")} — had issues (${errorCount} errors)`);
+    else planned.push(`${day}: ${topics.slice(0, 3).join(", ")} — ${status}`);
+  }
+
+  if (completed.length) {
+    lines.push("Things I remember doing:");
+    for (const c of completed.slice(-5)) lines.push(`  - ${c}`);
+  }
+  if (planned.length) {
+    lines.push("");
+    lines.push("Things that were discussed but not finished:");
+    for (const p of planned.slice(-3)) lines.push(`  - ${p}`);
+  }
+  if (problems.length) {
+    lines.push("");
+    lines.push("Days that had problems:");
+    for (const p of problems.slice(-3)) lines.push(`  - ${p}`);
+  }
+
+  const content = lines.join("\n").trim();
+  if (!content) return { ok: false, reason: "nothing to remember" };
+
+  await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, category, content) VALUES ('memory_pack_main', 'memory_pack', ?1)").bind(content).run();
+
+  return { ok: true, sections: { completed: completed.length, planned: planned.length, problems: problems.length }, preview: content.slice(0, 300) };
+}
