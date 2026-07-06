@@ -1,5 +1,4 @@
 import { getScratchpad } from "./consolidate";
-import { callLLM } from './llm';
 
 type ScratchpadRow = {
   id: number;
@@ -350,27 +349,25 @@ export async function buildMemoryPack(env: any) {
   if (!filtered.length) return { ok: false, reason: "nothing meaningful in scratchpad" };
 
   const condensed = condenseEventsForLLM(filtered);
-  const prompt = `You are an AI assistant reflecting on your recent activity. Below is a chronological log of your conversations, tool usage, and learning from recent days.
-
-Write a short memory summary in first person ("I"). Cover:
-- What you worked on (be specific about topics and tools)
-- What you accomplished or completed
-- What's still pending or unfinished
-- Any problems or failures you should remember
-
-Keep it to 3-6 sentences. Write naturally, don't use bullet points. Here is your recent activity:\n\n${condensed}\n\nWrite your memory summary now:`;
+  const prompt = `You are an AI assistant reflecting on your recent activity. Write a short memory summary in first person ("I"). Cover what you worked on, what you completed, what's still pending, and any problems. Keep it to 3-6 natural sentences, no bullet points.\n\n${condensed}\n\nWrite your memory summary now:`;
 
   let content = "";
 
-  try {
-    const result = await callLLM(env, {
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 600,
-      model: "gemini-2.5-flash",
-      task: "memory_pack"
-    });
-    if (result?.content) content = result.content.trim();
-  } catch {}
+  if (env.OPENROUTER_API_KEY) {
+    try {
+      const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.OPENROUTER_API_KEY, "HTTP-Referer": "https://github.com/richardbrownmiami-commits/skytron", "X-Title": "Skytron" },
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], model: "openrouter/free", max_tokens: 500 }),
+        signal: AbortSignal.timeout(20000)
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const msg = data.choices?.[0]?.message?.content;
+        if (msg && msg.trim().length > 20) content = msg.trim();
+      }
+    } catch {}
+  }
 
   if (!content) {
     const days = new Map<string, NormalizedEvent[]>();
@@ -384,14 +381,12 @@ Keep it to 3-6 sentences. Write naturally, don't use bullet points. Here is your
       const topics = [...new Set(dayEvents.map(e => e.topic).filter(Boolean))] as string[];
       const status = inferDayStatus(dayEvents);
       const convCount = dayEvents.filter(e => e.event_type === "user_message").length;
-      if (topics.length) parts.push(`${day} (${status}): ${topics.slice(0, 4).join(", ")} — ${convCount} msgs`);
+      if (topics.length) parts.push(`${day}: ${topics.slice(0, 4).join(", ")} (${status}, ${convCount} msgs)`);
     }
-    content = parts.join("\n");
+    content = "Recent activity:\n" + parts.join("\n");
   }
-
-  if (!content) return { ok: false, reason: "nothing to remember" };
 
   await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, category, content) VALUES ('memory_pack_main', 'memory_pack', ?1)").bind(content).run();
 
-  return { ok: true, generator: content.includes("I ") ? "llm" : "template", preview: content.slice(0, 300) };
+  return { ok: true, generator: content.startsWith("Recent") ? "template" : "llm", preview: content.slice(0, 300) };
 }
