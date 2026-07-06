@@ -204,7 +204,7 @@ function buildDayNarrative(events: NormalizedEvent[]): string {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
       if (task === "chat" || task === "think") continue;
       nonChatToolCount++;
-      if (toolExamples.length < 3) toolExamples.push(task);
+      if (task && toolExamples.length < 3 && !toolExamples.includes(task)) toolExamples.push(task);
     } else if (e.event_type === "action_failed") {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
       if (task === "chat" || task === "think") continue;
@@ -213,11 +213,14 @@ function buildDayNarrative(events: NormalizedEvent[]): string {
     }
   }
 
+  const cleanTopics = [...convTopics].filter(t => t !== "general");
+  const cleanLearned = learned.filter(t => t !== "general");
+  const toolList = toolExamples.filter(Boolean);
   const parts: string[] = [];
-  if (learned.length) parts.push(`Learned about ${learned.slice(0, 5).join(", ")}${learned.length > 5 ? ` and ${learned.length - 5} more topics` : ""}.`);
-  if (userCount > 0) parts.push(`Had ${userCount} conversation(s) about ${[...convTopics].slice(0, 4).join(", ")}.`);
-  if (nonChatToolCount > 0) parts.push(`${nonChatToolCount} non-chat tool(s) used: ${toolExamples.join(", ")}.`);
-  if (errors.length) parts.push(`${errors.length} non-chat error(s): ${errors.slice(0, 3).join("; ")}.`);
+  if (cleanLearned.length) parts.push(`Learned about ${cleanLearned.slice(0, 5).join(", ")}${cleanLearned.length > 5 ? ` and ${cleanLearned.length - 5} more topics` : ""}.`);
+  if (userCount > 0) parts.push(`Had ${userCount} conversation(s) about ${cleanTopics.length ? cleanTopics.slice(0, 4).join(", ") : "various topics"}.`);
+  if (nonChatToolCount > 0) parts.push(`${nonChatToolCount} non-chat tool(s) used: ${toolList.length ? toolList.join(", ") : "various"}.`);
+  if (errors.length) parts.push(`${errors.length} error(s): ${errors.slice(0, 3).join("; ")}.`);
   return parts.join(" ");
 }
 
