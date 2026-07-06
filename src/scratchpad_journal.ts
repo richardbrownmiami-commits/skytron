@@ -356,8 +356,8 @@ export async function buildMemoryPack(env: any) {
   if (env.AI) {
     try {
       const result = await Promise.race([
-        env.AI.run("@cf/zai-org/glm-4.7-flash", { messages: [{ role: "user", content: prompt }], max_tokens: 500 }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000))
+        env.AI.run("@cf/google/gemma-4-26b-a4b-it", { messages: [{ role: "user", content: prompt }], max_tokens: 600 }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000))
       ]);
       const text = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
       if (text && text.trim().length > 20) content = text.trim();
@@ -391,5 +391,5 @@ export async function buildMemoryPack(env: any) {
 
   await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, category, content) VALUES ('memory_pack_main', 'memory_pack', ?1)").bind(content).run();
 
-  return { ok: true, generator: content.startsWith("Recent") ? "template" : "llm", preview: content.slice(0, 300) };
+  return { ok: true, generator: content.startsWith("What I remember") ? "template" : "llm", preview: content.slice(0, 300) };
 }
