@@ -154,7 +154,7 @@ function isGarbage(e: NormalizedEvent): boolean {
     if (s.includes("sensorium") || s.includes("energy check") || (e.event_type === "activity" && (s.includes("tick") || s.includes("idle")))) return true;
   }
   if (e.event_type === "action_failed") {
-    if (s.includes("timeout") || s.includes("timed out") || s.includes("max steps") || s.includes("rate limit") || s.includes("connection error") || s.includes("stuck") || s.includes("auto-repaired")) return true;
+    if (s.includes("timeout") || s.includes("timed out") || s.includes("max steps") || s.includes("rate limit") || s.includes("connection error") || s.includes("stuck") || s.includes("auto-repaired") || s.includes("502") || s.includes("503") || s.includes("llm ")) return true;
   }
   if (e.source_table === "actions" && e.event_type === "action") {
     if (s.length > 0 && s.length < 15) return true;
