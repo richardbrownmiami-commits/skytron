@@ -1,5 +1,4 @@
 import { getScratchpad } from "./consolidate";
-import { callLLM } from './llm';
 
 type ScratchpadRow = {
   id: number;
@@ -182,61 +181,73 @@ function inferDayStatus(events: NormalizedEvent[]): string {
   return "mixed";
 }
 
-function condenseEventsForPrompt(events: NormalizedEvent[]): string {
-  const lines: string[] = [];
+function buildDayNarrative(events: NormalizedEvent[]): string {
+  const learned: string[] = [];
+  const conversations: string[] = [];
+  const toolActions: string[] = [];
+  const errors: string[] = [];
+  const activities: string[] = [];
+
+  const added = new Set<string>();
+
   for (const e of events) {
-    const time = e.ts.slice(11, 16);
-    if (e.event_type === "user_message") {
+    const key = (e.topic || "") + ":" + (e.summary.slice(0, 60));
+    if (added.has(key)) continue;
+    added.add(key);
+
+    if (e.event_type === "lesson" || e.event_type === "knowledge") {
+      const t = e.topic || "general";
+      if (!learned.includes(t)) learned.push(t);
+    } else if (e.event_type === "user_message") {
       let text = e.summary;
       const m = text.match(/^\[([^\]]+)\]\s*/);
       if (m) text = text.slice(m[0].length);
-      if (text.length > 300) text = text.slice(0, 300) + "...";
-      lines.push(`[${time}] User: ${text}`);
+      const short = text.length > 120 ? text.slice(0, 120) + "..." : text;
+      if (!conversations.some(c => c.includes(short.slice(0, 40)))) conversations.push(short);
     } else if (e.event_type === "action_done") {
-      const s = e.summary.slice(0, 200);
-      if (!lines.some(l => l.includes(s.slice(0, 40)))) lines.push(`[${time}] Tool OK: ${s}`);
-    } else if (e.event_type === "lesson" || e.event_type === "knowledge") {
-      const topic = e.topic || "general";
-      const detail = e.summary.slice(0, 120);
-      if (!lines.some(l => l.includes(topic))) lines.push(`[${time}] Learned ${topic}: ${detail}`);
-    } else if (e.event_type === "activity") {
-      const d = e.summary.slice(0, 150);
-      if (d.length > 15) lines.push(`[${time}] ${d}`);
+      const s = e.summary.slice(0, 100);
+      if (!toolActions.includes(s)) toolActions.push(s);
+    } else if (e.event_type === "action_failed") {
+      const s = e.summary.slice(0, 100);
+      if (!errors.includes(s)) errors.push(s);
+    } else if (e.source_table === "activity_log") {
+      const d = e.details?.summary || e.summary;
+      if (typeof d === "string" && d.length > 15 && !activities.includes(d.slice(0, 100))) activities.push(d.slice(0, 120));
     }
   }
-  if (lines.length <= 120) return lines.join("\n");
-  return lines.slice(0, 40).join("\n") + "\n...\n" +
-    lines.slice(Math.floor(lines.length / 2) - 20, Math.floor(lines.length / 2) + 20).join("\n") +
-    "\n...\n" + lines.slice(-40).join("\n");
-}
 
-async function buildDayNarrativeWithLLM(env: any, date: string, events: NormalizedEvent[]): Promise<string> {
-  const eventText = condenseEventsForPrompt(events);
-  if (!eventText.trim()) return "";
+  const parts: string[] = [];
 
-  const prompt = `Write a daily journal entry for ${date}. This is a record of what an AI assistant did that day.
-
-Below is a condensed chronological log of events. Write 2-4 paragraphs that tell the story of what happened. Connect the events into a flowing narrative. Be specific about what was discussed, built, learned, or failed. Use natural language without bullet points or timestamps.
-
-Events from ${date}:
-${eventText}
-
-Write the journal entry now in 2-4 paragraphs:`;
-
-  try {
-    const result = await callLLM(env, {
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 1000,
-      model: "gemini-2.5-flash",
-      task: "journal_narrative"
-    });
-    return result.content || "";
-  } catch {
-    return "";
+  if (learned.length) {
+    parts.push(`Learned about ${learned.join(", ")}.`);
   }
+
+  if (conversations.length) {
+    const count = conversations.length;
+    const sample = conversations.slice(0, 3).map(t => `"${t}"`).join("; ");
+    parts.push(`Had ${count} conversation(s) covering topics like ${sample}.`);
+  }
+
+  if (toolActions.length) {
+    const count = toolActions.length;
+    const sample = toolActions.slice(0, 4).join("; ");
+    parts.push(`${count} tool action(s) completed: ${sample}.`);
+  }
+
+  if (errors.length) {
+    const unique = [...new Set(errors.map(e => e.split(":").slice(0, 2).join(":")))];
+    parts.push(`${errors.length} error(s): ${unique.slice(0, 4).join("; ")}.`);
+  }
+
+  if (activities.length) {
+    const unique = [...new Set(activities)];
+    parts.push(`Also: ${unique.slice(0, 3).join("; ")}.`);
+  }
+
+  return parts.join(" ");
 }
 
-export async function buildJournalEntries(env: any, events: NormalizedEvent[]): Promise<JournalEntry[]> {
+export async function buildJournalEntries(events: NormalizedEvent[]): Promise<JournalEntry[]> {
   const filtered = events.filter(e => !isGarbage(e));
   const days = new Map<string, NormalizedEvent[]>();
   for (const e of filtered) {
@@ -246,36 +257,21 @@ export async function buildJournalEntries(env: any, events: NormalizedEvent[]): 
   }
 
   const sortedDays = [...days.keys()].sort();
-  const results = new Map<string, { topics: string[]; status: string; narrative: string; refs: string[] }>();
+  const out: JournalEntry[] = [];
 
-  const entries = sortedDays.map(day => {
+  for (const day of sortedDays) {
     const dayEvents = days.get(day)!.sort((a, b) => a.ts.localeCompare(b.ts));
     const topics = [...new Set(dayEvents.map(e => e.topic).filter(Boolean))] as string[];
     const status = inferDayStatus(dayEvents);
-    const refs = dayEvents.map(e => `${e.source_table}:${e.source_record_id}`).filter(Boolean);
-    return { day, dayEvents, topics, status, refs };
-  });
-
-  const narrate = async (e: typeof entries[0]) => {
-    const narrative = await buildDayNarrativeWithLLM(env, e.day, e.dayEvents);
-    return { day: e.day, topics: e.topics, status: e.status, narrative, refs: e.refs };
-  };
-
-  const concurrency = 4;
-  for (let i = 0; i < entries.length; i += concurrency) {
-    const batch = entries.slice(i, i + concurrency);
-    const batchResults = await Promise.allSettled(batch.map(narrate));
-    for (const r of batchResults) {
-      if (r.status === "fulfilled" && r.value.narrative.trim()) {
-        results.set(r.value.day, r.value);
-      }
-    }
-  }
-
-  const out: JournalEntry[] = [];
-  for (const day of sortedDays) {
-    const r = results.get(day);
-    if (r) out.push({ date: day, narrative: r.narrative, topics: r.topics.length ? r.topics : ["general"], status: r.status, source_refs: r.refs });
+    const narrative = buildDayNarrative(dayEvents);
+    if (!narrative.trim()) continue;
+    out.push({
+      date: day,
+      narrative,
+      topics: topics.length ? topics : ["general"],
+      status,
+      source_refs: dayEvents.map(e => `${e.source_table}:${e.source_record_id}`).filter(Boolean)
+    });
   }
   return out;
 }
@@ -300,7 +296,7 @@ export async function buildScratchpadJournal(env: any) {
   const deduped = dedupeRows(rows);
   const events = deduped.map(normalizeRow).filter(Boolean) as NormalizedEvent[];
   events.sort((a, b) => a.ts.localeCompare(b.ts));
-  const journal = await buildJournalEntries(env, events);
+  const journal = await buildJournalEntries(events);
   await saveJournalToKnowledge(env, journal);
 
   return {
