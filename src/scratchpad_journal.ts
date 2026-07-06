@@ -197,7 +197,9 @@ function buildDayNarrative(events: NormalizedEvent[]): string {
 
     if (e.event_type === "lesson" || e.event_type === "knowledge") {
       const t = e.topic || "general";
-      if (!learned.includes(t)) learned.push(t);
+      const key = e.details?.key || "";
+      const label = key ? key.replace(/^(learned_|source_)/, "").replace(/_/g, " ") : t;
+      if (!learned.some(l => l.includes(t) || (key && l.includes(key.slice(0, 20))))) learned.push(label);
     } else if (e.event_type === "user_message") {
       let text = e.summary;
       const m = text.match(/^\[([^\]]+)\]\s*/);
@@ -205,11 +207,15 @@ function buildDayNarrative(events: NormalizedEvent[]): string {
       const short = text.length > 120 ? text.slice(0, 120) + "..." : text;
       if (!conversations.some(c => c.includes(short.slice(0, 40)))) conversations.push(short);
     } else if (e.event_type === "action_done") {
-      const s = e.summary.slice(0, 100);
-      if (!toolActions.includes(s)) toolActions.push(s);
+      const task = (e.details?.task || e.details?.type || "").toLowerCase();
+      if (task === "chat" || task === "think") continue;
+      const s = e.summary.slice(0, 80);
+      if (!toolActions.some(t => t.startsWith(task))) toolActions.push(s);
     } else if (e.event_type === "action_failed") {
-      const s = e.summary.slice(0, 100);
-      if (!errors.includes(s)) errors.push(s);
+      const task = (e.details?.task || e.details?.type || "").toLowerCase();
+      if (task === "chat" || task === "think") continue;
+      const s = e.summary.slice(0, 80);
+      if (!errors.some(t => t.startsWith(task))) errors.push(s);
     } else if (e.source_table === "activity_log") {
       const d = e.details?.summary || e.summary;
       if (typeof d === "string" && d.length > 15 && !activities.includes(d.slice(0, 100))) activities.push(d.slice(0, 120));
