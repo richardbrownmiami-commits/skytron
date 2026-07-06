@@ -22,9 +22,10 @@ export async function processOneStep(env, action) {
   const lastUserMsg = state.fullHistory[state.fullHistory.length - 1]?.content || "";
   const isCodingTask = action.task === "coding" || action.task === "research";
 
-  // DISCUSSION MODE: Force Chat Agent (no tools, fast 5-10s)
+  // DISCUSSION MODE: Force fast LLM call (BUDDHI_DWAR auto-selects best provider, no tools, fast 3-8s)
   if (mode === "discussion") {
-    const chatResp = await callChatAgent(env, state.fullHistory, action.task || "chat");
+    // Let BUDDHI_DWAR auto-select the fastest provider (no model specified)
+    const chatResp = await callLLM(env, { messages: state.fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + state.conversationId);
     if (chatResp?.content) {
       const cleaned = cleanseIdentity(chatResp.content);
       state.finalContent = cleaned;
