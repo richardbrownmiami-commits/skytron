@@ -183,44 +183,57 @@ function inferDayStatus(events: NormalizedEvent[]): string {
 
 function buildDayNarrative(events: NormalizedEvent[]): string {
   const learned: string[] = [];
-  const convTopics = new Set<string>();
-  let nonChatToolCount = 0;
-  const toolExamples: string[] = [];
-  const errors: string[] = [];
-  let userCount = 0;
+  const convPhrases: string[] = [];
+  const toolPhrases: string[] = [];
+  const errorPhrases: string[] = [];
+
+  const dedup = new Set<string>();
 
   for (const e of events) {
+    const dk = e.source_table + ":" + e.source_record_id;
+    if (dedup.has(dk)) continue;
+    dedup.add(dk);
+
     if (e.event_type === "lesson" || e.event_type === "knowledge") {
-      const t = e.topic || "general";
-      if (!learned.includes(t)) learned.push(t);
+      const key = e.details?.key || "";
+      const desc = (e.details?.content || e.summary).slice(0, 80).replace(/\s+/g, " ").trim();
+      const label = key ? key.replace(/^(learned_|source_)/, "").replace(/_/g, " ") : desc.slice(0, 50);
+      if (label.length > 8 && !learned.includes(label)) learned.push(label);
     } else if (e.event_type === "user_message") {
-      userCount++;
       let text = e.summary;
       const m = text.match(/^\[([^\]]+)\]\s*/);
       if (m) text = text.slice(m[0].length);
-      const t = detectTopic(text) || "general";
-      if (t !== "general" || text.length > 30) convTopics.add(t);
+      const short = text.length > 100 ? text.slice(0, 100) + "..." : text;
+      if (short.length > 15 && !convPhrases.some(p => short.includes(p.slice(0, 20)))) convPhrases.push(short);
     } else if (e.event_type === "action_done") {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
       if (task === "chat" || task === "think") continue;
-      nonChatToolCount++;
-      if (task && toolExamples.length < 3 && !toolExamples.includes(task)) toolExamples.push(task);
+      const phrase = e.summary.slice(0, 80).replace(/\s+/g, " ").trim();
+      if (phrase.length > 10 && !toolPhrases.some(p => p.startsWith(task))) toolPhrases.push(phrase);
     } else if (e.event_type === "action_failed") {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
       if (task === "chat" || task === "think") continue;
-      const s = e.summary.slice(0, 60);
-      if (!errors.some(t => s.includes(t.split(":")[0]))) errors.push(s);
+      const phrase = e.summary.slice(0, 60);
+      if (!errorPhrases.some(p => p.includes(phrase.split(":")[0]))) errorPhrases.push(phrase);
     }
   }
 
-  const cleanTopics = [...convTopics].filter(t => t !== "general");
-  const cleanLearned = learned.filter(t => t !== "general");
-  const toolList = toolExamples.filter(Boolean);
   const parts: string[] = [];
-  if (cleanLearned.length) parts.push(`Learned about ${cleanLearned.slice(0, 5).join(", ")}${cleanLearned.length > 5 ? ` and ${cleanLearned.length - 5} more topics` : ""}.`);
-  if (userCount > 0) parts.push(`Had ${userCount} conversation(s) about ${cleanTopics.length ? cleanTopics.slice(0, 4).join(", ") : "various topics"}.`);
-  if (nonChatToolCount > 0) parts.push(`${nonChatToolCount} non-chat tool(s) used: ${toolList.length ? toolList.join(", ") : "various"}.`);
-  if (errors.length) parts.push(`${errors.length} error(s): ${errors.slice(0, 3).join("; ")}.`);
+  if (learned.length) {
+    const sample = learned.slice(0, 4).map(l => l.length > 50 ? l.slice(0, 50) + "..." : l);
+    parts.push(`Learned about ${sample.join(", ")}${learned.length > 4 ? `, and ${learned.length - 4} more` : ""}.`);
+  }
+  if (convPhrases.length) {
+    const sample = convPhrases.slice(0, 3).map(c => `"${c.length > 60 ? c.slice(0, 60) + "..." : c}"`);
+    parts.push(`Discussed topics like ${sample.join(", ")}${convPhrases.length > 3 ? ` (${convPhrases.length} total)` : ""}.`);
+  }
+  if (toolPhrases.length) {
+    const sample = toolPhrases.slice(0, 3).map(t => t.length > 60 ? t.slice(0, 60) + "..." : t);
+    parts.push(`Tools used: ${sample.join("; ")}${toolPhrases.length > 3 ? ` (${toolPhrases.length} total)` : ""}.`);
+  }
+  if (errorPhrases.length) {
+    parts.push(`Issues: ${errorPhrases.slice(0, 2).join("; ")}${errorPhrases.length > 2 ? ` (${errorPhrases.length} total)` : ""}.`);
+  }
   return parts.join(" ");
 }
 
