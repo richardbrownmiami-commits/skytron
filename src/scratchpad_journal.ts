@@ -1,4 +1,5 @@
 import { getScratchpad } from "./consolidate";
+import { callLLM } from './llm';
 
 type ScratchpadRow = {
   id: number;
@@ -304,6 +305,39 @@ export async function buildScratchpadJournal(env: any) {
   };
 }
 
+function condenseEventsForLLM(filtered: NormalizedEvent[]): string {
+  const days = new Map<string, string[]>();
+  for (const e of filtered) {
+    const day = e.ts.slice(0, 10);
+    if (!days.has(day)) days.set(day, []);
+    const time = e.ts.slice(11, 16);
+    if (e.event_type === "user_message") {
+      let text = e.summary;
+      const m = text.match(/^\[([^\]]+)\]\s*/);
+      if (m) text = text.slice(m[0].length);
+      if (text.length > 150) text = text.slice(0, 150) + "...";
+      days.get(day)!.push(`${time} User: ${text}`);
+    } else if (e.event_type === "action_done") {
+      const task = (e.details?.task || e.details?.type || "").toLowerCase();
+      if (task && task !== "chat" && task !== "think") {
+        const s = e.summary.slice(0, 80);
+        if (!s.startsWith("{") && !/^(yes|no|i|we|here)[": ]/i.test(s)) days.get(day)!.push(`${time} Tool ${task}: ${s}`);
+      }
+    } else if (e.event_type === "lesson" || e.event_type === "knowledge") {
+      const key = e.details?.key || "";
+      if (!/checkpoint|identity|personality|lesson_\d{4}|memory.?loop|\bstats[_\s\d]|[_.]rule\b/.test(key)) {
+        days.get(day)!.push(`${time} Learned: ${key.replace(/^(learned_|source_)/, "").replace(/_/g, " ").slice(0, 60)}`);
+      }
+    }
+  }
+  const out: string[] = [];
+  for (const [day, evts] of [...days.entries()].sort()) {
+    const sample = evts.length > 15 ? [...evts.slice(0, 8), "  ...", ...evts.slice(-5)] : evts;
+    out.push(`--- ${day} ---\n` + sample.join("\n"));
+  }
+  return out.join("\n\n");
+}
+
 export async function buildMemoryPack(env: any) {
   const raw = await getScratchpad(env);
   const rows: ScratchpadRow[] = raw.results || raw || [];
@@ -313,52 +347,51 @@ export async function buildMemoryPack(env: any) {
   const events = deduped.map(normalizeRow).filter(Boolean) as NormalizedEvent[];
   events.sort((a, b) => a.ts.localeCompare(b.ts));
   const filtered = events.filter(e => !isGarbage(e));
+  if (!filtered.length) return { ok: false, reason: "nothing meaningful in scratchpad" };
 
-  const days = new Map<string, NormalizedEvent[]>();
-  for (const e of filtered) {
-    const day = e.ts.slice(0, 10);
-    if (!days.has(day)) days.set(day, []);
-    days.get(day)!.push(e);
+  const condensed = condenseEventsForLLM(filtered);
+  const prompt = `You are an AI assistant reflecting on your recent activity. Below is a chronological log of your conversations, tool usage, and learning from recent days.
+
+Write a short memory summary in first person ("I"). Cover:
+- What you worked on (be specific about topics and tools)
+- What you accomplished or completed
+- What's still pending or unfinished
+- Any problems or failures you should remember
+
+Keep it to 3-6 sentences. Write naturally, don't use bullet points. Here is your recent activity:\n\n${condensed}\n\nWrite your memory summary now:`;
+
+  let content = "";
+
+  try {
+    const result = await callLLM(env, {
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 600,
+      model: "gemini-2.5-flash",
+      task: "memory_pack"
+    });
+    if (result?.content) content = result.content.trim();
+  } catch {}
+
+  if (!content) {
+    const days = new Map<string, NormalizedEvent[]>();
+    for (const e of filtered) {
+      const day = e.ts.slice(0, 10);
+      if (!days.has(day)) days.set(day, []);
+      days.get(day)!.push(e);
+    }
+    const parts: string[] = [];
+    for (const [day, dayEvents] of [...days.entries()].sort()) {
+      const topics = [...new Set(dayEvents.map(e => e.topic).filter(Boolean))] as string[];
+      const status = inferDayStatus(dayEvents);
+      const convCount = dayEvents.filter(e => e.event_type === "user_message").length;
+      if (topics.length) parts.push(`${day} (${status}): ${topics.slice(0, 4).join(", ")} — ${convCount} msgs`);
+    }
+    content = parts.join("\n");
   }
 
-  const lines: string[] = [];
-  const completed: string[] = [];
-  const planned: string[] = [];
-  const problems: string[] = [];
-  const daySummaries: string[] = [];
-
-  for (const [day, dayEvents] of [...days.entries()].sort()) {
-    const topics = [...new Set(dayEvents.map(e => e.topic).filter(Boolean))] as string[];
-    const status = inferDayStatus(dayEvents);
-    const convCount = dayEvents.filter(e => e.event_type === "user_message").length;
-    const learnedCount = dayEvents.filter(e => e.event_type === "lesson" || e.event_type === "knowledge").length;
-    const toolCount = dayEvents.filter(e => e.event_type === "action_done").length;
-    const errorCount = dayEvents.filter(e => e.event_type === "action_failed").length;
-
-    if (status === "productive" || status === "built") completed.push(`${day}: ${topics.slice(0, 4).join(", ")} (${convCount} msgs, ${toolCount} actions)`);
-    else if (status === "rough" || status === "failed") problems.push(`${day}: ${topics.slice(0, 3).join(", ")} — had issues (${errorCount} errors)`);
-    else planned.push(`${day}: ${topics.slice(0, 3).join(", ")} — ${status}`);
-  }
-
-  if (completed.length) {
-    lines.push("Things I remember doing:");
-    for (const c of completed.slice(-5)) lines.push(`  - ${c}`);
-  }
-  if (planned.length) {
-    lines.push("");
-    lines.push("Things that were discussed but not finished:");
-    for (const p of planned.slice(-3)) lines.push(`  - ${p}`);
-  }
-  if (problems.length) {
-    lines.push("");
-    lines.push("Days that had problems:");
-    for (const p of problems.slice(-3)) lines.push(`  - ${p}`);
-  }
-
-  const content = lines.join("\n").trim();
   if (!content) return { ok: false, reason: "nothing to remember" };
 
   await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, category, content) VALUES ('memory_pack_main', 'memory_pack', ?1)").bind(content).run();
 
-  return { ok: true, sections: { completed: completed.length, planned: planned.length, problems: problems.length }, preview: content.slice(0, 300) };
+  return { ok: true, generator: content.includes("I ") ? "llm" : "template", preview: content.slice(0, 300) };
 }
