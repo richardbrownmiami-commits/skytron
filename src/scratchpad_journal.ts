@@ -183,73 +183,41 @@ function inferDayStatus(events: NormalizedEvent[]): string {
 
 function buildDayNarrative(events: NormalizedEvent[]): string {
   const learned: string[] = [];
-  const conversations: string[] = [];
-  const toolActions: string[] = [];
+  const convTopics = new Set<string>();
+  let nonChatToolCount = 0;
+  const toolExamples: string[] = [];
   const errors: string[] = [];
-  const activities: string[] = [];
-
-  const added = new Set<string>();
+  let userCount = 0;
 
   for (const e of events) {
-    const key = (e.topic || "") + ":" + (e.summary.slice(0, 60));
-    if (added.has(key)) continue;
-    added.add(key);
-
     if (e.event_type === "lesson" || e.event_type === "knowledge") {
       const t = e.topic || "general";
-      const key = e.details?.key || "";
-      const label = key ? key.replace(/^(learned_|source_)/, "").replace(/_/g, " ") : t;
-      if (!learned.some(l => l.includes(t) || (key && l.includes(key.slice(0, 20))))) learned.push(label);
+      if (!learned.includes(t)) learned.push(t);
     } else if (e.event_type === "user_message") {
+      userCount++;
       let text = e.summary;
       const m = text.match(/^\[([^\]]+)\]\s*/);
       if (m) text = text.slice(m[0].length);
-      const short = text.length > 120 ? text.slice(0, 120) + "..." : text;
-      if (!conversations.some(c => c.includes(short.slice(0, 40)))) conversations.push(short);
+      const t = detectTopic(text) || "general";
+      if (t !== "general" || text.length > 30) convTopics.add(t);
     } else if (e.event_type === "action_done") {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
       if (task === "chat" || task === "think") continue;
-      const s = e.summary.slice(0, 80);
-      if (!toolActions.some(t => t.startsWith(task))) toolActions.push(s);
+      nonChatToolCount++;
+      if (toolExamples.length < 3) toolExamples.push(task);
     } else if (e.event_type === "action_failed") {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
       if (task === "chat" || task === "think") continue;
-      const s = e.summary.slice(0, 80);
-      if (!errors.some(t => t.startsWith(task))) errors.push(s);
-    } else if (e.source_table === "activity_log") {
-      const d = e.details?.summary || e.summary;
-      if (typeof d === "string" && d.length > 15 && !activities.includes(d.slice(0, 100))) activities.push(d.slice(0, 120));
+      const s = e.summary.slice(0, 60);
+      if (!errors.some(t => s.includes(t.split(":")[0]))) errors.push(s);
     }
   }
 
   const parts: string[] = [];
-
-  if (learned.length) {
-    parts.push(`Learned about ${learned.join(", ")}.`);
-  }
-
-  if (conversations.length) {
-    const count = conversations.length;
-    const sample = conversations.slice(0, 3).map(t => `"${t}"`).join("; ");
-    parts.push(`Had ${count} conversation(s) covering topics like ${sample}.`);
-  }
-
-  if (toolActions.length) {
-    const count = toolActions.length;
-    const sample = toolActions.slice(0, 4).join("; ");
-    parts.push(`${count} tool action(s) completed: ${sample}.`);
-  }
-
-  if (errors.length) {
-    const unique = [...new Set(errors.map(e => e.split(":").slice(0, 2).join(":")))];
-    parts.push(`${errors.length} error(s): ${unique.slice(0, 4).join("; ")}.`);
-  }
-
-  if (activities.length) {
-    const unique = [...new Set(activities)];
-    parts.push(`Also: ${unique.slice(0, 3).join("; ")}.`);
-  }
-
+  if (learned.length) parts.push(`Learned about ${learned.slice(0, 5).join(", ")}${learned.length > 5 ? ` and ${learned.length - 5} more topics` : ""}.`);
+  if (userCount > 0) parts.push(`Had ${userCount} conversation(s) about ${[...convTopics].slice(0, 4).join(", ")}.`);
+  if (nonChatToolCount > 0) parts.push(`${nonChatToolCount} non-chat tool(s) used: ${toolExamples.join(", ")}.`);
+  if (errors.length) parts.push(`${errors.length} non-chat error(s): ${errors.slice(0, 3).join("; ")}.`);
   return parts.join(" ");
 }
 
