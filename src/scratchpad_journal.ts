@@ -353,20 +353,15 @@ export async function buildMemoryPack(env: any) {
 
   let content = "";
 
-  if (env.OPENROUTER_API_KEY) {
+  if (env.AI) {
     try {
-      const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.OPENROUTER_API_KEY, "HTTP-Referer": "https://github.com/richardbrownmiami-commits/skytron", "X-Title": "Skytron" },
-        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], model: "openrouter/free", max_tokens: 500 }),
-        signal: AbortSignal.timeout(20000)
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const msg = data.choices?.[0]?.message?.content;
-        if (msg && msg.trim().length > 20) content = msg.trim();
-      }
-    } catch {}
+      const result = await Promise.race([
+        env.AI.run("@cf/zai-org/glm-4.7-flash", { messages: [{ role: "user", content: prompt }], max_tokens: 500 }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000))
+      ]);
+      const text = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
+      if (text && text.trim().length > 20) content = text.trim();
+    } catch {} // WA failed, fall through to template
   }
 
   if (!content) {
