@@ -208,9 +208,9 @@ function buildDayNarrative(events: NormalizedEvent[]): string {
       if (short.length > 15 && !convPhrases.some(p => short.includes(p.slice(0, 20)))) convPhrases.push(short);
     } else if (e.event_type === "action_done") {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
-      if (task === "chat" || task === "think") continue;
+      if (!task || task === "chat" || task === "think") continue;
       const phrase = e.summary.slice(0, 80).replace(/\s+/g, " ").trim();
-      if (phrase.startsWith("{")) continue;
+      if (phrase.startsWith("{") || /^(yes|no|i|we|here)[": ]/i.test(phrase)) continue;
       if (phrase.length > 10 && !toolPhrases.some(p => p.startsWith(task))) toolPhrases.push(phrase);
     } else if (e.event_type === "action_failed") {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
