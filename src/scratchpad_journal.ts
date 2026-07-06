@@ -196,7 +196,7 @@ function buildDayNarrative(events: NormalizedEvent[]): string {
 
     if (e.event_type === "lesson" || e.event_type === "knowledge") {
       const key = e.details?.key || "";
-      if (/checkpoint|identity_.*|personality|lesson_\d{4}/.test(key)) continue;
+      if (/checkpoint|identity_.*|personality|lesson_\d{4}|memory.?loop|^stats\b/.test(key)) continue;
       const desc = (e.details?.content || e.summary).slice(0, 80).replace(/\s+/g, " ").trim();
       const label = key ? key.replace(/^(learned_|source_)/, "").replace(/_/g, " ") : desc.slice(0, 50);
       if (label.length > 8 && !learned.includes(label)) learned.push(label);
@@ -210,6 +210,7 @@ function buildDayNarrative(events: NormalizedEvent[]): string {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
       if (task === "chat" || task === "think") continue;
       const phrase = e.summary.slice(0, 80).replace(/\s+/g, " ").trim();
+      if (phrase.startsWith("{")) continue;
       if (phrase.length > 10 && !toolPhrases.some(p => p.startsWith(task))) toolPhrases.push(phrase);
     } else if (e.event_type === "action_failed") {
       const task = (e.details?.task || e.details?.type || "").toLowerCase();
