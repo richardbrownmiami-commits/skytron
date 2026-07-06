@@ -245,24 +245,38 @@ export async function buildJournalEntries(env: any, events: NormalizedEvent[]): 
     days.get(day)!.push(e);
   }
 
-  const out: JournalEntry[] = [];
   const sortedDays = [...days.keys()].sort();
+  const results = new Map<string, { topics: string[]; status: string; narrative: string; refs: string[] }>();
 
-  for (const day of sortedDays) {
+  const entries = sortedDays.map(day => {
     const dayEvents = days.get(day)!.sort((a, b) => a.ts.localeCompare(b.ts));
     const topics = [...new Set(dayEvents.map(e => e.topic).filter(Boolean))] as string[];
     const status = inferDayStatus(dayEvents);
-    const narrative = await buildDayNarrativeWithLLM(env, day, dayEvents);
-    if (!narrative.trim()) continue;
-    out.push({
-      date: day,
-      narrative,
-      topics: topics.length ? topics : ["general"],
-      status,
-      source_refs: dayEvents.map(e => `${e.source_table}:${e.source_record_id}`).filter(Boolean)
-    });
+    const refs = dayEvents.map(e => `${e.source_table}:${e.source_record_id}`).filter(Boolean);
+    return { day, dayEvents, topics, status, refs };
+  });
+
+  const narrate = async (e: typeof entries[0]) => {
+    const narrative = await buildDayNarrativeWithLLM(env, e.day, e.dayEvents);
+    return { day: e.day, topics: e.topics, status: e.status, narrative, refs: e.refs };
+  };
+
+  const concurrency = 4;
+  for (let i = 0; i < entries.length; i += concurrency) {
+    const batch = entries.slice(i, i + concurrency);
+    const batchResults = await Promise.allSettled(batch.map(narrate));
+    for (const r of batchResults) {
+      if (r.status === "fulfilled" && r.value.narrative.trim()) {
+        results.set(r.value.day, r.value);
+      }
+    }
   }
 
+  const out: JournalEntry[] = [];
+  for (const day of sortedDays) {
+    const r = results.get(day);
+    if (r) out.push({ date: day, narrative: r.narrative, topics: r.topics.length ? r.topics : ["general"], status: r.status, source_refs: r.refs });
+  }
   return out;
 }
 
