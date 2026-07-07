@@ -14,13 +14,49 @@ export async function initSchema(db, env) {
   try {
     const v = await db.prepare("SELECT value FROM identity WHERE key='schema_version'").all();
     if (v.results[0]?.value === SCHEMA_VERSION) return;
-    const oldTables = ['proposals','authority_receipts','anti_patterns','goals','subagents','thought_stream','emotion_reflection','identity_index','token_usage','pending_approvals','learnings','memories'];
+    const oldTables = ['proposals','authority_receipts','anti_patterns','goals','subagents','thought_stream','emotion_reflection','identity_index','token_usage','pending_approvals','learnings','me[...]
     for (const t of oldTables) { try { await db.exec("DROP TABLE IF EXISTS " + t); } catch {} }
     for (const s of TABLES) { await db.exec(s); }
-    try { await db.exec("CREATE TABLE IF NOT EXISTS consolidation_scratchpad (id INTEGER PRIMARY KEY AUTOINCREMENT, source_table TEXT NOT NULL, record_id INTEGER, content TEXT NOT NULL, collected_at TEXT DEFAULT (datetime('now')), batch_id TEXT NOT NULL)"); } catch {}
+    
+    // === CREATE INDEXES FOR PERFORMANCE ===
+    // These speed up the most common WHERE/ORDER BY queries
+    const indexes = [
+      // brain_memory indexes
+      "CREATE INDEX IF NOT EXISTS idx_brain_memory_conversation_id ON brain_memory(conversation_id)",
+      "CREATE INDEX IF NOT EXISTS idx_brain_memory_created_at ON brain_memory(created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_brain_memory_conversation_created ON brain_memory(conversation_id, created_at)",
+      
+      // brain_knowledge indexes
+      "CREATE INDEX IF NOT EXISTS idx_brain_knowledge_category ON brain_knowledge(category)",
+      "CREATE INDEX IF NOT EXISTS idx_brain_knowledge_source ON brain_knowledge(source)",
+      
+      // actions indexes
+      "CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status)",
+      "CREATE INDEX IF NOT EXISTS idx_actions_created_at ON actions(created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_actions_status_created ON actions(status, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_actions_task ON actions(task)",
+      
+      // brain_logs indexes
+      "CREATE INDEX IF NOT EXISTS idx_brain_logs_action_id ON brain_logs(action_id)",
+      
+      // brain_agents indexes
+      "CREATE INDEX IF NOT EXISTS idx_brain_agents_status ON brain_agents(status)",
+      
+      // brain_vectors indexes
+      "CREATE INDEX IF NOT EXISTS idx_brain_vectors_category ON brain_vectors(category)",
+      
+      // activity_log indexes
+      "CREATE INDEX IF NOT EXISTS idx_activity_log_event_type ON activity_log(event_type)",
+    ];
+    
+    for (const idx of indexes) {
+      try { await db.exec(idx); } catch {}
+    }
+    
+    try { await db.exec("CREATE TABLE IF NOT EXISTS consolidation_scratchpad (id INTEGER PRIMARY KEY AUTOINCREMENT, source_table TEXT NOT NULL, record_id INTEGER, content TEXT NOT NULL, collected_[...]
     try { await db.exec("ALTER TABLE actions ADD COLUMN task TEXT DEFAULT 'chat'"); } catch {}
     await db.exec("DELETE FROM brain_knowledge WHERE source='seed'");
-    for (const item of SEED_KNOWLEDGE) { try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'seed')").bind(item.k, item.c, item.cat).run(); } catch {} }
+    for (const item of SEED_KNOWLEDGE) { try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'seed')").bind(item.k, item.c, item.cat[...]
     try { await db.exec("DROP TABLE IF EXISTS knowledge_fts"); } catch {}
     await db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(key, content, category)");
     try { await db.exec("INSERT INTO knowledge_fts SELECT key, content, category FROM brain_knowledge"); } catch {}
@@ -31,6 +67,15 @@ export async function initSchema(db, env) {
     for (const [slot, content] of Object.entries(PROMPT_SLOTS)) {
       try { await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('prompt_slot_' || ?1, ?2, datetime('now'))").bind(slot, content).run(); } catch {}
     }
+    
+    // Initialize cached counts in identity table
+    try { 
+      await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cached_memory_count','0',datetime('now'))").run();
+      await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cached_knowledge_count','0',datetime('now'))").run();
+      await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cached_conversation_count','0',datetime('now'))").run();
+      await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_count_update',datetime('now'),datetime('now'))").run();
+    } catch {}
+    
     try { await ensureVectorizeIndex(env); } catch {}
     try { await indexAllKnowledge(env, db); } catch {}
   } catch (e) { console.error("initSchema:", e); }
@@ -46,8 +91,8 @@ export async function getPromptSlot(db, slotName) {
 
 export function detectTaskType(input) {
   const lower = (input || "").toLowerCase();
-  if (/\b(create_tool|add\b.*\btool|new (tool|command|feature)|write\b.*\b(file|code)|write_file|edit\b|refactor|fix\b.*\b(bug|issue)|pull request|pr\b|branch|commit|push\b|deploy|github_.*)/.test(lower)) return "coding";
-  if (/search|lookup|find\b|what is the |how (does|do|to)|current\b|latest\b|news\b|weather\b|price\b|stock\b|define\b|meaning\b|documentation/.test(lower) && !lower.includes("edit") && !lower.includes("fix ") && !lower.includes("pr ") && !lower.includes("branch")) return "search";
+  if (/\b(create_tool|add\b.*\btool|new (tool|command|feature)|write\b.*\b(file|code)|write_file|edit\b|refactor|fix\b.*\b(bug|issue)|pull request|pr\b|branch|commit|push\b|deploy|github_.*)/.test[...]
+  if (/search|lookup|find\b|what is the |how (does|do|to)|current\b|latest\b|news\b|weather\b|price\b|stock\b|define\b|meaning\b|documentation/.test(lower) && !lower.includes("edit") && !lower.inc[...]
   if (/\b(review\b|check\b|\bcode\b.*\breview\b|audit\b|inspect\b)/.test(lower) && !/\b(create|write|edit|fix|github_)/.test(lower)) return "review";
   return "chat";
 }
@@ -97,11 +142,15 @@ Time: ${now} UTC${recentSnippet}`;
 }
 
 export async function storeMemory(db, role, content, conversationId = "default") {
-  try { await db.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES (?1, ?2, ?3)").bind(role, content, conversationId).run(); } catch {}
+  try { 
+    await db.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES (?1, ?2, ?3)").bind(role, content, conversationId).run();
+    // Invalidate cached count
+    await db.prepare("DELETE FROM identity WHERE key='cached_memory_count'").run().catch(() => {});
+  } catch {}
 }
 
 export async function getRecentMemory(db, limit = 50, conversationId = "default") {
-  try { const r = await db.prepare("SELECT id, role, content, created_at FROM brain_memory WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2").bind(conversationId, limit).all(); return r.results ? r.results.reverse() : []; } catch { return []; }
+  try { const r = await db.prepare("SELECT id, role, content, created_at FROM brain_memory WHERE conversation_id=?1 ORDER BY id DESC LIMIT ?2").bind(conversationId, limit).all(); return r.results[...]
 }
 
 export async function searchKnowledge(db, query, limit = 5) {
@@ -156,7 +205,7 @@ export async function semanticSearch(env, query, limit = 5) {
     const embedding = await embedText(env, query);
     if (!embedding) return [];
     const results = await env.VECTORIZE.query(embedding, { topK: limit, returnValues: false, returnMetadata: true });
-    return (results?.matches || []).filter(m => m.score > 0.5).map(m => ({ key: m.metadata?.key || "", content: m.metadata?.content || "", category: m.metadata?.category || "", score: m.score }));
+    return (results?.matches || []).filter(m => m.score > 0.5).map(m => ({ key: m.metadata?.key || "", content: m.metadata?.content || "", category: m.metadata?.category || "", score: m.score }))[...]
   } catch { return []; }
 }
 
@@ -178,21 +227,32 @@ export async function indexKnowledgeForSearch(env, key, content, category) {
   } catch {}
 }
 
+// Track which knowledge entries have been vectorized to avoid re-embedding unchanged entries
+let lastVectorizedCount = 0;
+
 export async function indexAllKnowledge(env, db) {
   try {
-    const r = await db.prepare("SELECT key, content, category FROM brain_knowledge").all();
-    if (!r.results?.length) return;
-    const texts = r.results.map(row => (row.key + " " + row.content).slice(0, 512));
+    const r = await db.prepare("SELECT COUNT(*) as c FROM brain_knowledge").all();
+    const currentCount = r.results?.[0]?.c || 0;
+    
+    // Only re-index if new entries were added
+    if (currentCount === lastVectorizedCount) return;
+    
+    lastVectorizedCount = currentCount;
+    
+    const rows = await db.prepare("SELECT key, content, category FROM brain_knowledge").all();
+    if (!rows.results?.length) return;
+    const texts = rows.results.map(row => (row.key + " " + row.content).slice(0, 512));
     const embeddings = await embedTextBatch(env, texts);
-    for (let i = 0; i < r.results.length; i++) {
+    for (let i = 0; i < rows.results.length; i++) {
       if (embeddings[i]) {
-        try { await db.prepare("INSERT OR REPLACE INTO brain_vectors (ref_key, embedding, category) VALUES (?1, ?2, ?3)").bind(r.results[i].key, JSON.stringify(embeddings[i]), r.results[i].category).run(); } catch {}
+        try { await db.prepare("INSERT OR REPLACE INTO brain_vectors (ref_key, embedding, category) VALUES (?1, ?2, ?3)").bind(rows.results[i].key, JSON.stringify(embeddings[i]), rows.results[i].catego[...]
       }
     }
     if (env.VECTORIZE) {
       const vectors = [];
-      for (let i = 0; i < r.results.length; i++) {
-        if (embeddings[i]) vectors.push({ id: "kn_" + r.results[i].key, values: embeddings[i], metadata: { key: r.results[i].key, content: r.results[i].content.slice(0, 2000), category: r.results[i].category } });
+      for (let i = 0; i < rows.results.length; i++) {
+        if (embeddings[i]) vectors.push({ id: "kn_" + rows.results[i].key, values: embeddings[i], metadata: { key: rows.results[i].key, content: rows.results[i].content.slice(0, 2000), category: rows.results[...]
       }
       if (vectors.length) await env.VECTORIZE.upsert(vectors);
     }
@@ -241,7 +301,7 @@ export async function searchVectors(db, queryEmbedding, limit = 5, category) {
   const r = await db.prepare("SELECT key, content, category FROM brain_knowledge WHERE key IN (" + placeholders + ")").bind(...keys).all();
   const contentMap = new Map();
   if (r.results) for (const row of r.results) contentMap.set(row.key, { content: row.content, category: row.category });
-  return top.map(t => ({ key: t.refKey, content: (contentMap.get(t.refKey)?.content || "").slice(0, 500), category: t.category || contentMap.get(t.refKey)?.category || "", score: t.score })).filter(t => t.content);
+  return top.map(t => ({ key: t.refKey, content: (contentMap.get(t.refKey)?.content || "").slice(0, 500), category: t.category || contentMap.get(t.refKey)?.category || "", score: t.score })).filt[...]
 }
 // --- End vector cache ---
 
@@ -258,6 +318,43 @@ export async function deleteAgentState(db, actionId) {
 
 export async function logActivity(db, type, opts = {}) {
   try {
-    await db.prepare("INSERT INTO activity_log (event_type, action_id, tool_name, summary, details) VALUES (?1, ?2, ?3, ?4, ?5)").bind(type, opts.actionId || null, opts.toolName || null, (opts.summary || "").slice(0, 500), (opts.details || "").slice(0, 2000)).run();
+    await db.prepare("INSERT INTO activity_log (event_type, action_id, tool_name, summary, details) VALUES (?1, ?2, ?3, ?4, ?5)").bind(type, opts.actionId || null, opts.toolName || null, (opts.su[...]
   } catch {}
+}
+
+// === Optimized cached count functions ===
+export async function getCachedCounts(db) {
+  try {
+    const cacheTime = await db.prepare("SELECT value FROM identity WHERE key='last_count_update'").first();
+    const now = new Date().getTime();
+    const cacheAgeMs = cacheTime?.value ? now - new Date(cacheTime.value).getTime() : 999999;
+    
+    // Refresh cache every 60 seconds
+    if (cacheAgeMs > 60000) {
+      const memCount = (await db.prepare("SELECT COUNT(*) as c FROM brain_memory").all()).results[0]?.c || 0;
+      const knCount = (await db.prepare("SELECT COUNT(*) as c FROM brain_knowledge").all()).results[0]?.c || 0;
+      const convCount = (await db.prepare("SELECT COUNT(DISTINCT conversation_id) as c FROM brain_memory").all()).results[0]?.c || 0;
+      
+      await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cached_memory_count',?1,datetime('now'))").bind(String(memCount)).run().catch(() => {});
+      await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cached_knowledge_count',?1,datetime('now'))").bind(String(knCount)).run().catch(() => {});
+      await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cached_conversation_count',?1,datetime('now'))").bind(String(convCount)).run().catch(() => {});
+      await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_count_update',datetime('now'),datetime('now'))").run().catch(() => {});
+      
+      return { memory: memCount, knowledge: knCount, conversations: convCount };
+    }
+    
+    // Return cached values
+    const mem = await db.prepare("SELECT value FROM identity WHERE key='cached_memory_count'").first();
+    const kn = await db.prepare("SELECT value FROM identity WHERE key='cached_knowledge_count'").first();
+    const conv = await db.prepare("SELECT value FROM identity WHERE key='cached_conversation_count'").first();
+    
+    return {
+      memory: parseInt(mem?.value) || 0,
+      knowledge: parseInt(kn?.value) || 0,
+      conversations: parseInt(conv?.value) || 0
+    };
+  } catch (e) {
+    console.error("getCachedCounts error:", e);
+    return { memory: 0, knowledge: 0, conversations: 0 };
+  }
 }
