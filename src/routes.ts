@@ -313,7 +313,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       tools: Object.keys(toolDefinitions),
       tables: ["identity","brain_memory","brain_knowledge","actions","brain_logs","brain_agents","knowledge_fts"],
       llm: "Workers AI (@cf/zai-org/glm-4.7-flash) + BUDDHI_DWAR (Groq + OpenCode Zen)",
-      agent_loop: "Multi-step function-calling with Zod schema validation (max 15 steps). Sub-agents: spawn_agent + get_agent_result for parallel specialized tasks (max 8 steps, limited tools).",
+      agent_loop: "Multi-step function-calling with Zod schema validation (max 25 steps). Sub-agents: spawn_agent + get_agent_result for parallel specialized tasks (max 8 steps, limited tools).",
       capabilities: ["conversation with 10-msg memory","web search","web fetch","DB introspection","prompt self-edit","code execution (38+ langs)","API calls","knowledge base (FTS5 + vector)","GitHub self-modification","live docs via Context7","emotions & energy","conversation history viewer","sub-agents for parallel tools"]
     });
   }
@@ -479,8 +479,8 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   // --- ASYNC /think — enqueue, return immediately ---
   if (url.pathname === "/think" && req.method === "POST") {
     try {
-      let input, from, mode;
-      try { const body = await req.json(); input = body.input; from = body.from; mode = body.mode || "discussion"; } catch { return json({ error: "invalid JSON body" }, 400); }
+      let input, from, mode, debug;
+      try { const body = await req.json(); input = body.input; from = body.from; mode = body.mode || "discussion"; debug = body.debug || url.searchParams.get("debug"); } catch { return json({ error: "invalid JSON body" }, 400); }
       if (!input || typeof input !== "string") return json({ error: "input required" }, 400);
       if (!["discussion", "build"].includes(mode)) mode = "discussion";
 
@@ -524,6 +524,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           { role: "system", content: systemMsg },
           { role: "user", content: llmInput }
         ];
+
+        if (debug) {
+          return json({ action_id: aid, status: "debug", mode: "discussion", system_prompt: systemMsg, full_history: fullHistory, user_message: llmInput });
+        }
 
         // CALL LLM IMMEDIATELY — no queue, no cron
         const chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
@@ -604,6 +608,11 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           { role: "system", content: systemMsg.slice(0, 32000) },
           { role: "user", content: llmInput }
         ];
+      }
+
+      // BUILD MODE: debug — return assembled prompt without queuing
+      if (debug) {
+        return json({ action_id: aid, status: "debug", mode: "build", system_prompt: systemMsg.slice(0, 32000), full_history: fullHistory, user_message: llmInput });
       }
 
       // BUILD MODE: queue for cron processing
