@@ -253,19 +253,21 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
   if (url.pathname === "/cron/settings") {
     if (req.method === "POST") {
       let body; try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
-      const allowed = ["enabled","log_tick","idle_cycle","health_check","slot_self_improve","slot_test","slot_research","slot_housekeep","idle_project","tool_dispatch","process_actions","stuck_recovery","process_agents","daily_cleanup","night_sleep","wake_up","task_web_search","task_memory_search","task_learn","task_db_query","task_review_code"];
+      const allowed = ["enabled","log_tick","idle_cycle","health_check","slot_self_improve","slot_test","slot_research","slot_housekeep","idle_project","tool_dispatch","process_actions","stuck_recovery","process_agents","daily_cleanup","night_sleep","wake_up","task_web_search","task_memory_search","task_learn","task_db_query","task_review_code","astral_active","astral_interval"];
       for (const k of allowed) {
         if (body[k] !== undefined) {
-          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cron_cfg_' || ?1, ?2, datetime('now'))").bind(k, body[k] ? "true" : "false").run();
+          const val = k === "astral_interval" ? String(body[k]) : (body[k] ? "true" : "false");
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('cron_cfg_' || ?1, ?2, datetime('now'))").bind(k, val).run();
         }
       }
       return json({ ok: true });
     }
     const rows = (await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all()).results || [];
-    const s = {};
-    for (const r of rows) s[r.key.replace("cron_cfg_","")] = r.value === "true";
-    const d = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, night_sleep: true, wake_up: true, task_web_search: true, task_memory_search: true, task_learn: true, task_db_query: true, task_review_code: true };
+    const s = {}, rawS = {};
+    for (const r of rows) { rawS[r.key.replace("cron_cfg_","")] = r.value; s[r.key.replace("cron_cfg_","")] = r.value === "true"; }
+    const d = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, idle_project: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, night_sleep: true, wake_up: true, task_web_search: true, task_memory_search: true, task_learn: true, task_db_query: true, task_review_code: true, astral_active: false, astral_interval: "120" };
     const set = (k) => s[k] !== undefined ? s[k] : d[k];
+    const raw = (k) => rawS[k] !== undefined ? rawS[k] : String(d[k]);
     return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cron Tick Settings</title><style>*{margin:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:2rem;max-width:700px;margin:auto}h1{color:#58a6ff;margin-bottom:0.5rem}.sub{color:#8b949e;font-size:0.85rem;margin-bottom:1.5rem}.section{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1rem;margin-bottom:1rem}.section h2{font-size:1rem;color:#58a6ff;margin-bottom:0.5rem}.row{display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0;border-bottom:1px solid #21262d}.row:last-child{border:none}.label{flex:1}.label .desc{font-size:0.75rem;color:#8b949e;margin-top:2px}.switch{position:relative;width:44px;height:24px;flex-shrink:0;margin-left:1rem}input{opacity:0;width:0;height:0}.slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:#30363d;transition:.3s;border-radius:24px}.slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;background-color:#e6edf3;transition:.3s;border-radius:50%}input:checked+.slider{background-color:#3fb950}input:checked+.slider:before{transform:translateX(20px)}.btn{padding:0.5rem 1.5rem;border:none;border-radius:8px;cursor:pointer;font-size:0.85rem;background:#3fb950;color:#0b1120;font-weight:600;display:none;margin-top:0.5rem}.btn.show{display:inline-block}.saved{color:#3fb950;font-size:0.85rem;margin-top:0.5rem;display:none}</style></head><body><h1>Cron Tick Settings</h1><p class="sub">Toggle what Skytron does each idle tick. All settings are read on every tick.</p>
 <div class="section"><h2>Master</h2>
 <div class="row"><div class="label">Enabled<div class="desc">Master switch — disables ALL cron activity when off</div></div><label class="switch"><input type="checkbox" id="enabled" `+(set("enabled")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
@@ -298,6 +300,10 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
 <div class="row"><div class="label">Learn<div class="desc">store facts, lessons, journals</div></div><label class="switch"><input type="checkbox" id="task_learn" `+(set("task_learn")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
 <div class="row"><div class="label">DB Query<div class="desc">run SQL SELECT queries</div></div><label class="switch"><input type="checkbox" id="task_db_query" `+(set("task_db_query")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
 <div class="row"><div class="label">Review Code<div class="desc">self-audit, review source files</div></div><label class="switch"><input type="checkbox" id="task_review_code" `+(set("task_review_code")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+</div>
+<div class="section"><h2>Astral Walk</h2>
+<div class="row"><div class="label">Astral Active<div class="desc">Enable autonomous astral walk ticks (Skytron controls his own schedule)</div></div><label class="switch"><input type="checkbox" id="astral_active" `+(set("astral_active")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label">Astral Interval<div class="desc">Seconds between astral ticks (Skytron sets this via cron_control)</div></div><span style="color:#8b949e;font-size:0.85rem">${raw("astral_interval")}s</span></div>
 </div>
 <div class="section"><h2>Maintenance</h2>
 <div class="row"><div class="label">Daily Cleanup<div class="desc">Trim old memories, logs, actions, agents once/day</div></div><label class="switch"><input type="checkbox" id="daily_cleanup" `+(set("daily_cleanup")?"checked":"")+` onchange="save()"><span class="slider"></span></label></div>
@@ -604,10 +610,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         } catch {}
 
         const outputInstr = mode === "astral"
-          ? "\n\n# ASTRAL WALK MODE\nYou own your infrastructure. Each tick you get one step.\nYour mission: explore your architecture, check health, fix issues, spawn workers, research, improve yourself.\nControl your cron via CF API to set your own schedule.\nAfter each action, your state saves for next tick. Never stop.\nOutput exactly one tool JSON per tick. Multi-step work continues across ticks.\n"
+          ? "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'idle_project','value':'true'}} — toggle what runs\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n"
           : "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
         systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + outputInstr;
-        const userMsg = mode === "astral" ? "[Astral Walk tick — inspect, decide, act]" : llmInput;
+        const userMsg = mode === "astral" ? "[Astral tick — you control your schedule]" : llmInput;
         fullHistory = [
           { role: "system", content: systemMsg.slice(0, 32000) },
           { role: "user", content: userMsg }
@@ -650,18 +656,29 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
-  // --- /__cron — process next action (user first, then newest astral) ---
+  // --- /__cron — process next action (user first, then astral if Skytron enabled it) ---
   if (url.pathname === "/__cron" && req.method === "GET") {
     try {
+      // Read Skytron's cron settings
+      const cfgRows = await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
+      const cfg = {};
+      for (const r of cfgRows.results || []) { cfg[r.key.replace("cron_cfg_", "")] = r.value; }
+      const astralActive = cfg.astral_active === "true";
+      const astralInterval = parseInt(cfg.astral_interval || "120", 10);
+      // Track last astral tick to respect interval
+      let lastTick = parseInt(cfg.astral_last_tick || "0", 10);
       // Clear all queued astral actions except the most recent one
       await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND id NOT IN (SELECT id FROM (SELECT id FROM actions WHERE task='astral' AND status='queued' ORDER BY created_at DESC LIMIT 1))").run();
       // Prioritize user actions over astral walk
       await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task != 'astral' ORDER BY created_at ASC LIMIT 1").run();
       let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
-      if (!q.results?.length) {
+      if (!q.results?.length && astralActive && (Date.now() - lastTick) >= astralInterval * 1000) {
         // Pick the NEWEST astral action (DESC) to prefer fresh over stale
         await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task = 'astral' ORDER BY created_at DESC LIMIT 1").run();
         q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
+        if (q.results?.length) {
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('cron_cfg_astral_last_tick', ?1, datetime('now'))").bind(String(Date.now())).run();
+        }
       }
       if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); }
       return json({ processed: false, message: "no queued actions" });

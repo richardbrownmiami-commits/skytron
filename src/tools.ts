@@ -821,11 +821,11 @@ export const toolDefinitions = {
     execute: async (env, input) => {
       if (input.action === "list") {
         const r = await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
-        const defaults = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, night_sleep: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, idle_project: true };
-        for (const row of r.results || []) { const k = row.key.replace("cron_cfg_", ""); defaults[k] = row.value === "true"; }
+        const defaults = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, night_sleep: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, idle_project: true, astral_active: false, astral_interval: "120", astral_last_tick: "0" };
+        for (const row of r.results || []) { defaults[row.key.replace("cron_cfg_", "")] = row.value; }
         return JSON.stringify(defaults, null, 2);
       }
-      if (!input.key) return "Provide a key to toggle or set. Keys: enabled, log_tick, idle_cycle, health_check, night_sleep, slot_*, process_*, task_*.";
+      if (!input.key) return "Provide a key to toggle or set. Keys: enabled, astral_active, astral_interval, log_tick, idle_cycle, health_check, night_sleep, slot_*, process_*, task_*.";
       const key = "cron_cfg_" + input.key;
       if (input.action === "toggle") {
         const cur = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(key).first();
@@ -834,9 +834,8 @@ export const toolDefinitions = {
         return "Toggled '" + input.key + "' to " + newVal + ". Takes effect next tick.";
       }
       if (input.action === "set") {
-        const val = input.value === "true" || input.value === "false" ? input.value : "true";
-        await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(key, val).run();
-        return "Set '" + input.key + "' to " + val + ". Takes effect next tick.";
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(key, String(input.value)).run();
+        return "Set '" + input.key + "' to " + input.value + ". Takes effect next tick.";
       }
       return "Invalid action. Use 'list', 'toggle', or 'set'.";
     },
