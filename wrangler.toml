@@ -15,9 +15,8 @@ index_name = "saraha-brain-memory"
 [ai]
 binding = "AI"
 
-[[triggers]]
-type = "cron"
-pattern = "*/2 * * * *"
+[triggers]
+crons = ["*/2 * * * *"]
 
 [vars]
 BRAIN_KEY = "Saraha-Brain-Key"
