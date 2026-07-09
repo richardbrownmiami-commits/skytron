@@ -397,7 +397,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     const state = await getState(env.DB);
     const memCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_memory").all()).results[0]?.c || 0;
     const knCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_knowledge").all()).results[0]?.c || 0;
-    return new Response(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skytron</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem}.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.5rem;margin:0.5rem;max-width:500px;width:100%}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:1rem}.stat{display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid #21262d;font-size:0.85rem}.stat:last-child{border:none}.label{color:#8b949e}.links{display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap}.links a{color:#58a6ff;text-decoration:none;padding:0.4rem 0.8rem;border:1px solid #30363d;border-radius:8px;font-size:0.8rem}.links a:hover{background:#1f2937}</style></head><body><h1>Skytron</h1><div class="card"><div class="stat"><span class="label">Energy</span><span class="val" style="color:${state.reg.energy>60?'#3fb950':state.reg.energy>30?'#d29922':'#f85149'}">${state.reg.energy}%</span></div><div class="stat"><span class="label">Happy</span><span class="val">${state.emotions.happy}/10</span></div><div class="stat"><span class="label">Energetic</span><span class="val">${state.emotions.energetic}/10</span></div><div class="stat"><span class="label">Memory</span><span class="val">${memCount} messages</span></div><div class="stat"><span class="label">Knowledge</span><span class="val">${knCount} facts</span></div></div><div class="card"><div class="links"><a href="/skytronchat">Chat</a><a href="/status">Status</a><a href="/brain/history">History</a><a href="/brain/memory">Memory</a><a href="/brain/memory/search?q=">Search</a><a href="/brain/knowledge">Knowledge</a><a href="/brain/introspect">Insights</a><a href="/brain/source">About</a></div></div></body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8" } });
+    return new Response(`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skytron</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem}.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.5rem;margin:0.5rem;max-width:500px;width:100%}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:1rem}.stat{display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid #21262d;font-size:0.85rem}.stat:last-child{border:none}.label{color:#8b949e}.links{display:flex;gap:0.5rem;margin-top:1rem;flex-wrap:wrap}.links a{color:#58a6ff;text-decoration:none;padding:0.4rem 0.8rem;border:1px solid #30363d;border-radius:8px;font-size:0.8rem}.links a:hover{background:#1f2937}</style></head><body><h1>Skytron</h1><div class="card"><div class="stat"><span class="label">Energy</span><span class="val" style="color:${state.reg.energy>60?'#3fb950':state.reg.energy>30?'#d29922':'#f85149'}">${state.reg.energy}%</span></div><div class="stat"><span class="label">Happy</span><span class="val">${state.emotions.happy}/10</span></div><div class="stat"><span class="label">Energetic</span><span class="val">${state.emotions.energetic}/10</span></div><div class="stat"><span class="label">Memory</span><span class="val">${memCount} messages</span></div><div class="stat"><span class="label">Knowledge</span><span class="val">${knCount} facts</span></div></div><div class="card"><div class="links"><a href="/skytronchat">Chat</a><a href="/status">Status</a><a href="/brain/history">History</a><a href="/brain/memory">Memory</a><a href="/brain/memory/search?q=">Search</a><a href="/brain/knowledge">Knowledge</a><a href="/brain/introspect">Insights</a><a href="/brain/settings">Settings</a><a href="/brain/source">About</a></div></div></body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8" } });
   }
 
   if (url.pathname === "/brain/logs") {
@@ -739,6 +739,146 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       return json({ ok: true, repo, branch, files_processed: results.length, results });
     } catch (e) { return json({ error: e.message }, 500); }
     }
+
+  // === Settings page (LLM API config) ===
+  if (url.pathname === "/brain/settings" && req.method === "GET") {
+    let settings = { workers_ai: { enabled: true }, buddhidwar: { enabled: false, api_key: "" }, universal: { enabled: false, endpoint: "", api_key: "", model: "" } };
+    try {
+      const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first();
+      if (row?.content) { const p = JSON.parse(row.content); if (p.workers_ai) settings.workers_ai = p.workers_ai; if (p.buddhidwar) settings.buddhidwar = p.buddhidwar; if (p.universal) settings.universal = p.universal; }
+    } catch {}
+    const s = JSON.stringify(settings).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+    return new Response(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skytron — Settings</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0b1120;color:#e6edf3;font-family:system-ui,-apple-system,sans-serif;padding:2rem;max-width:700px;margin:0 auto}
+h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.25rem}
+.sub{color:#8b949e;font-size:0.85rem;margin-bottom:2rem}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.5rem;margin-bottom:1rem}
+.card h2{font-size:1rem;color:#f0f6fc;margin-bottom:1rem;display:flex;align-items:center;gap:0.5rem}
+.field{margin-bottom:1rem}
+.field:last-child{margin-bottom:0}
+.field label{display:block;font-size:0.8rem;color:#8b949e;margin-bottom:0.3rem}
+.field input{width:100%;padding:0.5rem 0.75rem;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:0.85rem}
+.field input:focus{outline:none;border-color:#58a6ff}
+.toggle{display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid #21262d}
+.toggle label{font-size:0.85rem;color:#e6edf3;cursor:pointer}
+.switch{position:relative;width:36px;height:20px;flex-shrink:0}
+.switch input{opacity:0;width:0;height:0}
+.slider{position:absolute;top:0;left:0;right:0;bottom:0;background:#30363d;border-radius:20px;cursor:pointer;transition:0.2s}
+.slider:before{position:absolute;content:"";height:14px;width:14px;left:3px;bottom:3px;background:#8b949e;border-radius:50%;transition:0.2s}
+.switch input:checked+.slider{background:#238636}
+.switch input:checked+.slider:before{background:#fff;transform:translateX(16px)}
+.btn{background:#238636;color:#fff;border:none;border-radius:6px;padding:0.6rem 1.5rem;font-size:0.85rem;cursor:pointer;font-weight:600;margin-top:0.5rem}
+.btn:hover{background:#2ea043}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+#msg{padding:0.6rem 1rem;border-radius:6px;margin-top:0.5rem;font-size:0.85rem;display:none}
+#msg.ok{display:block;background:#1b3a1b;color:#7ee787;border:1px solid #238636}
+#msg.err{display:block;background:#3d1212;color:#f85149;border:1px solid #da3633}
+.badge{font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:4px;background:#21262d;color:#8b949e}
+</style>
+</head>
+<body>
+<h1>Skytron Settings</h1>
+<p class="sub">Configure which AI providers Skytron uses. First enabled provider wins.</p>
+
+<div id="msg"></div>
+<div id="app"><p style="color:#8b949e">Loading settings...</p></div>
+
+<script>
+const DEFAULT={workers_ai:{enabled:true},buddhidwar:{enabled:false,api_key:""},universal:{enabled:false,endpoint:"",api_key:"",model:""}};
+const SETTINGS=${s};
+function render(s){
+  const wa=s.workers_ai||DEFAULT.workers_ai;
+  const bd=s.buddhidwar||DEFAULT.buddhidwar;
+  const univ=s.universal||DEFAULT.universal;
+  return \`
+    <div class="card">
+      <h2>Workers AI <span class="badge">Cloudflare built-in</span></h2>
+      <div class="toggle">
+        <label class="switch"><input type="checkbox" id="wa_enabled" \${wa.enabled!==false?'checked':''}><span class="slider"></span></label>
+        <label for="wa_enabled">Enabled</label>
+      </div>
+      <p style="color:#8b949e;font-size:0.8rem">Uses Cloudflare Workers AI binding (\${wa.enabled!==false?'@cf/zai-org/glm-4.7-flash':'disabled'}). No config needed — set up in wrangler.toml.</p>
+    </div>
+
+    <div class="card">
+      <h2>BUDDHI_DWAR <span class="badge">Gateway API</span></h2>
+      <div class="toggle">
+        <label class="switch"><input type="checkbox" id="bd_enabled" \${bd.enabled?'checked':''}><span class="slider"></span></label>
+        <label for="bd_enabled">Enabled</label>
+      </div>
+      <div class="field">
+        <label for="bd_api_key">API Key</label>
+        <input type="password" id="bd_api_key" value="\${bd.api_key||''}" placeholder="Enter your BUDDHI_DWAR API key">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Universal AI <span class="badge">OpenAI-compatible API</span></h2>
+      <div class="toggle">
+        <label class="switch"><input type="checkbox" id="univ_enabled" \${univ.enabled?'checked':''}><span class="slider"></span></label>
+        <label for="univ_enabled">Enabled</label>
+      </div>
+      <div class="field">
+        <label for="univ_endpoint">API Endpoint URL</label>
+        <input type="url" id="univ_endpoint" value="\${univ.endpoint||''}" placeholder="https://api.openai.com/v1/chat/completions">
+      </div>
+      <div class="field">
+        <label for="univ_api_key">API Key</label>
+        <input type="password" id="univ_api_key" value="\${univ.api_key||''}" placeholder="Enter your API key">
+      </div>
+      <div class="field">
+        <label for="univ_model">Model Name</label>
+        <input type="text" id="univ_model" value="\${univ.model||''}" placeholder="gpt-4o, claude-3-opus, gemini-2.5-flash, etc.">
+      </div>
+      <p style="color:#8b949e;font-size:0.8rem;margin-top:0.5rem">Works with any OpenAI-compatible API: OpenAI, <a href="https://openrouter.ai" target="_blank" style="color:#58a6ff">OpenRouter</a>, Anthropic, Groq, DeepSeek, Together, etc.</p>
+    </div>
+
+    <button class="btn" onclick="save()">Save Settings</button>
+  \`;
+}
+document.getElementById('app').innerHTML=render(SETTINGS);
+
+async function save(){
+  const btn=document.querySelector('.btn');btn.disabled=true;btn.textContent='Saving...';
+  const msg=document.getElementById('msg');msg.style.display='none';
+  const settings={
+    workers_ai:{enabled:document.getElementById('wa_enabled').checked},
+    buddhidwar:{enabled:document.getElementById('bd_enabled').checked,api_key:document.getElementById('bd_api_key').value.trim()},
+    universal:{enabled:document.getElementById('univ_enabled').checked,endpoint:document.getElementById('univ_endpoint').value.trim(),api_key:document.getElementById('univ_api_key').value.trim(),model:document.getElementById('univ_model').value.trim()}
+  };
+  try{
+    const r=await fetch('/brain/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});
+    const d=await r.json();
+    if(d.ok){msg.className='ok';msg.textContent='Settings saved. Skytron will use the new provider config on next action.';msg.style.display='block'}
+    else{msg.className='err';msg.textContent='Error: '+(d.error||'unknown');msg.style.display='block'}
+  }catch(e){msg.className='err';msg.textContent='Error: '+e.message;msg.style.display='block'}
+  btn.disabled=false;btn.textContent='Save Settings';
+}
+</script>
+</body>
+</html>`, { headers: { "Content-Type": "text/html;charset=utf-8" } });
+  }
+
+  if (url.pathname === "/brain/settings" && req.method === "POST") {
+    try {
+      const body = await req.json();
+      if (typeof body !== "object") return json({ error: "invalid JSON body" }, 400);
+      const sanitized = {
+        workers_ai: { enabled: body.workers_ai?.enabled !== false },
+        buddhidwar: { enabled: !!body.buddhidwar?.enabled, api_key: (body.buddhidwar?.api_key || "").slice(0, 500) },
+        universal: { enabled: !!body.universal?.enabled, endpoint: (body.universal?.endpoint || "").slice(0, 500), api_key: (body.universal?.api_key || "").slice(0, 500), model: (body.universal?.model || "").slice(0, 200) }
+      };
+      await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('settings_llm', ?1, 'settings', 'user')").bind(JSON.stringify(sanitized)).run();
+      return json({ ok: true, message: "Settings saved" });
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
 
   return json({ error: "not found" }, 404);
 }

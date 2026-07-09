@@ -1,17 +1,15 @@
 // === Skytron LLM Gateway (AI PROVIDER) ===
-// Priority 1: Workers AI — skip if rate-limited today (wa_limited flag in identity table).
-// Priority 2: BUDDHI_DWAR gateway — BD's scoring selects best provider.
-// Priority 3: OpenRouter direct — maintenance fallback when both WA and BD fail.
-// callLLM(env, body, sessionId): auto-cycles through all 3 priorities.
-// callOpenRouter(env, messages, max_tokens?): standalone — bypasses WA and BD entirely.
-// Workers AI response format: handles both {.response} and {choices:[{message:{content:...}}]}
+// Reads enabled providers from brain_knowledge settings_llm and tries them in order:
+//   1. Workers AI (if enabled + binding exists)
+//   2. BUDDHI_DWAR (if enabled + api_key provided)
+//   3. Universal AI (if enabled + endpoint + api_key configured)
+// First provider that returns a valid response wins.
+// callOpenRouter() kept as standalone emergency utility (used by scheduler).
 
 function timeoutRace(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
 }
 
-// Retry wrapper — handles DNS throttling and transient errors
-// Cloudflare Workers get DNS throttled after ~6 rapid fetch() calls to same zone
 async function fetchWithRetry(url, opts, maxRetries = 3) {
   let lastErr;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -24,7 +22,7 @@ async function fetchWithRetry(url, opts, maxRetries = 3) {
         || msg.includes("fetch failed") || msg.includes("network") || msg.includes("timeout")
         || msg.includes("abort") || msg.includes("1042") || msg.includes("remote name");
       if (isTransient && attempt < maxRetries) {
-        const delay = 3000 * Math.pow(2, attempt); // 3s, 6s, 12s
+        const delay = 3000 * Math.pow(2, attempt);
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
@@ -34,130 +32,108 @@ async function fetchWithRetry(url, opts, maxRetries = 3) {
   throw lastErr;
 }
 
-async function isWARateLimited(db) {
-  if (!db) return false;
-  try {
-    const row = await db.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
-    if (!row?.value) return false;
-    const today = new Date().toISOString().split("T")[0];
-    const [d] = row.value.split(":");
-    return d === today;
-  } catch { return false; }
-}
-
-async function markWARateLimited(db) {
-  if (!db) return;
-  try {
-    const row = await db.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
-    const today = new Date().toISOString().split("T")[0];
-    let count = 1;
-    if (row?.value) { const [d, c] = row.value.split(":"); if (d === today) count = parseInt(c) + 1; }
-    await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_limited',?1,datetime('now'))").bind(today + ":" + count).run();
-  } catch {}
-}
-
-async function clearWARateLimit(db) {
-  if (!db) return;
-  try { await db.prepare("DELETE FROM identity WHERE key='wa_limited'").run(); } catch {}
-}
+const DEFAULT_SETTINGS = {
+  workers_ai: { enabled: true },
+  buddhidwar: { enabled: false, api_key: "" },
+  universal: { enabled: false, endpoint: "", api_key: "", model: "" }
+};
 
 export async function callLLM(env, body, sessionId) {
-  const errors = [];
-  const waLimited = await isWARateLimited(env.DB);
   const maxTokens = body.max_tokens || 2000;
+  const errors = [];
+
+  // Load settings from brain_knowledge
+  let settings = { ...DEFAULT_SETTINGS };
+  try {
+    if (env.DB) {
+      const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first();
+      if (row?.content) {
+        const parsed = JSON.parse(row.content);
+        if (parsed.workers_ai) settings.workers_ai = { ...settings.workers_ai, ...parsed.workers_ai };
+        if (parsed.buddhidwar) settings.buddhidwar = { ...settings.buddhidwar, ...parsed.buddhidwar };
+        if (parsed.universal) settings.universal = { ...settings.universal, ...parsed.universal };
+      }
+    }
+  } catch {}
 
   // Priority 1: Workers AI
-  if (!waLimited && env.AI) {
-    let waReturned = false;
+  if (settings.workers_ai?.enabled !== false && env.AI) {
     try {
       const waResult = await Promise.race([
         env.AI.run("@cf/zai-org/glm-4.7-flash", {
           messages: body.messages, max_tokens: maxTokens
         }),
-        timeoutRace(25000)
+        timeoutRace(20000)
       ]);
-      waReturned = true;
       const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
-      if (waText) { await clearWARateLimit(env.DB); return { content: waText, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } }; }
+      if (waText) return { content: waText, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
     } catch (e) {
-      const errMsg = e.message || "";
-      if (!waReturned) errors.push("Workers AI: " + errMsg);
-      // Try WA fallback model on timeout
-      if (!waReturned && errMsg.includes("timeout")) {
-        try {
-          const fallback = await Promise.race([
-            env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
-              messages: body.messages, max_tokens: maxTokens
-            }),
-            timeoutRace(30000)
-          ]);
-          const fbText = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
-          if (fbText) { await clearWARateLimit(env.DB); return { content: fbText, model: "workers-ai/gemma-4-26b-a4b-it", tokens: { total: 0 } }; }
-        } catch (fbErr) { errors.push("WA fallback: " + (fbErr.message || "timeout")); }
-      }
-      // Mark rate limit if WA hit its daily limit
-      if (errMsg.includes("4006") || errMsg.includes("allocation") || errMsg.includes("limit")) {
-        await markWARateLimited(env.DB);
-        errors.push("Workers AI: rate limited today");
-      }
+      errors.push("Workers AI: " + (e.message || "timeout"));
     }
   }
 
-  // Priority 2: BUDDHI_DWAR gateway via public fetch
-  let bdOk = false;
-  const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
-  if (env.BRAIN_KEY) {
+  // Priority 2: BUDDHI_DWAR
+  if (settings.buddhidwar?.enabled && settings.buddhidwar?.api_key) {
+    const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
     try {
-      const task = body.task || "chat";
-      // Use requested model, or default to gemini-2.5-flash (Google — less rate-limited than Groq)
       const model = body.model || "gemini-2.5-flash";
-      const reqBody = { messages: body.messages, model, max_tokens: body.max_tokens || 3000, task };
-      const timeoutMs = Math.max(30000, (body.max_tokens || 3000) * 8);
+      const timeoutMs = Math.max(20000, maxTokens * 8);
       const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.BRAIN_KEY },
-        body: JSON.stringify(reqBody),
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.buddhidwar.api_key },
+        body: JSON.stringify({ messages: body.messages, model, max_tokens: maxTokens || 3000, task: body.task || "chat" }),
         signal: AbortSignal.timeout(timeoutMs)
       }, 2);
       if (resp.ok) {
         const data = await resp.json();
         const msgContent = data.choices?.[0]?.message?.content;
         if (typeof msgContent === "string" && msgContent.length > 0) {
-          bdOk = true;
-          if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
-          return { content: msgContent, model: data.model || "", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+          return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
         }
-        errors.push("BUDDHI_DWAR: HTTP 200 empty: " + (data.error?.message || JSON.stringify(data).slice(0, 100)));
+        errors.push("BUDDHI_DWAR: HTTP 200 empty");
       } else {
         const errBody = await resp.text().catch(() => "");
         errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
       }
     } catch (e) { errors.push("BUDDHI_DWAR: " + (e.message || "timeout")); }
-  } else { errors.push("BUDDHI_DWAR: service binding not available"); }
+  }
 
-  // Track consecutive BD failures
-  if (!bdOk && env.DB) try {
-    const row = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first();
-    const count = (parseInt(row?.value) || 0) + 1;
-    await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_failures',?1,datetime('now'))").bind(String(count)).run();
-    if (count >= 3) await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('health_flags','bd_unreachable',datetime('now'))").run();
-  } catch {}
-
-  // Priority 3: OpenRouter direct — last resort when WA times out
-  if (env.OPENROUTER_API_KEY) {
-    const orResult = await callOpenRouter(env, body.messages, maxTokens, body.model || "openrouter/free");
-    if (orResult?.content) {
-      if (env.DB) try { await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run(); } catch {}
-      return orResult;
-    }
-    if (orResult?.error) errors.push(orResult.error);
+  // Priority 3: Universal AI API (OpenAI-compatible)
+  if (settings.universal?.enabled && settings.universal?.api_key && settings.universal?.endpoint) {
+    try {
+      const model = settings.universal.model || "gpt-4o";
+      const resp = await fetchWithRetry(settings.universal.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + settings.universal.api_key
+        },
+        body: JSON.stringify({
+          model,
+          messages: body.messages,
+          max_tokens: maxTokens
+        }),
+        signal: AbortSignal.timeout(30000)
+      }, 2);
+      if (resp.ok) {
+        const data = await resp.json();
+        const msgContent = data.choices?.[0]?.message?.content;
+        if (typeof msgContent === "string" && msgContent.length > 0) {
+          return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+        }
+        errors.push("Universal: HTTP 200 empty");
+      } else {
+        const errBody = await resp.text().catch(() => "");
+        errors.push("Universal: HTTP " + resp.status + " " + errBody.slice(0, 100));
+      }
+    } catch (e) { errors.push("Universal: " + (e.message || "timeout")); }
   }
 
   return { content: null, errors, model: "none", tokens: { total: 0 } };
 }
 
-// callOpenRouter: direct OpenRouter call — bypasses WA and BD entirely.
-// Used by callLLM as Priority 3 and by scheduler for emergency self-repair.
+// callOpenRouter: standalone — bypasses settings entirely, calls OpenRouter directly.
+// Used by scheduler for emergency self-repair.
 export async function callOpenRouter(env, messages, maxTokens = 2000, model = "openrouter/free") {
   if (!env.OPENROUTER_API_KEY) return { content: null, error: "OPENROUTER_API_KEY not set" };
   try {
@@ -186,9 +162,7 @@ export async function callOpenRouter(env, messages, maxTokens = 2000, model = "o
   } catch (e) { return { content: null, error: "OpenRouter: " + (e.message || "timeout") }; }
 }
 
-// === Chat Agent ===
-// Simple one-shot LLM call using Workers AI (no tool context).
-// Used by the agent loop fast path.
+// Chat Agent: simple one-shot Workers AI call (no tools). Kept for backward compat.
 export async function callChatAgent(env, fullHistory, task = "chat") {
   if (!env.AI) return null;
   try {
@@ -201,7 +175,6 @@ export async function callChatAgent(env, fullHistory, task = "chat") {
     const content = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
     if (content) return { content, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
   } catch {}
-  // Try fallback on timeout
   try {
     const fallback = await Promise.race([
       env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
