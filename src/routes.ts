@@ -390,12 +390,36 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     return json({ slots, detected_types: Object.keys(PROMPT_SLOTS) });
   }
 
+  if (url.pathname === "/brain/health-check" && req.method === "GET") {
+    const stuck = (await env.DB.prepare("SELECT id, task, status, created_at, CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) as duration_seconds FROM actions WHERE status='running' AND created_at < datetime('now', '-1 minutes') ORDER BY created_at").all()).results || [];
+    const staleQueued = (await env.DB.prepare("SELECT id, task, created_at, CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) as duration_seconds FROM actions WHERE status='queued' AND created_at < datetime('now', '-30 minutes') ORDER BY created_at").all()).results || [];
+    const totalLogs = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_logs").all()).results[0]?.c || 0;
+    const recentErrors = (await env.DB.prepare("SELECT id, task, result, created_at FROM actions WHERE status='error' AND created_at > datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 10").all()).results || [];
+    const issues = [];
+    for (const a of stuck) {
+      const m = Math.floor(a.duration_seconds / 60), s = a.duration_seconds % 60;
+      issues.push({ type: "stuck_action", id: a.id, task: a.task, duration_seconds: a.duration_seconds, age: m+"m "+s+"s", created_at: a.created_at });
+    }
+    for (const a of staleQueued) {
+      const m = Math.floor(a.duration_seconds / 60);
+      issues.push({ type: "stale_queued", id: a.id, task: a.task, duration_seconds: a.duration_seconds, age: m+"m", created_at: a.created_at });
+    }
+    const logsToDelete = Math.max(0, totalLogs - 500);
+    if (logsToDelete > 0) issues.push({ type: "old_logs", count: logsToDelete, detail: logsToDelete+" log entries beyond last 500" });
+    if (recentErrors.length > 0) issues.push({ type: "recent_errors", count: recentErrors.length, errors: recentErrors.map(e => ({ id: e.id, task: e.task, created_at: e.created_at })) });
+    return json({ issues, stats: { stuck_actions: stuck.length, stale_queued: staleQueued.length, old_logs: logsToDelete, recent_errors: recentErrors.length } });
+  }
+
   if (url.pathname === "/brain/repair" && (req.method === "GET" || req.method === "POST")) {
     const fixes = [];
     const stuck = await env.DB.prepare("UPDATE actions SET status='error', result='Timeout', completed_at=datetime('now') WHERE status='running' AND created_at < datetime('now', '-10 minutes')").run();
     if (stuck.meta?.changes > 0) fixes.push("Fixed " + stuck.meta.changes + " stuck actions");
+    const staleQ = await env.DB.prepare("UPDATE actions SET status='error', result='Stale', completed_at=datetime('now') WHERE status='queued' AND created_at < datetime('now', '-60 minutes')").run();
+    if (staleQ.meta?.changes > 0) fixes.push("Cleared " + staleQ.meta.changes + " stale queued actions");
     const oldLogs = await env.DB.prepare("DELETE FROM brain_logs WHERE id NOT IN (SELECT id FROM brain_logs ORDER BY id DESC LIMIT 500)").run();
     if (oldLogs.meta?.changes > 0) fixes.push("Cleaned " + oldLogs.meta.changes + " old logs");
+    const errActions = await env.DB.prepare("UPDATE actions SET completed_at=datetime('now') WHERE status='error' AND completed_at IS NULL").run();
+    if (errActions.meta?.changes > 0) fixes.push("Stamped " + errActions.meta.changes + " errored actions with completed time");
     return json({ fixes });
   }
 
