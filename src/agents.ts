@@ -131,16 +131,14 @@ export async function processOneStep(env, action) {
         state.step++;
         await saveAgentState(db, action.id, state);
         if (state.step >= 25) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
+        continue;
       }
-      continue;
-    }
-    await saveAgentState(db, action.id, state);
-    if (state.repeatCount >= 3) {
-      state.fullHistory.push({ role: "user", content: "[SYSTEM: You called '" + parsed.tool + "' 3 times with the same params. The tool already succeeded. Now SUMMARIZE the result in plain English. DO NOT output tool JSON. DO NOT repeat the tool call. Answer the user directly.]" });
-      state.repeatCount = 0;
-      state.step++;
-      await saveAgentState(db, action.id, state);
-      if (state.step >= 25) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
+      if (state.repeatCount >= 3) {
+        state.fullHistory.push({ role: "user", content: "[SYSTEM: You called '" + parsed.tool + "' 3 times with the same params. The tool already succeeded. Now SUMMARIZE the result in plain English. DO NOT output tool JSON. DO NOT repeat the tool call. Answer the user directly.]" });
+        state.repeatCount = 0;
+        state.step++;
+        await saveAgentState(db, action.id, state);
+        if (state.step >= 25) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
         continue;
       }
       const result = await dispatchTool(env, parsed.tool, parsed.input, action.id);
@@ -165,11 +163,13 @@ export async function processOneStep(env, action) {
       state.step++;
       if (state.step >= 25) { state.finalContent = "[Max steps reached — wrap up and answer]"; state.done = true; }
       await saveAgentState(db, action.id, state);
-    } else {
-      content = cleanseIdentity(content);
-      state.finalContent = content; state.done = true;
-      state.totalTokens += resp.tokens?.total || 0;
+      continue;
     }
+    // No tool call — answer directly
+    await saveAgentState(db, action.id, state);
+    content = cleanseIdentity(content);
+    state.finalContent = content; state.done = true;
+    state.totalTokens += resp.tokens?.total || 0;
   }
 
   await saveAgentState(db, action.id, state);
