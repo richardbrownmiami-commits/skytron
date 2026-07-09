@@ -493,7 +493,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       await storeMemory(env.DB, "user", llmInput.slice(0, 2000), conversationId);
 
-      const taskType = detectTaskType(input);
+      const taskType = mode === "astral" ? "astral" : detectTaskType(input);
       const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', 'running', ?1, ?2) RETURNING id").bind(input, taskType).all();
       const aid = r.results[0].id;
       // Store mode in agent state for processOneStep to read
@@ -629,12 +629,11 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   // --- /think/process — manually process the next queued/running action (step-by-step, one batch at a time) ---
   if (url.pathname === "/think/process" && req.method === "POST") {
     try {
-      await env.DB.prepare("UPDATE actions SET status='queued' WHERE status='running' AND result IS NULL AND created_at < datetime('now', '-1 minute')").run();
-      // Prioritize user actions over astral walk
-      await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND mode != 'astral' ORDER BY created_at ASC LIMIT 1").run();
+      await env.DB.prepare("UPDATE actions SET status='queued' WHERE status='running' AND task != 'astral' AND result IS NULL AND created_at < datetime('now', '-1 minute')").run();
+      await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task != 'astral' ORDER BY created_at ASC LIMIT 1").run();
       let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       if (!q.results?.length) {
-        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND mode = 'astral' ORDER BY created_at ASC LIMIT 1").run();
+        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task = 'astral' ORDER BY created_at ASC LIMIT 1").run();
         q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       }
       if (q.results?.length) {
@@ -647,11 +646,11 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
   if (url.pathname === "/__cron" && req.method === "GET") {
     try {
-      // Prioritize user actions (build/discussion) over astral walk
-      await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND mode != 'astral' ORDER BY created_at ASC LIMIT 1").run();
+      // Prioritize user actions over astral walk
+      await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task != 'astral' ORDER BY created_at ASC LIMIT 1").run();
       let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       if (!q.results?.length) {
-        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND mode = 'astral' ORDER BY created_at ASC LIMIT 1").run();
+        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task = 'astral' ORDER BY created_at ASC LIMIT 1").run();
         q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       }
       if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); }
