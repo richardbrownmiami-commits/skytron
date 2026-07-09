@@ -633,8 +633,8 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   if (url.pathname === "/think/process" && req.method === "POST") {
     try {
       await env.DB.prepare("UPDATE actions SET status='queued' WHERE status='running' AND result IS NULL AND created_at < datetime('now', '-1 minute')").run();
-      // Clear stale astral actions — only keep the newest one
-      await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-5 minutes')").run();
+      // Clear all queued astral actions except the most recent one
+      await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND id NOT IN (SELECT id FROM (SELECT id FROM actions WHERE task='astral' AND status='queued' ORDER BY created_at DESC LIMIT 1))").run();
       await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task != 'astral' ORDER BY created_at ASC LIMIT 1").run();
       let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       if (!q.results?.length) {
@@ -650,10 +650,11 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
+  // --- /__cron — process next action (user first, then newest astral) ---
   if (url.pathname === "/__cron" && req.method === "GET") {
     try {
-      // Clear stale astral actions — only keep the newest one
-      await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-5 minutes')").run();
+      // Clear all queued astral actions except the most recent one
+      await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND id NOT IN (SELECT id FROM (SELECT id FROM actions WHERE task='astral' AND status='queued' ORDER BY created_at DESC LIMIT 1))").run();
       // Prioritize user actions over astral walk
       await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task != 'astral' ORDER BY created_at ASC LIMIT 1").run();
       let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
