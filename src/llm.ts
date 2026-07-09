@@ -58,17 +58,20 @@ export async function callLLM(env, body, sessionId) {
 
   // Priority 1: Workers AI
   if (settings.workers_ai?.enabled !== false && env.AI) {
-    try {
-      const waResult = await Promise.race([
-        env.AI.run("@cf/zai-org/glm-4.7-flash", {
-          messages: body.messages, max_tokens: maxTokens
-        }),
-        timeoutRace(20000)
-      ]);
-      const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
-      if (waText) return { content: waText, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
-    } catch (e) {
-      errors.push("Workers AI: " + (e.message || "timeout"));
+    const waModels = ["@cf/meta/llama-3.2-3b-instruct", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"];
+    for (const waModel of waModels) {
+      try {
+        const waResult = await Promise.race([
+          env.AI.run(waModel, {
+            messages: body.messages, max_tokens: Math.min(maxTokens, 4000)
+          }),
+          timeoutRace(12000)
+        ]);
+        const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
+        if (waText) return { content: waText, model: "workers-ai/" + waModel.split("/").pop(), tokens: { total: 0 } };
+      } catch (e) {
+        errors.push("Workers AI " + waModel.split("/").pop() + ": " + (e.message || "timeout"));
+      }
     }
   }
 
@@ -165,26 +168,17 @@ export async function callOpenRouter(env, messages, maxTokens = 2000, model = "o
 // Chat Agent: simple one-shot Workers AI call (no tools). Kept for backward compat.
 export async function callChatAgent(env, fullHistory, task = "chat") {
   if (!env.AI) return null;
-  try {
-    const result = await Promise.race([
-      env.AI.run("@cf/zai-org/glm-4.7-flash", {
-        messages: fullHistory, max_tokens: 2000
-      }),
-      timeoutRace(25000)
-    ]);
-    const content = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
-    if (content) return { content, model: "workers-ai/glm-4.7-flash", tokens: { total: 0 } };
-  } catch {}
-  try {
-    const fallback = await Promise.race([
-      env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
-        messages: fullHistory, max_tokens: 2000
-      }),
-      timeoutRace(30000)
-    ]);
-    const fbContent = typeof fallback?.response === "string" ? fallback.response : (fallback?.choices?.[0]?.message?.content || "");
-    if (fbContent) return { content: fbContent, model: "workers-ai/gemma-4-26b-a4b-it", tokens: { total: 0 } };
-  } catch {}
+  const models = ["@cf/meta/llama-3.2-3b-instruct", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"];
+  for (const m of models) {
+    try {
+      const result = await Promise.race([
+        env.AI.run(m, { messages: fullHistory, max_tokens: 2000 }),
+        timeoutRace(12000)
+      ]);
+      const content = typeof result?.response === "string" ? result.response : (result?.choices?.[0]?.message?.content || "");
+      if (content) return { content, model: "workers-ai/" + m.split("/").pop(), tokens: { total: 0 } };
+    } catch {}
+  }
   return null;
 }
 

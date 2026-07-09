@@ -453,7 +453,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       const body = await req.json();
       const messages = body.messages || [];
       if (!messages.length) return json({ error: "messages required" }, 400);
-      const model = body.model || "@cf/zai-org/glm-4.7-flash";
+      const model = body.model || "@cf/meta/llama-3.2-3b-instruct";
       const maxTokens = body.max_tokens || 2000;
       const stream = body.stream || false;
       if (stream) return json({ error: "streaming not supported" }, 400);
@@ -469,7 +469,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         id: "chatcmpl-" + Date.now(),
         object: "chat.completion",
         created: Math.floor(Date.now() / 1000),
-        model: "workers-ai/glm-4.7-flash",
+        model: "workers-ai/" + (body.model || "@cf/meta/llama-3.2-3b-instruct").split("/").pop(),
         choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
         usage: { prompt_tokens: 0, completion_tokens: 0, total: 0 }
       });
