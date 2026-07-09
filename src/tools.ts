@@ -812,7 +812,7 @@ export const toolDefinitions = {
     },
   },
   cron_control: {
-    description: "Manage your cron settings. 'list' returns all settings with their current state. 'toggle key' flips a setting (e.g. 'night_sleep'). 'set key value' sets a key to a specific value (true/false). Settings: enabled, log_tick, idle_cycle, health_check, night_sleep, slot_self_improve, slot_test, slot_research, slot_housekeep, tool_dispatch, process_actions, stuck_recovery, process_agents, daily_cleanup, idle_project.",
+    description: "Manage your cron settings. 'list' returns all settings with their current state. 'toggle key' flips a setting. 'set key value' sets a key to a specific value (true/false). Settings: enabled, log_tick, idle_cycle, health_check, slot_self_improve, slot_test, slot_research, slot_housekeep, tool_dispatch, process_actions, stuck_recovery, process_agents, daily_cleanup, idle_project.",
     schema: z.object({
       action: z.enum(["list", "toggle", "set"]).describe("What to do: 'list' shows settings, 'toggle' flips a key, 'set key value' sets explicitly"),
       key: z.string().optional().describe("Setting key to toggle or set"),
@@ -821,11 +821,11 @@ export const toolDefinitions = {
     execute: async (env, input) => {
       if (input.action === "list") {
         const r = await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
-        const defaults = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, night_sleep: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, idle_project: true, astral_active: false, astral_interval: "120", astral_last_tick: "0" };
+        const defaults = { enabled: true, log_tick: false, idle_cycle: true, health_check: true, slot_self_improve: true, slot_test: true, slot_research: true, slot_housekeep: true, tool_dispatch: true, process_actions: true, stuck_recovery: true, process_agents: true, daily_cleanup: true, idle_project: true, astral_active: false, astral_interval: "120", astral_last_tick: "0" };
         for (const row of r.results || []) { defaults[row.key.replace("cron_cfg_", "")] = row.value; }
         return JSON.stringify(defaults, null, 2);
       }
-      if (!input.key) return "Provide a key to toggle or set. Keys: enabled, astral_active, astral_interval, log_tick, idle_cycle, health_check, night_sleep, slot_*, process_*, task_*.";
+      if (!input.key) return "Provide a key to toggle or set. Keys: enabled, astral_active, astral_interval, log_tick, idle_cycle, health_check, slot_*, process_*, task_*.";
       const key = "cron_cfg_" + input.key;
       if (input.action === "toggle") {
         const cur = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(key).first();

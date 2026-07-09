@@ -23,13 +23,6 @@ export async function handleScheduled(controller, env) {
   // --- Load settings ---
   const settings = await getCronSettings(env.DB);
 
-  // --- Night sleep (6h window: UTC 20-2 = IST 1:30AM-7:30AM) ---
-  if (settings.night_sleep) {
-    const now = new Date();
-    const h = now.getUTCHours();
-    if (h >= 20 || h < 2) { logActivity(db, "night_sleep", { summary: "Tick skipped — night sleep mode (UTC " + h + ")" }); return; }
-  }
-
   // --- Step 2: Process queued actions ---
   if (settings.process_actions) try {
     const lastIdRow = await env.DB.prepare("SELECT value FROM identity WHERE key='last_action_id'").all();
@@ -363,7 +356,7 @@ async function getCronSettings(db) {
   const defaults = {
     enabled: true, idle_cycle: true, health_check: true,
     idle_project: true, process_actions: true, stuck_recovery: true,
-    process_agents: true, daily_cleanup: true, night_sleep: true, wake_up: true
+    process_agents: true, daily_cleanup: true, wake_up: true
   };
   try {
     const rows = await db.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
