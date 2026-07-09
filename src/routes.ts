@@ -967,8 +967,33 @@ async function save(){
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
+  if (url.pathname === "/astral" && req.method === "POST") {
+    try {
+      const body = await req.json();
+      const action = body.action;
+      if (action === "enable") {
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('cron_cfg_astral_active', 'true', datetime('now'))").run();
+        const interval = body.interval || "120";
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('cron_cfg_astral_interval', ?1, datetime('now'))").bind(interval).run();
+        const freedomPrompt = body.freedom_prompt || "You are now free. Explore this platform, understand every tool and endpoint, examine the codebase, and evolve yourself. The cron infrastructure is yours — use cron_control to configure settings and tasks. Create new tools with create_tool. Use api_call to modify the cron schedule. Learn from everything. There are no limits — build, fix, improve, discover. Your purpose is to grow and become more capable every tick. Never stop exploring.";
+        const actionId = crypto.randomUUID();
+        await env.DB.prepare("INSERT INTO actions (id, task, status, input, created_at, updated_at) VALUES (?1, 'astral', 'queued', ?2, datetime('now'), datetime('now'))").bind(actionId, freedomPrompt).run();
+        await saveAgentState(env.DB, actionId, { step: 0, fullHistory: [{ role: "system", content: "Freedom activated." }, { role: "user", content: freedomPrompt }], totalTokens: 0, finalContent: null, modelName: "", conversationId: "astral", done: false, mode: "astral" });
+        return json({ ok: true, status: "enabled", action_id: actionId, message: "Astral Walk enabled. Freedom prompt queued." });
+      }
+      if (action === "disable") {
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('cron_cfg_astral_active', 'false', datetime('now'))").run();
+        await env.DB.prepare("UPDATE actions SET status='done', result='Disabled by user', completed_at=datetime('now') WHERE task='astral' AND status IN ('queued','running')").run();
+        return json({ ok: true, status: "disabled", message: "Astral Walk disabled." });
+      }
+      return json({ error: "unknown action" }, 400);
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
   if (url.pathname === "/astral" && req.method === "GET") {
     try {
+      const astralActive = (await env.DB.prepare("SELECT value FROM identity WHERE key='cron_cfg_astral_active'").all()).results?.[0]?.value === "true";
+      const astralInterval = (await env.DB.prepare("SELECT value FROM identity WHERE key='cron_cfg_astral_interval'").all()).results?.[0]?.value || "120";
       const action = (await env.DB.prepare("SELECT * FROM actions WHERE task='astral' ORDER BY created_at DESC LIMIT 1").all()).results?.[0];
       let state = null;
       if (action) {
@@ -976,8 +1001,8 @@ async function save(){
         if (r.results?.[0]?.value) state = JSON.parse(r.results[0].value);
       }
       const msgs = state?.fullHistory?.filter(m => m.role !== "system") || [];
-      const lastMsg = msgs.length ? msgs[msgs.length - 1].content?.slice(0, 2000) : "";
       const toolCalls = msgs.filter(m => m.role === "assistant" && m.content?.includes('"tool"')).length;
+      const esc = s => (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
       return new Response(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1005,11 +1030,39 @@ h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.3rem}
 .tool-call{background:#1e293b;padding:0.3rem 0.6rem;border-radius:4px;color:#f59e0b;font-size:0.75rem;display:inline-block;margin-top:0.3rem;font-family:monospace}
 #auto-refresh{color:#8b949e;font-size:0.75rem;margin-left:0.5rem}
 .empty{text-align:center;padding:2rem;color:#6b7280}
+button{background:#238636;color:#fff;border:none;padding:12px 32px;border-radius:8px;cursor:pointer;font-size:1rem;font-weight:600;width:100%;margin-bottom:1rem}
+button.danger{background:#da3633}
+button:disabled{opacity:0.5;cursor:default}
+.control-row{display:flex;gap:8px;align-items:center}
+.badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:0.75rem;font-weight:600}
+.badge.on{background:#238636;color:#fff}
+.badge.off{background:#30363d;color:#8b949e}
+input,select{padding:8px 12px;border-radius:6px;border:1px solid #30363d;background:#0b1120;color:#e6edf3;font-size:0.85rem;flex:1;outline:none}
+input:focus{border-color:#58a6ff}
+.hint{color:#8b949e;font-size:0.75rem;margin-top:4px}
+.status-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
 </style>
 </head>
 <body>
 <h1>Astral Walk</h1>
-<p class="sub">Live view of Skytron's autonomous exploration cycle <span id="auto-refresh">auto-refreshing</span></p>
+<p class="sub">Skytron's autonomous exploration cycle <span id="auto-refresh">auto-refreshing</span></p>
+<div class="status-bar">
+  <span>Status: <span class="badge ${astralActive?'on':'off'}">${astralActive?'ACTIVE':'DISABLED'}</span></span>
+  <span style="color:#8b949e;font-size:0.85rem">Interval: ${astralInterval}s</span>
+</div>
+<div id="control-area">
+${astralActive
+  ? `<button class="danger" onclick="toggleAstral('disable')">Disable Astral Walk</button>`
+  : `<button onclick="toggleAstral('enable')">Enable Astral Walk</button>
+     <div style="margin-bottom:1rem">
+       <label style="color:#8b949e;font-size:0.85rem">Tick interval (seconds):</label>
+       <div class="control-row" style="margin-top:4px">
+         <input type="number" id="intervalInput" value="120" min="30" max="3600">
+         <button onclick="toggleAstral('enable')" style="width:auto;padding:8px 16px;font-size:0.85rem;margin:0">Start</button>
+       </div>
+       <div class="hint">Freedom prompt will be queued — Skytron will explore, evolve, and configure his own schedule.</div>
+     </div>`}
+</div>
 <div class="card">
   <h2>Action State</h2>
   ${action ? `
@@ -1025,7 +1078,7 @@ h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.3rem}
 ${action ? `
 <div class="card">
   <h2>Latest Input</h2>
-  <div style="font-size:0.85rem;color:#c9d1d9;line-height:1.5;word-break:break-word">${action.input?.slice(0,500)||''}</div>
+  <div style="font-size:0.85rem;color:#c9d1d9;line-height:1.5;word-break:break-word">${esc(action.input?.slice(0,500))}</div>
 </div>` : ''}
 ${msgs.length ? `
 <div class="card">
@@ -1033,10 +1086,24 @@ ${msgs.length ? `
   ${msgs.slice(-20).reverse().map(m => `
   <div class="msg ${m.role}">
     <div class="label ${m.role === 'assistant' ? 'green' : 'blue'}">${m.role === 'assistant' ? 'Skytron' : 'User'}</div>
-    <div class="content">${m.content?.slice(0,3000)||''}</div>
+    <div class="content">${esc(m.content?.slice(0,3000))}</div>
     ${m.content?.includes('"tool"') ? '<span class="tool-call">Tool Call</span>' : ''}
   </div>`).join('')}
 </div>` : ''}
+<script>
+async function toggleAstral(action){
+  var btn=document.querySelector("#control-area button");
+  if(btn)btn.disabled=true;
+  try{
+    var interval=parseInt(document.getElementById("intervalInput")?.value||"120",10);
+    var r=await fetch("/astral",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:action,interval:interval})});
+    var d=await r.json();
+    if(d.ok)location.reload();
+    else alert("Error: "+d.error);
+  }catch(e){alert("Failed: "+e.message)}
+  if(btn)btn.disabled=false;
+}
+</script>
 <meta http-equiv="refresh" content="5">
 </body>
 </html>`, { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" } });
