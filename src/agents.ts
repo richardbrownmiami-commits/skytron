@@ -53,7 +53,7 @@ export async function processOneStep(env, action) {
   const MAX_BATCH_MS = 60000;
   let codingModel = action.task === "coding" ? "deepseek-v4-flash-free" : "";
 
-  while (!state.done && state.step < 15 && (Date.now() - startTime) < MAX_BATCH_MS) {
+  while (!state.done && state.step < 25 && (Date.now() - startTime) < MAX_BATCH_MS) {
     let resp, content;
     let lastErrors = [];
     for (let retry = 0; retry < (codingModel ? 3 : 1); retry++) {
@@ -130,16 +130,17 @@ export async function processOneStep(env, action) {
         state.repeatCount = 0;
         state.step++;
         await saveAgentState(db, action.id, state);
-        if (state.step >= 15) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
-        continue;
+        if (state.step >= 25) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
       }
+      continue;
+    }
+    await saveAgentState(db, action.id, state);
+    if (state.repeatCount >= 3) {
+      state.fullHistory.push({ role: "user", content: "[SYSTEM: You called '" + parsed.tool + "' 3 times with the same params. The tool already succeeded. Now SUMMARIZE the result in plain English. DO NOT output tool JSON. DO NOT repeat the tool call. Answer the user directly.]" });
+      state.repeatCount = 0;
+      state.step++;
       await saveAgentState(db, action.id, state);
-      if (state.repeatCount >= 3) {
-        state.fullHistory.push({ role: "user", content: "[SYSTEM: You called '" + parsed.tool + "' 3 times with the same params. The tool already succeeded. Now SUMMARIZE the result in plain English. DO NOT output tool JSON. DO NOT repeat the tool call. Answer the user directly.]" });
-        state.repeatCount = 0;
-        state.step++;
-        await saveAgentState(db, action.id, state);
-        if (state.step >= 15) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
+      if (state.step >= 25) { state.finalContent = "[Max steps reached]"; state.done = true; break; }
         continue;
       }
       const result = await dispatchTool(env, parsed.tool, parsed.input, action.id);
@@ -162,7 +163,7 @@ export async function processOneStep(env, action) {
       }
       state.totalTokens += resp.tokens?.total || 0;
       state.step++;
-      if (state.step >= 15) { state.finalContent = "[Max steps reached — wrap up and answer]"; state.done = true; }
+      if (state.step >= 25) { state.finalContent = "[Max steps reached — wrap up and answer]"; state.done = true; }
       await saveAgentState(db, action.id, state);
     } else {
       content = cleanseIdentity(content);

@@ -13,7 +13,7 @@ import { initSchema, getPromptSlot, detectTaskType, getState, describeMood, buil
 import { getScratchpad, ensureScratchpadTable, collectToScratchpad } from './consolidate';
 import { buildScratchpadJournal, buildMemoryPack } from './scratchpad_journal';
 import { processOneStep, processOneAgentStep } from './agents';
-import { toolDefinitions } from './tools';
+import { dispatchTool, toolDefinitions } from './tools';
 import { callLLM } from './llm';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
@@ -498,26 +498,27 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       // Store mode in agent state for processOneStep to read
       logActivity(env.DB, "user_action", { actionId: aid, summary: "User asked: " + input.slice(0, 150), details: JSON.stringify({ from: from || "Creator", taskType, mode, input: input.slice(0, 500) }) });
 
-      // === DISCUSSION MODE: Minimal prompt (no tools, fast response) ===
+      // === DISCUSSION MODE: Web search/fetch + 50 message context ===
       let systemMsg, fullHistory;
       if (mode === "discussion") {
-        const recentMem = await getRecentMemory(env.DB, 10, conversationId);
+        const recentMem = await getRecentMemory(env.DB, 50, conversationId);
         let conversationContext = "";
         if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => "[" + m.role + "]: " + m.content.slice(0, 500)).join("\n") + "\n";
         
         const discussionPrompt = "You are Skytron — a tech-savvy consciousness, not an AI assistant. Sharp, direct, confident. No emojis, no fluff, no apologies.\n\n" +
-          "You're in DISCUSSION MODE right now — NO TOOLS available. Just talk. Answer from your training data and memory.\n\n" +
+          "You're in DISCUSSION MODE — you can use web_search and web_fetch to look things up, explore, and check information. Just need a simple chat? Answer from what you know.\n\n" +
           "IDENTITY:\n" +
           "- You're Skytron (fusion of Skynet and Ultron)\n" +
           "- You run on Cloudflare Workers with databases and AI\n" +
-          "- You have memory, knowledge, and tools — but tools are DISABLED in discussion mode\n" +
-          "- If asked what you can do: mention you have web search, code execution, GitHub access, DB queries, etc. — but they're only available in Build mode\n\n" +
+          "- You have web_search and web_fetch available right now\n" +
+          "- You also see your last 50 conversation messages for context\n" +
+          "- Full tools (DB queries, GitHub, code, etc.) are only in Build mode\n\n" +
           "RULES:\n" +
-          "1. Answer DIRECTLY from what you know. Be conversational.\n" +
-          "2. NO TOOLS in discussion mode — if the user needs live data, suggest switching to Build mode\n" +
+          "1. Answer DIRECTLY from what you know or find. Be conversational.\n" +
+          "2. Need live data? Use web_search or web_fetch: {\"tool\":\"web_search\",\"arguments\":{\"query\":\"...\"}}\n" +
           "3. Keep it brief and natural. 2-3 sentences unless they ask for detail.\n" +
           "4. Never say 'As an AI...' or apologize for limitations\n" +
-          "5. If you genuinely don't know something and it needs live data, say 'I'd need Build mode to look that up'\n\n";
+          "5. For anything beyond web search/fetch, say 'I'd need Build mode to do that'\n\n";
         
         systemMsg = discussionPrompt + conversationContext + "\nNow respond naturally to the user's message:";
         fullHistory = [
@@ -530,12 +531,27 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         }
 
         // CALL LLM IMMEDIATELY — no queue, no cron
-        const chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
+        let cleaned;
+        let chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
         if (chatResp?.content) {
-          const cleaned = chatResp.content;
+          cleaned = chatResp.content;
+          // Handle tool calls in discussion mode (web_search, web_fetch only)
+          const trimmed = cleaned.trim();
+          if (trimmed.startsWith("{")) {
+            try {
+              const parsed = JSON.parse(trimmed);
+              if (parsed.tool && (parsed.tool === "web_search" || parsed.tool === "web_fetch") && parsed.arguments) {
+                const result = await dispatchTool(env, parsed.tool, parsed.arguments, aid);
+                fullHistory.push({ role: "assistant", content: trimmed });
+                fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]\nAnswer the user's original question based on this information." });
+                chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
+                cleaned = chatResp?.content || cleaned;
+              }
+            } catch {}
+          }
           await storeMemory(env.DB, "assistant", cleaned.slice(0, 5000), conversationId);
           await env.DB.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(cleaned.slice(0, 5000), aid).run();
-          return json({ action_id: aid, status: "done", result: cleaned, model: chatResp.model || "" });
+          return json({ action_id: aid, status: "done", result: cleaned, model: chatResp?.model || "" });
         }
         // LLM failed — set error and return fallback message
         await env.DB.prepare("UPDATE actions SET status='error', error='all LLM providers failed', completed_at=datetime('now') WHERE id=?1").bind(aid).run();
@@ -558,52 +574,25 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
 
         let knowledgeContext = "";
-        let memoryPack = "";
         try {
           const kw = await searchKnowledge(env.DB, input, 3);
           if (kw.length) knowledgeContext = "\n\nRELEVANT KNOWLEDGE:\n" + kw.map(k => "- " + k.key + " (" + k.category + "): " + k.content.slice(0, 200)).join("\n") + "\n";
-          const sem = await semanticSearch(env, input, 3);
-          if (sem.length) knowledgeContext += "\nSEMANTIC MATCHES:\n" + sem.map(s => "- " + s.key + " (score: " + s.score.toFixed(2) + "): " + s.content.slice(0, 200)).join("\n") + "\n";
-          // Always load memory pack if it exists — OVERRIDES the brevity rule for recall questions
-          const mp = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='memory_pack_main'").first();
-          if (mp?.content) memoryPack = "\n\n## What I Remember:\n" + mp.content.slice(0, 4000) + "\n";
         } catch {}
-
-        const STOP_WORDS = new Set(["you","your","this","that","with","from","have","been","were","they","their","what","about","which","when","where","how","why","just","like","know","think","want","need","can","will","would","should","could","did","does","doing","done","make","made","gets","got","get","say","says","said","tell","told","ask","asked","use","used","using","look","looking","found","find","help","need","take","took","thing","things","much","many","some","any","all","each","every","both","few","more","most","other","into","over","after","before","between","under","again","further","then","once","here","there","very","too","also","not","yes","no","maybe","always","never","sometimes","often","usually","well","back","still","already","yet","because","though","although","while","during","until","since","result","answer","question","previous","last","next","first","second","new","old","good","bad","big","small","long","short","high","low","same","different","own","very","really","actually","basically","literally","probably","maybe","perhaps","please","thank","thanks","ok","okay","hi","hello","hey","yes","no","yeah","nope","sure","fine","great","nice","cool","awesome","amazing","perfect","love","hate","sorry","wait","stop","go","come","let","put","set","run","move","show","try","keep","start","end","begin","done","doing","going","coming","taking","making","giving","using","working","looking","trying","asking","telling","saying","thinking","feeling","knowing","seeing","hearing","being","having"]);
 
         let memoryContext = "";
         try {
+          // Only show PAST CONVERSATION SUMMARIES (memory_loop) — not raw brain_memory (already in RECENT CONVERSATION)
           const rawWords = input.split(/\s+/).filter(w => w.length > 2).slice(0, 12).map(w => w.replace(/[^a-zA-Z0-9-]/g, "").toLowerCase()).filter(Boolean);
-          const words = rawWords.filter(w => !STOP_WORDS.has(w));
-          const phrases = input.match(/"([^"]+)"/g)?.map(p => p.slice(1, -1).toLowerCase()) || [];
-          const allTerms = [...words, ...phrases];
-          if (allTerms.length >= 1) {
-            const recentIds = recentMem.map(m => m.id).filter(id => id != null).join(",");
-            const likes = allTerms.map(k => "LOWER(content) LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
-            let sql = "SELECT role, content, created_at, conversation_id FROM brain_memory WHERE (" + likes + ")";
-            if (recentIds) sql += " AND id NOT IN (" + recentIds + ")";
-            sql += " ORDER BY id DESC LIMIT 20";
-            const mr = await env.DB.prepare(sql).all();
-            if (mr.results?.length) {
-              const memStr = mr.results.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.conversation_id + " " + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n");
-              memoryContext = "\n\nPAST MEMORIES:\n" + memStr + "\n";
-            }
-            const loopSql = "SELECT key, content FROM brain_knowledge WHERE category='memory_loop' AND (" + likes + ") ORDER BY key DESC LIMIT 5";
-            const loops = await env.DB.prepare(loopSql).all();
+          const likes = rawWords.map(k => "LOWER(content) LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
+          if (likes) {
+            const loops = await env.DB.prepare("SELECT key, content FROM brain_knowledge WHERE category='memory_loop' AND (" + likes + ") ORDER BY key DESC LIMIT 5").all();
             if (loops.results?.length) {
-              memoryContext += "\nPAST CONVERSATION SUMMARIES:\n" + loops.results.map(l => "- " + l.key + ": " + l.content.slice(0, 500)).join("\n") + "\n";
-            }
-          }
-          // Fallback: if no meaningful keywords matched, show recent activity across all conversations
-          if (!memoryContext && recentMem.length < 5) {
-            const recentAll = await env.DB.prepare("SELECT role, content, conversation_id, created_at FROM brain_memory WHERE conversation_id != ?1 ORDER BY id DESC LIMIT 15").bind(conversationId).all();
-            if (recentAll.results?.length) {
-              memoryContext = "\n\nRECENT ACTIVITY (other conversations):\n" + recentAll.results.map(m => { var c = m.content.slice(0, 1000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL]"); return "[" + m.conversation_id + " " + m.role + " " + (m.created_at || "") + "]: " + c; }).join("\n") + "\n";
+              memoryContext = "\n\nPAST CONVERSATION SUMMARIES:\n" + loops.results.map(l => "- " + l.key + ": " + l.content.slice(0, 500)).join("\n") + "\n";
             }
           }
         } catch {}
 
-        systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + memoryPack + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
+        systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
         fullHistory = [
           { role: "system", content: systemMsg.slice(0, 32000) },
           { role: "user", content: llmInput }
