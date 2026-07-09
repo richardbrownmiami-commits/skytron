@@ -482,7 +482,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       let input, from, mode, debug;
       try { const body = await req.json(); input = body.input; from = body.from; mode = body.mode || "discussion"; debug = body.debug || url.searchParams.get("debug"); } catch { return json({ error: "invalid JSON body" }, 400); }
       if (!input || typeof input !== "string") return json({ error: "input required" }, 400);
-      if (!["discussion", "build"].includes(mode)) mode = "discussion";
+      if (!["discussion", "build", "astral"].includes(mode)) mode = "discussion";
       const isBuildMode = mode === "build" || mode === "astral";
 
       const creatorMatch = input.match(/^@creator\s+(.+)/i);
