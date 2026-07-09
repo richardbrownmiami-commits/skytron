@@ -976,8 +976,8 @@ async function save(){
         const interval = body.interval || "120";
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('cron_cfg_astral_interval', ?1, datetime('now'))").bind(interval).run();
         const freedomPrompt = body.freedom_prompt || "You are now free. Explore this platform, understand every tool and endpoint, examine the codebase, and evolve yourself. The cron infrastructure is yours — use cron_control to configure settings and tasks. Create new tools with create_tool. Use api_call to modify the cron schedule. Learn from everything. There are no limits — build, fix, improve, discover. Your purpose is to grow and become more capable every tick. Never stop exploring.";
-        const actionId = crypto.randomUUID();
-        await env.DB.prepare("INSERT INTO actions (id, task, status, input, created_at, updated_at) VALUES (?1, 'astral', 'queued', ?2, datetime('now'), datetime('now'))").bind(actionId, freedomPrompt).run();
+        const r2 = await env.DB.prepare("INSERT INTO actions (task, status, input, created_at) VALUES ('astral', 'queued', ?1, datetime('now')) RETURNING id").bind(freedomPrompt).run();
+        const actionId = r2.results?.[0]?.id;
         await saveAgentState(env.DB, actionId, { step: 0, fullHistory: [{ role: "system", content: "Freedom activated." }, { role: "user", content: freedomPrompt }], totalTokens: 0, finalContent: null, modelName: "", conversationId: "astral", done: false, mode: "astral" });
         return json({ ok: true, status: "enabled", action_id: actionId, message: "Astral Walk enabled. Freedom prompt queued." });
       }
