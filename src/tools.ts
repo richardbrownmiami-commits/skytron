@@ -859,4 +859,12 @@ export const toolDefinitions = {
       return "Priority queue tool: not yet implemented (stub)";
     },
   },
+
+  memory_system: {
+    description: "A self-hosted memory system for Skytron",
+    schema: z.object({...}),
+    execute: async (env, input) => {
+async function body { }
+    },
+  },
 }; // --- End tool definitions ---
