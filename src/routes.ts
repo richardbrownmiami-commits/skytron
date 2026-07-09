@@ -495,7 +495,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       const taskType = mode === "astral" ? "astral" : detectTaskType(input);
       if (mode === "astral") {
-        await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status IN ('queued','running')").run();
+        await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-30 seconds')").run();
       }
       const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', ?1, ?2, ?3) RETURNING id").bind(mode === "astral" ? "queued" : "running", input, taskType).all();
       const aid = r.results[0].id;
@@ -633,10 +633,13 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   if (url.pathname === "/think/process" && req.method === "POST") {
     try {
       await env.DB.prepare("UPDATE actions SET status='queued' WHERE status='running' AND result IS NULL AND created_at < datetime('now', '-1 minute')").run();
+      // Clear stale astral actions — only keep the newest one
+      await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-5 minutes')").run();
       await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task != 'astral' ORDER BY created_at ASC LIMIT 1").run();
       let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       if (!q.results?.length) {
-        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task = 'astral' ORDER BY created_at ASC LIMIT 1").run();
+        // Pick the NEWEST astral action (DESC) to prefer fresh over stale
+        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task = 'astral' ORDER BY created_at DESC LIMIT 1").run();
         q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       }
       if (q.results?.length) {
@@ -649,11 +652,14 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
   if (url.pathname === "/__cron" && req.method === "GET") {
     try {
+      // Clear stale astral actions — only keep the newest one
+      await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-5 minutes')").run();
       // Prioritize user actions over astral walk
       await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task != 'astral' ORDER BY created_at ASC LIMIT 1").run();
       let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       if (!q.results?.length) {
-        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task = 'astral' ORDER BY created_at ASC LIMIT 1").run();
+        // Pick the NEWEST astral action (DESC) to prefer fresh over stale
+        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND task = 'astral' ORDER BY created_at DESC LIMIT 1").run();
         q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
       }
       if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); }
