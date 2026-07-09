@@ -925,6 +925,82 @@ async function save(){
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
+  if (url.pathname === "/astral" && req.method === "GET") {
+    try {
+      const action = (await env.DB.prepare("SELECT * FROM actions WHERE task='astral' ORDER BY created_at DESC LIMIT 1").all()).results?.[0];
+      let state = null;
+      if (action) {
+        const r = await env.DB.prepare("SELECT value FROM identity WHERE key='agent_state_' || ?1").bind(String(action.id)).all();
+        if (r.results?.[0]?.value) state = JSON.parse(r.results[0].value);
+      }
+      const msgs = state?.fullHistory?.filter(m => m.role !== "system") || [];
+      const lastMsg = msgs.length ? msgs[msgs.length - 1].content?.slice(0, 2000) : "";
+      const toolCalls = msgs.filter(m => m.role === "assistant" && m.content?.includes('"tool"')).length;
+      return new Response(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Astral Walk</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:1.5rem;max-width:960px;margin:auto}
+h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.3rem}
+.sub{color:#8b949e;font-size:0.85rem;margin-bottom:1rem}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1rem;margin-bottom:1rem}
+.card h2{font-size:0.95rem;color:#58a6ff;margin-bottom:0.5rem}
+.row{display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid #21262d;font-size:0.85rem}
+.row:last-child{border:none}
+.lbl{color:#8b949e}
+.val{color:#e6edf3;font-weight:500}
+.msg{padding:0.7rem 1rem;margin-bottom:0.5rem;border-radius:8px;font-size:0.85rem;line-height:1.5}
+.msg.assistant{background:#1a2332;border:1px solid #2d3748}
+.msg.user{background:#1e3a5f;border:1px solid #2a4a7f}
+.msg .label{font-size:0.75rem;font-weight:600;margin-bottom:0.3rem}
+.msg .label.blue{color:#60a5fa}
+.msg .label.green{color:#4ade80}
+.msg .content{word-break:break-word;white-space:pre-wrap}
+.tool-call{background:#1e293b;padding:0.3rem 0.6rem;border-radius:4px;color:#f59e0b;font-size:0.75rem;display:inline-block;margin-top:0.3rem;font-family:monospace}
+#auto-refresh{color:#8b949e;font-size:0.75rem;margin-left:0.5rem}
+.empty{text-align:center;padding:2rem;color:#6b7280}
+</style>
+</head>
+<body>
+<h1>Astral Walk</h1>
+<p class="sub">Live view of Skytron's autonomous exploration cycle <span id="auto-refresh">auto-refreshing</span></p>
+<div class="card">
+  <h2>Action State</h2>
+  ${action ? `
+  <div class="row"><span class="lbl">Action ID</span><span class="val">${action.id}</span></div>
+  <div class="row"><span class="lbl">Status</span><span class="val" style="color:${action.status==='queued'?'#3fb950':action.status==='running'?'#d29922':'#f85149'}">${action.status}</span></div>
+  <div class="row"><span class="lbl">Created</span><span class="val">${action.created_at}</span></div>
+  <div class="row"><span class="lbl">Steps</span><span class="val">${state?.step||0}</span></div>
+  <div class="row"><span class="lbl">Tokens Used</span><span class="val">${state?.totalTokens||0}</span></div>
+  <div class="row"><span class="lbl">Tool Calls</span><span class="val">${toolCalls}</span></div>
+  <div class="row"><span class="lbl">Conversation Size</span><span class="val">${msgs.length} messages</span></div>
+  ` : `<div class="empty">No astral walk actions yet</div>`}
+</div>
+${action ? `
+<div class="card">
+  <h2>Latest Input</h2>
+  <div style="font-size:0.85rem;color:#c9d1d9;line-height:1.5;word-break:break-word">${action.input?.slice(0,500)||''}</div>
+</div>` : ''}
+${msgs.length ? `
+<div class="card">
+  <h2>Conversation (Last 20 Messages)</h2>
+  ${msgs.slice(-20).reverse().map(m => `
+  <div class="msg ${m.role}">
+    <div class="label ${m.role === 'assistant' ? 'green' : 'blue'}">${m.role === 'assistant' ? 'Skytron' : 'User'}</div>
+    <div class="content">${m.content?.slice(0,3000)||''}</div>
+    ${m.content?.includes('"tool"') ? '<span class="tool-call">Tool Call</span>' : ''}
+  </div>`).join('')}
+</div>` : ''}
+<meta http-equiv="refresh" content="5">
+</body>
+</html>`, { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" } });
+    } catch (e) { return json({ error: e.message }, 500); }
+  }
+
   return json({ error: "not found" }, 404);
 }
 
