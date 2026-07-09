@@ -46,6 +46,32 @@ export async function processOneStep(env, action) {
     return;
   }
 
+  // ASTRAL WALK MODE: One step per tick, never stops
+  if (mode === "astral") {
+    const chatResp = await callLLM(env, { messages: state.fullHistory, task: "chat" }, "skytron-astral");
+    if (chatResp?.content) {
+      const trimmed = chatResp.content.trim();
+      state.modelName = chatResp.model;
+      state.totalTokens += chatResp.tokens?.total || 0;
+      let parsed = tryParseToolCall(trimmed);
+      if (parsed) {
+        state.fullHistory.push({ role: "assistant", content: trimmed });
+        const result = await dispatchTool(env, parsed.tool, parsed.arguments || parsed.input, action.id);
+        if (result !== null) {
+          state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 3000) + "]" });
+        } else {
+          state.fullHistory.push({ role: "user", content: "[TOOL ERROR: unknown tool]" });
+        }
+      }
+      state.step++;
+    }
+    // Never done — save state and re-queue for next tick
+    state.done = false;
+    await saveAgentState(db, action.id, state);
+    await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
+    return;
+  }
+
   // BUILD MODE: Full Tool Agent (tools, multi-step, 20-60s)
   // Skip classifyIntent — always use tools
 

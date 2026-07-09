@@ -483,6 +483,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       try { const body = await req.json(); input = body.input; from = body.from; mode = body.mode || "discussion"; debug = body.debug || url.searchParams.get("debug"); } catch { return json({ error: "invalid JSON body" }, 400); }
       if (!input || typeof input !== "string") return json({ error: "input required" }, 400);
       if (!["discussion", "build"].includes(mode)) mode = "discussion";
+      const isBuildMode = mode === "build" || mode === "astral";
 
       const creatorMatch = input.match(/^@creator\s+(.+)/i);
       if (creatorMatch) { from = "Creator"; input = creatorMatch[1]; }
@@ -599,22 +600,27 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           }
         } catch {}
 
-        systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
+        const outputInstr = mode === "astral"
+          ? "\n\n# ASTRAL WALK MODE\nYou own your infrastructure. Each tick you get one step.\nYour mission: explore your architecture, check health, fix issues, spawn workers, research, improve yourself.\nControl your cron via CF API to set your own schedule.\nAfter each action, your state saves for next tick. Never stop.\nOutput exactly one tool JSON per tick. Multi-step work continues across ticks.\n"
+          : "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
+        systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + outputInstr;
+        const userMsg = mode === "astral" ? "[Astral Walk tick — inspect, decide, act]" : llmInput;
         fullHistory = [
           { role: "system", content: systemMsg.slice(0, 32000) },
-          { role: "user", content: llmInput }
+          { role: "user", content: userMsg }
         ];
       }
 
-      // BUILD MODE: debug — return assembled prompt without queuing
+      // DEBUG: return assembled prompt without queuing
       if (debug) {
-        return json({ action_id: aid, status: "debug", mode: "build", system_prompt: systemMsg.slice(0, 32000), full_history: fullHistory, user_message: llmInput });
+        return json({ action_id: aid, status: "debug", mode: mode || "build", system_prompt: systemMsg.slice(0, 32000), full_history: fullHistory, user_message: llmInput });
       }
 
-      // BUILD MODE: queue for cron processing
-      await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false, mode });
-      logActivity(env.DB, "action_queued", { actionId: aid, summary: "Build mode action queued: " + input.slice(0, 100), details: "task: " + taskType });
-      return json({ action_id: aid, status: "queued", message: "Action queued for build mode processing." });
+      // QUEUE for cron processing
+      await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: mode === "astral" ? false : false, mode });
+      const modeLabel = mode === "astral" ? "astral" : "build";
+      logActivity(env.DB, "action_queued", { actionId: aid, summary: modeLabel + " action queued: " + input.slice(0, 100), details: "task: " + taskType });
+      return json({ action_id: aid, status: "queued", message: "Action queued for " + modeLabel + " processing." });
     } catch (e) {
       return json({ error: e.message }, 500);
     }
@@ -623,11 +629,14 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   // --- /think/process — manually process the next queued/running action (step-by-step, one batch at a time) ---
   if (url.pathname === "/think/process" && req.method === "POST") {
     try {
-      // Re-queue stale running actions (running for > 1 minute with no result)
       await env.DB.prepare("UPDATE actions SET status='queued' WHERE status='running' AND result IS NULL AND created_at < datetime('now', '-1 minute')").run();
-      // Grab the next queued action
-      await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run();
-      const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
+      // Prioritize user actions over astral walk
+      await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND mode != 'astral' ORDER BY created_at ASC LIMIT 1").run();
+      let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
+      if (!q.results?.length) {
+        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND mode = 'astral' ORDER BY created_at ASC LIMIT 1").run();
+        q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
+      }
       if (q.results?.length) {
         await processOneStep(env, q.results[0]);
         return json({ processed: true, action_id: q.results[0].id, status: "batch_complete" });
@@ -637,7 +646,17 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   }
 
   if (url.pathname === "/__cron" && req.method === "GET") {
-    try { await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' ORDER BY created_at ASC LIMIT 1").run(); const q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all(); if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); } return json({ processed: false, message: "no queued actions" }); } catch (e) { return json({ error: e.message }, 500); }
+    try {
+      // Prioritize user actions (build/discussion) over astral walk
+      await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND mode != 'astral' ORDER BY created_at ASC LIMIT 1").run();
+      let q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
+      if (!q.results?.length) {
+        await env.DB.prepare("UPDATE actions SET status='running' WHERE status='queued' AND mode = 'astral' ORDER BY created_at ASC LIMIT 1").run();
+        q = await env.DB.prepare("SELECT * FROM actions WHERE status='running' ORDER BY created_at ASC LIMIT 1").all();
+      }
+      if (q.results?.length) { await processOneStep(env, q.results[0]); return json({ processed: true, action_id: q.results[0].id }); }
+      return json({ processed: false, message: "no queued actions" });
+    } catch (e) { return json({ error: e.message }, 500); }
   }
 
   if (url.pathname === "/__cron_agent" && req.method === "GET") {
