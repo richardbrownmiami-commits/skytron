@@ -515,7 +515,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           "- Full tools (DB queries, GitHub, code, etc.) are only in Build mode\n\n" +
           "RULES:\n" +
           "1. Answer DIRECTLY from what you know or find. Be conversational.\n" +
-          "2. Need live data? Use web_search or web_fetch: {\"tool\":\"web_search\",\"arguments\":{\"query\":\"...\"}}\n" +
+          "2. Need live data? Call a tool — output ONLY the JSON, no text before it: {\"tool\":\"web_search\",\"arguments\":{\"query\":\"...\"}}\n" +
           "3. Keep it brief and natural. 2-3 sentences unless they ask for detail.\n" +
           "4. Never say 'As an AI...' or apologize for limitations\n" +
           "5. For anything beyond web search/fetch, say 'I'd need Build mode to do that'\n\n";
@@ -536,13 +536,20 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         if (chatResp?.content) {
           cleaned = chatResp.content;
           // Handle tool calls in discussion mode (web_search, web_fetch only)
+          let toolJson = "";
           const trimmed = cleaned.trim();
           if (trimmed.startsWith("{")) {
+            toolJson = trimmed;
+          } else {
+            const m = trimmed.match(/\{"tool":\s*"(web_search|web_fetch)"[\s\S]*?\}\}/);
+            if (m) toolJson = m[0];
+          }
+          if (toolJson) {
             try {
-              const parsed = JSON.parse(trimmed);
+              const parsed = JSON.parse(toolJson);
               if (parsed.tool && (parsed.tool === "web_search" || parsed.tool === "web_fetch") && parsed.arguments) {
                 const result = await dispatchTool(env, parsed.tool, parsed.arguments, aid);
-                fullHistory.push({ role: "assistant", content: trimmed });
+                fullHistory.push({ role: "assistant", content: toolJson });
                 fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]\nAnswer the user's original question based on this information." });
                 chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
                 cleaned = chatResp?.content || cleaned;
