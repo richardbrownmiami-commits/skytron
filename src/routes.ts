@@ -524,6 +524,18 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
           { role: "system", content: systemMsg },
           { role: "user", content: llmInput }
         ];
+
+        // CALL LLM IMMEDIATELY — no queue, no cron
+        const chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
+        if (chatResp?.content) {
+          const cleaned = chatResp.content;
+          await storeMemory(env.DB, "assistant", cleaned.slice(0, 5000), conversationId);
+          await env.DB.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(cleaned.slice(0, 5000), aid).run();
+          return json({ action_id: aid, status: "done", result: cleaned, model: chatResp.model || "" });
+        }
+        // LLM failed — set error and return fallback message
+        await env.DB.prepare("UPDATE actions SET status='error', error='all LLM providers failed', completed_at=datetime('now') WHERE id=?1").bind(aid).run();
+        return json({ action_id: aid, status: "error", error: "LLM unavailable", message: "I'm having trouble connecting. Please try again later." });
       } else {
         // === BUILD MODE: Full prompt with tools ===
         let slotContent = await getPromptSlot(env.DB, taskType);
@@ -594,9 +606,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         ];
       }
 
+      // BUILD MODE: queue for cron processing
       await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false, mode });
-
-      return json({ action_id: aid, status: "queued", message: "Request queued. Poll /think/result?id=" + aid + " for result." });
+      logActivity(env.DB, "action_queued", { actionId: aid, summary: "Build mode action queued: " + input.slice(0, 100), details: "task: " + taskType });
+      return json({ action_id: aid, status: "queued", message: "Action queued for build mode processing." });
     } catch (e) {
       return json({ error: e.message }, 500);
     }
