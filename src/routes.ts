@@ -494,6 +494,9 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       await storeMemory(env.DB, "user", llmInput.slice(0, 2000), conversationId);
 
       const taskType = mode === "astral" ? "astral" : detectTaskType(input);
+      if (mode === "astral") {
+        await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status IN ('queued','running')").run();
+      }
       const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', ?1, ?2, ?3) RETURNING id").bind(mode === "astral" ? "queued" : "running", input, taskType).all();
       const aid = r.results[0].id;
       // Store mode in agent state for processOneStep to read
