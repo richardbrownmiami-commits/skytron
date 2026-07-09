@@ -69,6 +69,8 @@ export async function processOneStep(env, action) {
     state.done = false;
     await saveAgentState(db, action.id, state);
     await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
+    // Clear any other queued astral actions — only one at a time
+    await db.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND id != ?1").bind(action.id).run();
     return;
   }
 
