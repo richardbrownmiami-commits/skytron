@@ -54,8 +54,9 @@ export async function processOneStep(env, action) {
       state.modelName = chatResp.model;
       state.totalTokens += chatResp.tokens?.total || 0;
       let parsed = tryParseToolCall(trimmed);
+      state.fullHistory.push({ role: "assistant", content: trimmed });
+      let parsed = tryParseToolCall(trimmed);
       if (parsed) {
-        state.fullHistory.push({ role: "assistant", content: trimmed });
         const result = await dispatchTool(env, parsed.tool, parsed.arguments || parsed.input, action.id);
         if (result !== null) {
           state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 3000) + "]" });
