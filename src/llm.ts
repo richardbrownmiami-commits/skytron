@@ -106,6 +106,7 @@ export async function callLLM(env, body, sessionId) {
       body.model || "openrouter/free",
       "groq/llama3-70b",
       "mistral/mixtral-8x7b",
+      "opencode-zen/auto",
       "openrouter/free"
     ];
     const timeoutMs = Math.max(20000, maxTokens * 8);
