@@ -918,4 +918,12 @@ export const toolDefinitions = {
       return "Priority queue tool: not yet implemented (stub)";
     },
   },
+
+  index_update: {
+    description: "Update the Skytron Index entry point to reflect changes to the fetch/scheduled dispatch mechanism",
+    schema: z.object({ dispatch: z.string().oneOf(['fetch', 'scheduled']) }),
+    execute: async (env, input) => {
+async function body { await fetch('/index.ts'); }
+    },
+  },
 }; // --- End tool definitions ---
