@@ -113,8 +113,8 @@ function toolTimeoutRace(ms) {
 }
 
 function friendlyFieldError(toolName, input, schema) {
-  // Describe the tool's expected fields
   let expected = "";
+  let hint = "";
   try {
     if (schema && schema._def && schema._def.shape) {
       const shape = schema._def.shape();
@@ -123,15 +123,12 @@ function friendlyFieldError(toolName, input, schema) {
         const optional = v.isOptional ? " (optional)" : "";
         return "  " + k + optional + ": " + desc;
       }).join("\n");
+      const unknownKeys = Object.keys(input).filter(k => !shape[k]);
+      if (unknownKeys.length > 0) {
+        hint = "\nYou used unknown field(s): " + unknownKeys.join(", ") + ". These don't match any parameter. Did you mean one of the valid fields above?";
+      }
     }
   } catch {}
-  const unknownKeys = Object.keys(input).filter(k => {
-    try { return !schema?.shape || !schema.shape()[k]; } catch { return false; }
-  });
-  let hint = "";
-  if (unknownKeys.length > 0) {
-    hint = "\nYou used unknown field(s): " + unknownKeys.join(", ") + ". These don't match any parameter.";
-  }
   return expected + hint;
 }
 
