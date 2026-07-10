@@ -49,13 +49,16 @@ export async function processOneStep(env, action) {
   // ASTRAL WALK MODE: One step per tick, never stops
   if (mode === "astral") {
     const chatResp = await callLLM(env, { messages: state.fullHistory, task: "chat" }, "skytron-astral");
+    if (!chatResp?.content) {
+      const errs = chatResp?.errors?.join("; ") || "unknown";
+      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "astral_llm_fail", "LLM returned null: " + errs.slice(0, 300), "error").run(); } catch {}
+    }
     if (chatResp?.content) {
       const trimmed = chatResp.content.trim();
       state.modelName = chatResp.model;
       state.totalTokens += chatResp.tokens?.total || 0;
       let parsed = tryParseToolCall(trimmed);
       state.fullHistory.push({ role: "assistant", content: trimmed });
-      let parsed = tryParseToolCall(trimmed);
       if (parsed) {
         const result = await dispatchTool(env, parsed.tool, parsed.arguments || parsed.input, action.id);
         if (result !== null) {
