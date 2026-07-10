@@ -1163,6 +1163,7 @@ ${astralActive
   ${action ? `
   <div class="row"><span class="lbl">Action ID</span><span class="val">${action.id}</span></div>
   <div class="row"><span class="lbl">Status</span><span class="val" style="color:${action.status==='queued'?'#3fb950':action.status==='running'?'#d29922':'#f85149'}">${action.status}</span></div>
+  ${action.error ? `<div class="row"><span class="lbl">Error</span><span class="val" style="color:#ef4444;font-size:0.8rem;word-break:break-word">${esc(action.error)}</span></div>` : ''}
   <div class="row"><span class="lbl">Created</span><span class="val">${action.created_at}</span></div>
   <div class="row"><span class="lbl">Steps</span><span class="val">${state?.step||0}</span></div>
   <div class="row"><span class="lbl">Tokens Used</span><span class="val">${state?.totalTokens||0}</span></div>
