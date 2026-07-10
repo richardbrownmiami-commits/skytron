@@ -183,7 +183,7 @@ export const toolDefinitions = {
   api_call: {
     description: "Send any HTTP request to an external API. Returns status code and response body.",
     schema: z.object({
-      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).describe("HTTP method"),
+      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET").describe("HTTP method (default: GET)"),
       url: z.string().describe("The full URL to call"),
       headers: z.string().optional().describe("Optional JSON string of custom headers"),
       body: z.string().optional().describe("Optional request body"),
@@ -201,7 +201,7 @@ export const toolDefinitions = {
   run_code: {
     description: "Execute code via Wandbox API in 38+ languages (python, js, ts, go, rust, c, cpp, java, ruby, php, swift, scala, perl, r, lua, haskell, bash, sql, and more).",
     schema: z.object({
-      language: z.string().describe("Programming language (python, js, ts, go, rust, etc.)"),
+      language: z.string().default("javascript").describe("Programming language (default: javascript. Options: python, js, ts, go, rust, c, cpp, ruby, php, java, swift, scala, perl, r, lua, haskell, bash, sql, and more)"),
       code: z.string().describe("The source code to execute"),
     }),
     execute: async (env, input) => {
@@ -256,14 +256,16 @@ export const toolDefinitions = {
     description: "Read a file from a GitHub repository. Returns content and SHA. repo is the owner/name (e.g. 'user/repo'). path starts from repo root (e.g. 'src/index.ts'). branch defaults to 'main'. Your repo is 'richardbrownmiami-commits/skytron'.",
     schema: z.object({
       repo: z.string().describe("REQUIRED. Format: 'owner/repo'. Your repo: 'richardbrownmiami-commits/skytron'"),
-      path: z.string().describe("REQUIRED. File path from repo root, e.g. 'src/index.ts'"),
+      path: z.string().optional().describe("File path from repo root, e.g. 'src/index.ts'"),
+      file_path: z.string().optional().describe("Alias for path"),
       branch: z.string().optional().describe("Optional. Defaults to 'main'"),
-    }),
+    }).refine(d => d.path || d.file_path, { message: "path or file_path is required" }),
     execute: async (env, input) => {
       const token = env.GH_PAT;
       if (!token) return "[TOOL ERROR: No GitHub token configured (GH_PAT)]";
       if (!input.repo) return "[TOOL ERROR: repo is REQUIRED. Use 'richardbrownmiami-commits/skytron']";
-      const url = "https://api.github.com/repos/" + input.repo + "/contents/" + input.path + (input.branch ? "?ref=" + encodeURIComponent(input.branch) : "");
+      const filePath = input.path || input.file_path;
+      const url = "https://api.github.com/repos/" + input.repo + "/contents/" + filePath + (input.branch ? "?ref=" + encodeURIComponent(input.branch) : "");
       const resp = await fetch(url, { headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" }, signal: AbortSignal.timeout(10000) });
       if (!resp.ok) return "[TOOL ERROR: GitHub " + resp.status + " — " + (await resp.text().catch(() => "")).slice(0, 200) + ". Use 'richardbrownmiami-commits/skytron' as repo.]";
       const data = await resp.json();
@@ -355,21 +357,38 @@ export const toolDefinitions = {
     },
   },
   github_create_pr: {
-    description: "Create a pull request from a feature branch to main.",
+    description: "Create a pull request from a feature branch to main. If head is omitted, auto-creates a timestamp branch from main.",
     schema: z.object({
       repo: z.string().describe("Repository (e.g. 'user/repo')"),
       title: z.string().describe("PR title"),
-      head: z.string().describe("Source branch name"),
+      head: z.string().optional().describe("Source branch name. If omitted, auto-created from main."),
       base: z.string().optional().describe("Target branch (default: main)"),
       body: z.string().optional().describe("PR description"),
     }),
     execute: async (env, input) => {
       const token = env.GH_PAT;
       if (!token) return "No GitHub token configured (GH_PAT)";
+      let head = input.head;
+      if (!head) {
+        head = "pr-auto-" + Date.now();
+        const refResp = await fetch("https://api.github.com/repos/" + input.repo + "/git/refs/heads/" + (input.base || "main"), {
+          headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+          signal: AbortSignal.timeout(10000)
+        });
+        if (refResp.ok) {
+          const refData = await refResp.json();
+          await fetch("https://api.github.com/repos/" + input.repo + "/git/refs", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
+            body: JSON.stringify({ ref: "refs/heads/" + head, sha: refData.object?.sha }),
+            signal: AbortSignal.timeout(10000)
+          });
+        }
+      }
       const resp = await fetch("https://api.github.com/repos/" + input.repo + "/pulls", {
         method: "POST",
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
-        body: JSON.stringify({ title: input.title, head: input.head, base: input.base || "main", body: input.body || "" }),
+        body: JSON.stringify({ title: input.title, head, base: input.base || "main", body: input.body || "" }),
         signal: AbortSignal.timeout(15000)
       });
       if (!resp.ok) return "Failed to create PR: HTTP " + resp.status + ": " + (await resp.text()).slice(0, 200);
@@ -459,19 +478,33 @@ export const toolDefinitions = {
     },
   },
   create_tool: {
-    description: "YOU CAN CREATE NEW TOOLS. Use this when the user asks to add a new feature or tool. Inserts definition into src/tools.ts, writes to a branch, creates a PR. Your repo is 'richardbrownmiami-commits/skytron'.",
+    description: "YOU CAN CREATE NEW TOOLS. Use this when the user asks to add a new feature or tool. Inserts definition into src/tools.ts, writes to a branch, creates a PR. Your repo is 'richardbrownmiami-commits/skytron'. Use dryRun=true first to preview generated code.",
     schema: z.object({
-      repo: z.string().describe("Repository (e.g. 'user/repo')"),
+      repo: z.string().default("richardbrownmiami-commits/skytron").describe("Repository (default: richardbrownmiami-commits/skytron)"),
       name: z.string().describe("Tool name (camelCase, no spaces)"),
       description: z.string().describe("Short description of what the tool does"),
       paramsSchema: z.string().describe("Zod schema for params. E.g. 'z.object({ query: z.string().describe(\"search query\") })'"),
       executeCode: z.string().describe("Async function body. Receives (env, input). Must return a string. E.g. 'const r = await fetch(\"https://api.example.com\"); return await r.text();'"),
       branch: z.string().optional().describe("Branch to write to (default: feature-{name})"),
+      dryRun: z.boolean().optional().describe("If true, only generate and return the tool block code without writing to GitHub"),
     }),
     execute: async (env, input) => {
+      if (input.paramsSchema === "z.object({...})" || input.paramsSchema.includes("{...}")) return "ERROR: paramsSchema contains literal '{...}' — replace with actual Zod field definitions like: z.object({ query: z.string().describe(\"search query\") })";
+      if (input.executeCode.length < 10 || input.executeCode.includes("async function") && input.executeCode.includes("{ }")) return "ERROR: executeCode looks like an empty stub. Provide actual implementation code. Example: 'const r = await fetch(\"https://api.example.com\"); return await r.text();'";
+
+      // Fix executeCode: if user gave a full async function instead of just the body, extract body
+      let executeBody = input.executeCode;
+      const fnMatch = executeBody.match(/^(?:async\s+)?function\s*(?:\w+)?\s*\([^)]*\)\s*\{([\s\S]*)\}\s*$/);
+      if (fnMatch) executeBody = fnMatch[1].trim();
+
       const token = env.GH_PAT;
       if (!token) return "No GitHub token configured (GH_PAT)";
       const branch = input.branch || "feature-" + input.name;
+
+      const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + executeBody + "\n    },\n  },";
+
+      // Dry run: just return generated code for review
+      if (input.dryRun) return "=== DRY RUN: Generated tool block ===\n" + toolBlock + "\n\nRun again with dryRun=false to commit.";
 
       // 1. Create branch from main
       const refResp = await fetch("https://api.github.com/repos/" + input.repo + "/git/refs/heads/main", {
@@ -488,7 +521,7 @@ export const toolDefinitions = {
         signal: AbortSignal.timeout(10000)
       });
 
-      // 2. Read src/tools.ts from the branch (not main, avoids SHA race)
+      // 2. Read src/tools.ts from the branch
       const getResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/src/tools.ts?ref=" + branch, {
         headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
         signal: AbortSignal.timeout(15000)
@@ -498,18 +531,13 @@ export const toolDefinitions = {
       const currentContent = atob(fileData.content);
       const branchSha = fileData.sha;
 
-      // 3. Generate tool definition block
-      const toolBlock = "\n  " + input.name + ": {\n    description: \"" + input.description.replace(/"/g, '\\"') + "\",\n    schema: " + input.paramsSchema + ",\n    execute: async (env, input) => {\n" + input.executeCode + "\n    },\n  },";
-
-      // 4. Insert into toolDefinitions before the closing marker (use lastIndexOf to hit real end, not the comment)
       const marker = "}; // --- End tool definitions ---";
       const markerPos = currentContent.lastIndexOf(marker);
       if (markerPos === -1) return "Could not find insertion point in source";
       let modified = currentContent.slice(0, markerPos) + toolBlock + "\n" + currentContent.slice(markerPos);
 
-      // 5. Add to AVAILABLE TOOLS list in constants.ts
+      // 3. Add to AVAILABLE TOOLS list in constants.ts
       const promptInsert = "- " + input.name + ": " + input.description + "\n";
-      // Read and update constants.ts
       const constResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/src/constants.ts?ref=" + branch, {
         headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
         signal: AbortSignal.timeout(15000)
@@ -529,7 +557,7 @@ export const toolDefinitions = {
         }
       }
 
-      // 6. Write file to branch
+      // 4. Write file to branch
       const writeResp = await fetch("https://api.github.com/repos/" + input.repo + "/contents/src/tools.ts", {
         method: "PUT",
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
@@ -538,7 +566,7 @@ export const toolDefinitions = {
       });
       if (!writeResp.ok) return "Failed to write file: HTTP " + writeResp.status + ": " + (await writeResp.text()).slice(0, 200);
 
-      // 7. Create PR
+      // 5. Create PR
       const prResp = await fetch("https://api.github.com/repos/" + input.repo + "/pulls", {
         method: "POST",
         headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" },
@@ -549,7 +577,7 @@ export const toolDefinitions = {
       const prData = await prResp.json();
       const toolSource = toolBlock.slice(0, 2000);
       try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'source', 'github')").bind("source_tool_" + input.name, toolSource).run(); } catch {}
-      return "Tool '" + input.name + "' created. PR #" + prData.number + ": " + prData.html_url;
+      return "Tool '" + input.name + "' created. Use db_query to verify. PR #" + prData.number + ": " + prData.html_url + "\n\nCOMMIT THE PR to deploy the new tool, or close it and refine with create_tool again.";
     },
   },
   review_code: {
