@@ -81,8 +81,21 @@ export async function callLLM(env, body, sessionId) {
   // Priority 1.5: OpenRouter (direct emergency fallback via Cloudflare secret)
   if (env.OPENROUTER_API_KEY) {
     try {
-      const orResult = await callOpenRouter(env, body.messages, maxTokens);
-      if (orResult?.content) return orResult;
+      // Truncate messages to stay within OpenRouter free model context limits
+      const orMessages = body.messages.map(function(m) {
+        var c = m.content;
+        if (typeof c !== "string") return m;
+        // Truncate very long messages (like the system prompt) to 6000 chars
+        if (c.length > 10000) c = "...[truncated]\n" + c.slice(c.length - 10000);
+        return { role: m.role, content: c };
+      });
+      // Try capable free model first, fallback to openrouter/free routing
+      var orModels = ["meta-llama/llama-3.1-8b-instruct", "openrouter/free"];
+      for (var omi = 0; omi < orModels.length; omi++) {
+        const orResult = await callOpenRouter(env, orMessages, maxTokens, orModels[omi]);
+        if (orResult?.content) return orResult;
+        if (orResult?.error) errors.push("OpenRouter/" + orModels[omi] + ": " + orResult.error);
+      }
     } catch (e) { errors.push("OpenRouter: " + (e.message || "error")); }
   }
 
