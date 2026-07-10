@@ -86,7 +86,7 @@ export async function callLLM(env, body, sessionId) {
         var c = m.content;
         if (typeof c !== "string") return m;
         // Truncate very long messages (like the system prompt) to 6000 chars
-        if (c.length > 10000) c = "...[truncated]\n" + c.slice(c.length - 10000);
+        if (c.length > 10000) c = c.slice(0, 4000) + "\n...[truncated]...\n" + c.slice(c.length - 6000);
         return { role: m.role, content: c };
       });
       // Try capable free model first, fallback to openrouter/free routing
