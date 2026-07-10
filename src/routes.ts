@@ -1178,35 +1178,29 @@ ${action ? `
 ${msgs.length ? `
 <div class="card">
   <h2>Conversation (Last 20 Messages)</h2>
-  ${msgs.slice(-20).reverse().map(m => {
+  ${msgs.filter(m => m.role !== 'system').slice(-20).reverse().map(m => {
     const content = m.content || '';
     const isToolResult = content.startsWith('[TOOL RESULT');
     const isToolError = content.startsWith('[TOOL ERROR');
     let toolCall = null;
     try { const j = JSON.parse(content); if (j.tool) toolCall = j; } catch {}
-    let displayHtml = esc(content.slice(0,3000));
+    let displayHtml = esc(content);
     let extraClass = '';
     let icon = '';
     if (isToolResult) {
-      let summary = content.slice(0,200).replace(/[[\]]/g,'').replace(/TOOL RESULT:/g,'').trim();
-      try { const arr = JSON.parse(content.replace('[TOOL RESULT:','').replace(/\]$/,'').trim()); summary = 'Got ' + arr.length + ' result(s)'; } catch {}
-      displayHtml = '<div class="res-summary">' + esc(summary) + '</div>';
+      try { const arr = JSON.parse(content.replace('[TOOL RESULT:','').replace(/\]$/,'').trim()); displayHtml = '<div class="res-summary">📄 ' + esc('Got ' + arr.length + ' result(s)') + '</div>'; } catch { displayHtml = '<div class="res-summary">📄 result</div>'; }
       extraClass = ' tool-result';
-      icon = '📄 ';
     } else if (isToolError) {
-      displayHtml = '<div class="res-error">' + esc(content.replace('[TOOL ERROR:','').replace(']]','').trim()) + '</div>';
+      displayHtml = '<div class="res-error">❌ ' + esc(content.replace('[TOOL ERROR:','').replace(']]','').trim()) + '</div>';
       extraClass = ' tool-error';
-      icon = '❌ ';
     } else if (toolCall) {
       const args = Object.entries(toolCall.arguments || {}).map(([k,v]) => esc(k+'='+v)).join(', ').slice(0,200);
       displayHtml = '<div class="tool-call-card"><span class="tool-name">🔧 ' + esc(toolCall.tool) + '</span><span class="tool-args">' + args + '</span></div>';
       extraClass = ' tool-call-msg';
-      icon = '';
-    } else if (content.startsWith('[') && content.includes('tool')) {
-      extraClass = ' tool-result';
-      icon = '📄 ';
     }
-    return '<div class="msg ' + m.role + extraClass + '"><div class="label ' + (m.role === 'assistant' ? 'green' : 'blue') + '">' + icon + (m.role === 'assistant' ? 'Skytron' : 'System') + '</div><div class="content">' + displayHtml + '</div></div>';
+    const label = m.role === 'assistant' ? 'Skytron' : 'User';
+    const color = m.role === 'assistant' ? 'green' : 'blue';
+    return '<div class="msg ' + m.role + extraClass + '"><div class="label ' + color + '">' + icon + label + '</div><div class="content">' + displayHtml + '</div></div>';
   }).join('')}
 </div>` : ''}
 <script>
