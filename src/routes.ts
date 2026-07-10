@@ -432,7 +432,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     let primaryName = "none", fallbackName = "none", anyWorking = false;
     if (llmSettings.buddhidwar?.enabled && llmSettings.buddhidwar?.api_key) {
       primaryName = "BUDDHI_DWAR";
-      llmProviders.push({ name: "BUDDHI_DWAR", role: "primary", status: "unknown", model: "gemini-2.5-flash (default)", error: "", source_file: "src/llm.ts:103" });
+      llmProviders.push({ name: "BUDDHI_DWAR", role: "primary", status: "unknown", model: "openrouter/free (default)", error: "", source_file: "src/llm.ts:103" });
     }
     if (env.AI) {
       const waRole = primaryName === "none" ? "primary" : "fallback";

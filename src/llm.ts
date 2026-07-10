@@ -103,7 +103,7 @@ export async function callLLM(env, body, sessionId) {
   if (settings.buddhidwar?.enabled && settings.buddhidwar?.api_key) {
     const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
     try {
-      const model = body.model || "gemini-2.5-flash";
+      const model = body.model || "openrouter/free";
       const timeoutMs = Math.max(20000, maxTokens * 8);
       const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
         method: "POST",
