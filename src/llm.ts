@@ -99,30 +99,37 @@ export async function callLLM(env, body, sessionId) {
     } catch (e) { errors.push("OpenRouter: " + (e.message || "error")); }
   }
 
-  // Priority 2: BUDDHI_DWAR
+  // Priority 2: BUDDHI_DWAR (auto-fallbacks across providers)
   if (settings.buddhidwar?.enabled && settings.buddhidwar?.api_key) {
     const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
-    try {
-      const model = body.model || "openrouter/free";
-      const timeoutMs = Math.max(20000, maxTokens * 8);
-      const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.buddhidwar.api_key },
-        body: JSON.stringify({ messages: body.messages, model, max_tokens: maxTokens || 3000, task: body.task || "chat" }),
-        signal: AbortSignal.timeout(timeoutMs)
-      }, 2);
-      if (resp.ok) {
-        const data = await resp.json();
-        const msgContent = data.choices?.[0]?.message?.content;
-        if (typeof msgContent === "string" && msgContent.length > 0) {
-          return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+    const bdModels = [
+      body.model || "openrouter/free",
+      "groq/llama3-70b",
+      "mistral/mixtral-8x7b",
+      "openrouter/free"
+    ];
+    const timeoutMs = Math.max(20000, maxTokens * 8);
+    for (const model of bdModels) {
+      try {
+        const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.buddhidwar.api_key },
+          body: JSON.stringify({ messages: body.messages, model, max_tokens: maxTokens || 3000, task: body.task || "chat" }),
+          signal: AbortSignal.timeout(timeoutMs)
+        }, 1);
+        if (resp.ok) {
+          const data = await resp.json();
+          const msgContent = data.choices?.[0]?.message?.content;
+          if (typeof msgContent === "string" && msgContent.length > 0) {
+            return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+          }
+          errors.push("BUDDHI_DWAR/" + model + ": HTTP 200 empty");
+        } else {
+          const errBody = await resp.text().catch(() => "");
+          errors.push("BUDDHI_DWAR/" + model + ": HTTP " + resp.status + " " + errBody.slice(0, 80));
         }
-        errors.push("BUDDHI_DWAR: HTTP 200 empty");
-      } else {
-        const errBody = await resp.text().catch(() => "");
-        errors.push("BUDDHI_DWAR: HTTP " + resp.status + " " + errBody.slice(0, 100));
-      }
-    } catch (e) { errors.push("BUDDHI_DWAR: " + (e.message || "timeout")); }
+      } catch (e) { errors.push("BUDDHI_DWAR/" + model + ": " + (e.message || "timeout")); }
+    }
   }
 
   // Priority 3: Universal AI API (OpenAI-compatible)
