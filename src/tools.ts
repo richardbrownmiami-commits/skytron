@@ -258,13 +258,14 @@ export const toolDefinitions = {
       repo: z.string().describe("REQUIRED. Format: 'owner/repo'. Your repo: 'richardbrownmiami-commits/skytron'"),
       path: z.string().optional().describe("File path from repo root, e.g. 'src/index.ts'"),
       file_path: z.string().optional().describe("Alias for path"),
+      filepath: z.string().optional().describe("Alias for path"),
       branch: z.string().optional().describe("Optional. Defaults to 'main'"),
-    }).refine(d => d.path || d.file_path, { message: "path or file_path is required" }),
+    }).refine(d => d.path || d.file_path || d.filepath, { message: "path, file_path, or filepath is required" }),
     execute: async (env, input) => {
       const token = env.GH_PAT;
       if (!token) return "[TOOL ERROR: No GitHub token configured (GH_PAT)]";
       if (!input.repo) return "[TOOL ERROR: repo is REQUIRED. Use 'richardbrownmiami-commits/skytron']";
-      const filePath = input.path || input.file_path;
+      const filePath = input.path || input.file_path || input.filepath;
       const url = "https://api.github.com/repos/" + input.repo + "/contents/" + filePath + (input.branch ? "?ref=" + encodeURIComponent(input.branch) : "");
       const resp = await fetch(url, { headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" }, signal: AbortSignal.timeout(10000) });
       if (!resp.ok) return "[TOOL ERROR: GitHub " + resp.status + " — " + (await resp.text().catch(() => "")).slice(0, 200) + ". Use 'richardbrownmiami-commits/skytron' as repo.]";
@@ -489,8 +490,9 @@ export const toolDefinitions = {
       dryRun: z.boolean().optional().describe("If true, only generate and return the tool block code without writing to GitHub"),
     }),
     execute: async (env, input) => {
-      if (input.paramsSchema === "z.object({...})" || input.paramsSchema.includes("{...}")) return "ERROR: paramsSchema contains literal '{...}' — replace with actual Zod field definitions like: z.object({ query: z.string().describe(\"search query\") })";
-      if (input.executeCode.length < 10 || input.executeCode.includes("async function") && input.executeCode.includes("{ }")) return "ERROR: executeCode looks like an empty stub. Provide actual implementation code. Example: 'const r = await fetch(\"https://api.example.com\"); return await r.text();'";
+      if (!input.paramsSchema.startsWith("z.object(")) return "ERROR: paramsSchema must start with 'z.object({' and contain actual Zod field definitions. Example: z.object({ query: z.string().describe(\"search query\") }). Got: " + input.paramsSchema.slice(0, 80);
+      if (!input.paramsSchema.includes(":")) return "ERROR: paramsSchema has no field definitions. Must include at least one field. Example: z.object({ query: z.string().describe(\"search query\") })";
+      if (input.executeCode.length < 15) return "ERROR: executeCode too short. Provide actual implementation. Example: 'const r = await fetch(\"https://api.example.com\"); return await r.text();'";
 
       // Fix executeCode: if user gave a full async function instead of just the body, extract body
       let executeBody = input.executeCode;
