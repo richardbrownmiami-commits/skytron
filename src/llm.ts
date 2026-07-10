@@ -58,14 +58,17 @@ export async function callLLM(env, body, sessionId) {
 
   // Priority 1: Workers AI
   if (settings.workers_ai?.enabled !== false && env.AI) {
-    const waModels = ["@cf/meta/llama-3.2-3b-instruct", "@cf/meta/llama-3.3-70b-instruct-fp8-fast"];
-    for (const waModel of waModels) {
+    const waModels = [
+      { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", timeout: 25000 },
+      { model: "@cf/meta/llama-3.2-3b-instruct", timeout: 12000 }
+    ];
+    for (const { model: waModel, timeout } of waModels) {
       try {
         const waResult = await Promise.race([
           env.AI.run(waModel, {
             messages: body.messages, max_tokens: Math.min(maxTokens, 4000)
           }),
-          timeoutRace(12000)
+          timeoutRace(timeout)
         ]);
         const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
         if (waText) return { content: waText, model: "workers-ai/" + waModel.split("/").pop(), tokens: { total: 0 } };
