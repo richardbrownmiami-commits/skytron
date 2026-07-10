@@ -90,7 +90,7 @@ export async function callLLM(env, body, sessionId) {
         return { role: m.role, content: c };
       });
       // Try capable free model first, fallback to openrouter/free routing
-      var orModels = ["meta-llama/llama-3.1-8b-instruct", "openrouter/free"];
+      var orModels = ["meta-llama/llama-3.2-3b-instruct:free", "meta-llama/llama-3.3-70b-instruct:free", "openrouter/free"];
       for (var omi = 0; omi < orModels.length; omi++) {
         const orResult = await callOpenRouter(env, orMessages, maxTokens, orModels[omi]);
         if (orResult?.content) return orResult;
