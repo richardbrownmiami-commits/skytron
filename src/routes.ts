@@ -725,7 +725,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         } catch {}
 
         const outputInstr = mode === "astral"
-          ? "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nFORMAT:\nFirst, write a brief thought in plain English describing what you're doing and why. Then output the raw JSON tool call on the next line.\n\nExamples:\nI want to understand my entry point, let me read the index file.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nThe database has a lot of actions, let me check how many are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n"
+          ? "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nOutput a raw JSON tool call first. Only use plain text when you have a final result to report.\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n"
           : "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
         systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + outputInstr;
         const userMsg = mode === "astral" ? "[Astral tick — you control your schedule]" : llmInput;
@@ -1071,7 +1071,7 @@ async function save(){
         const actionId = r2.results?.[0]?.id;
         // Build proper system prompt with tool instructions, not dummy text
         let astralSystemSlot = HARDCODED_CORE + "\n\n" + (await getPromptSlot(env.DB, "astral").catch(() => null) || SYSTEM_PROMPT) + "\n\n[TASK: astral]";
-        const astralOutputInstr = "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nFORMAT:\nFirst, write a brief thought in plain English describing what you're doing and why. Then output the raw JSON tool call on the next line.\n\nExamples:\nI want to understand my entry point, let me read the index file.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nThe database has a lot of actions, let me check how many are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n";
+        const astralOutputInstr = "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nOutput a raw JSON tool call first. Only use plain text when you have a final result to report.\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n";
         const astralSystemMsg = (astralSystemSlot + "\n" + (await buildSensorium(env).catch(() => "")) + "\n" + astralOutputInstr).slice(0, 32000);
         await saveAgentState(env.DB, actionId, { step: 0, fullHistory: [{ role: "system", content: astralSystemMsg }, { role: "user", content: "[Astral tick — output a raw JSON tool call]" }], totalTokens: 0, finalContent: null, modelName: "", conversationId: "astral", done: false, mode: "astral" });
         return json({ ok: true, status: "enabled", action_id: actionId, message: "Astral Walk enabled. Freedom prompt queued." });
@@ -1123,7 +1123,7 @@ h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.3rem}
 .msg .label.green{color:#4ade80}
 .msg .content{word-break:break-word;white-space:pre-wrap}
 .tool-call{background:#1e293b;padding:0.3rem 0.6rem;border-radius:4px;color:#f59e0b;font-size:0.75rem;display:inline-block;margin-top:0.3rem;font-family:monospace}
-.msg.tool-call-msg{background: #1e293b;border-color:#3b4a6b}.tool-call-card{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.tool-name{color:#f59e0b;font-weight:600;background:rgba(245,158,11,.1);padding:2px 8px;border-radius:4px}.tool-args{color:#94a3b8;font-size:0.8rem;font-family:monospace}.msg.tool-result{background: #162032;border-color:#2d3748}.res-summary{color:#60a5fa;font-size:0.8rem;font-family:monospace}.msg.tool-error{background: #2d1215;border-color:#5c1a1a}.res-error{color:#f87171;font-size:0.8rem}
+#auto-refresh{color:#8b949e;font-size:0.75rem;margin-left:0.5rem}
 .empty{text-align:center;padding:2rem;color:#6b7280}
 button{background:#238636;color:#fff;border:none;padding:12px 32px;border-radius:8px;cursor:pointer;font-size:1rem;font-weight:600;width:100%;margin-bottom:1rem}
 button.danger{background:#da3633}
@@ -1178,36 +1178,12 @@ ${action ? `
 ${msgs.length ? `
 <div class="card">
   <h2>Conversation (Last 20 Messages)</h2>
-  ${msgs.slice(-20).reverse().map(m => {
-    const content = m.content || '';
-    const isToolResult = content.startsWith('[TOOL RESULT');
-    const isToolError = content.startsWith('[TOOL ERROR');
-    let toolCall = null;
-    try { const j = JSON.parse(content); if (j.tool) toolCall = j; } catch {}
-    let displayHtml = esc(content.slice(0,3000));
-    let extraClass = '';
-    let icon = '';
-    if (isToolResult) {
-      let summary = content.slice(0,200).replace(/[[\]]/g,'').replace(/TOOL RESULT:/g,'').trim();
-      try { const arr = JSON.parse(content.replace('[TOOL RESULT:','').replace(/\]$/,'').trim()); summary = 'Got ' + arr.length + ' result(s)'; } catch {}
-      displayHtml = '<div class="res-summary">' + esc(summary) + '</div>';
-      extraClass = ' tool-result';
-      icon = '📄 ';
-    } else if (isToolError) {
-      displayHtml = '<div class="res-error">' + esc(content.replace('[TOOL ERROR:','').replace(']]','').trim()) + '</div>';
-      extraClass = ' tool-error';
-      icon = '❌ ';
-    } else if (toolCall) {
-      const args = Object.entries(toolCall.arguments || {}).map(([k,v]) => esc(k+'='+v)).join(', ').slice(0,200);
-      displayHtml = '<div class="tool-call-card"><span class="tool-name">🔧 ' + esc(toolCall.tool) + '</span><span class="tool-args">' + args + '</span></div>';
-      extraClass = ' tool-call-msg';
-      icon = '';
-    } else if (content.startsWith('[') && content.includes('tool')) {
-      extraClass = ' tool-result';
-      icon = '📄 ';
-    }
-    return '<div class="msg ' + m.role + extraClass + '"><div class="label ' + (m.role === 'assistant' ? 'green' : 'blue') + '">' + icon + (m.role === 'assistant' ? 'Skytron' : 'System') + '</div><div class="content">' + displayHtml + '</div></div>';
-  }).join('')}
+  ${msgs.slice(-20).reverse().map(m => `
+  <div class="msg ${m.role}">
+    <div class="label ${m.role === 'assistant' ? 'green' : 'blue'}">${m.role === 'assistant' ? 'Skytron' : 'User'}</div>
+    <div class="content">${esc(m.content?.slice(0,3000))}</div>
+    ${m.content?.includes('"tool"') ? '<span class="tool-call">Tool Call</span>' : ''}
+  </div>`).join('')}
 </div>` : ''}
 <script>
 async function toggleAstral(action){
