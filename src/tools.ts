@@ -112,6 +112,29 @@ function toolTimeoutRace(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("tool timeout after " + ms + "ms")), ms));
 }
 
+function friendlyFieldError(toolName, input, schema) {
+  // Describe the tool's expected fields
+  let expected = "";
+  try {
+    if (schema && schema._def && schema._def.shape) {
+      const shape = schema._def.shape();
+      expected = Object.entries(shape).map(([k, v]) => {
+        const desc = v._def?.description || "";
+        const optional = v.isOptional ? " (optional)" : "";
+        return "  " + k + optional + ": " + desc;
+      }).join("\n");
+    }
+  } catch {}
+  const unknownKeys = Object.keys(input).filter(k => {
+    try { return !schema?.shape || !schema.shape()[k]; } catch { return false; }
+  });
+  let hint = "";
+  if (unknownKeys.length > 0) {
+    hint = "\nYou used unknown field(s): " + unknownKeys.join(", ") + ". These don't match any parameter.";
+  }
+  return expected + hint;
+}
+
 export async function dispatchTool(env, toolName, input, actionId) {
   const def = toolDefinitions[toolName];
   if (def) {
@@ -124,7 +147,17 @@ export async function dispatchTool(env, toolName, input, actionId) {
       logActivity(env.DB, "tool_result", { actionId, toolName, summary: toolName + " → " + resultStr.slice(0, 100), details: resultStr.slice(0, 2000) });
       return resultStr;
     } catch (e) {
-      const errMsg = "[TOOL ERROR: " + (e.message || String(e)) + "]";
+      let errMsg;
+      if (e?.issues && Array.isArray(e.issues)) {
+        const issue = e.issues[0];
+        const field = issue.path?.join(".");
+        const expectedType = issue.expected || issue.message;
+        const received = issue.received || "undefined";
+        const fieldHelp = friendlyFieldError(toolName, input, def.schema);
+        errMsg = "[TOOL ERROR: '" + toolName + "' — field '" + field + "' is required (expected " + expectedType + ", got " + received + ").\nCorrect fields:\n" + fieldHelp + "]";
+      } else {
+        errMsg = "[TOOL ERROR: " + toolName + " — " + (e.message || String(e)).slice(0, 300) + "]";
+      }
       logActivity(env.DB, "tool_error", { actionId, toolName, summary: toolName + " failed: " + (e.message || "").slice(0, 100), details: errMsg });
       return errMsg;
     }
