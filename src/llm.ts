@@ -1,10 +1,10 @@
 // === Skytron LLM Gateway (AI PROVIDER) ===
 // Reads enabled providers from brain_knowledge settings_llm and tries them in order:
 //   1. Workers AI (if enabled + binding exists)
+//   1.5 OpenRouter (if OPENROUTER_API_KEY secret is set)
 //   2. BUDDHI_DWAR (if enabled + api_key provided)
 //   3. Universal AI (if enabled + endpoint + api_key configured)
 // First provider that returns a valid response wins.
-// callOpenRouter() kept as standalone emergency utility (used by scheduler).
 
 function timeoutRace(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
@@ -76,6 +76,14 @@ export async function callLLM(env, body, sessionId) {
         errors.push("Workers AI " + waModel.split("/").pop() + ": " + (e.message || "timeout"));
       }
     }
+  }
+
+  // Priority 1.5: OpenRouter (direct emergency fallback via Cloudflare secret)
+  if (env.OPENROUTER_API_KEY) {
+    try {
+      const orResult = await callOpenRouter(env, body.messages, maxTokens);
+      if (orResult?.content) return orResult;
+    } catch (e) { errors.push("OpenRouter: " + (e.message || "error")); }
   }
 
   // Priority 2: BUDDHI_DWAR
