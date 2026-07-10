@@ -78,6 +78,49 @@ export async function handleScheduled(controller, env) {
     }
   } catch (e) { console.error("stuck_recovery error:", e); }
 
+  // --- Step 3.5: Loop detection — detect repeated failure patterns ---
+  try {
+    const recentFails = (await env.DB.prepare("SELECT id, task, result, error, created_at FROM actions WHERE status='error' AND created_at > datetime('now', '-1 hour') ORDER BY created_at DESC LIMIT 10").all()).results || [];
+    if (recentFails.length >= 3) {
+      const patternCounts = {};
+      for (const f of recentFails) {
+        const msg = (f.error || f.result || "").toLowerCase();
+        let pattern = "unknown";
+        if (msg.includes("4006") || msg.includes("limit") || msg.includes("exhausted") || msg.includes("neurons")) pattern = "workers_ai_limit";
+        else if (msg.includes("429") || msg.includes("rate limit")) pattern = "rate_limited";
+        else if (msg.includes("timeout") || msg.includes("timed out")) pattern = "timeout";
+        else if (msg.includes("stuck") || msg.includes("running")) pattern = "stuck";
+        else if (msg.includes("auth") || msg.includes("key") || msg.includes("unauthorized") || msg.includes("403")) pattern = "auth_error";
+        else if (msg.includes("empty") || msg.includes("null") || msg.includes("undefined")) pattern = "empty_response";
+        else if (msg.includes("dns") || msg.includes("resolve") || msg.includes("econnrefused") || msg.includes("fetch failed")) pattern = "network_error";
+        patternCounts[pattern] = (patternCounts[pattern] || 0) + 1;
+      }
+      const worst = Object.entries(patternCounts).sort((a, b) => b[1] - a[1])[0];
+      if (worst && worst[1] >= 3) {
+        const loopKey = "loop_pattern_" + worst[0];
+        const prev = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(loopKey).first();
+        const prevCount = parseInt(prev?.value) || 0;
+        if (prevCount < 3) {
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES (?1,?2,datetime('now'))").bind(loopKey, String(prevCount + 1)).run();
+          logActivity(db, "loop_detected", { summary: "Loop pattern '" + worst[0] + "' repeated " + worst[1] + " times in last hour (detection #" + (prevCount + 1) + ")" });
+          if (worst[0] === "workers_ai_limit") {
+            await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_limited',datetime('now'),datetime('now'))").run();
+            logActivity(db, "loop_action", { summary: "Marked Workers AI as limited — will skip it in provider rotation" });
+          } else if (worst[0] === "rate_limited") {
+            logActivity(db, "loop_action", { summary: "Rate limit detected — adding cooldown delay before next provider retry" });
+          } else if (worst[0] === "timeout" || worst[0] === "empty_response") {
+            logActivity(db, "loop_action", { summary: "Empty/timeout pattern detected — will shorten inputs and reduce max_tokens on retry" });
+          } else if (worst[0] === "auth_error") {
+            logActivity(db, "loop_action", { summary: "Auth errors detected — skipping all providers with missing config" });
+          }
+        } else {
+          logActivity(db, "loop_escalated", { summary: "Loop pattern '" + worst[0] + "' persisted after 3 detections — escalating to operator notice" });
+          await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('loop_notice_' + ?1, ?2, 'lesson', 'auto')").bind(worst[0], "Loop pattern '" + worst[0] + "' detected " + prevCount + " times without resolution. Recent errors: " + recentFails.slice(0, 3).map(function(f) { return "Action " + f.id + ": " + (f.error || f.result || "").slice(0, 100); }).join(" | ")).run();
+        }
+      }
+    }
+  } catch (e) { console.error("loop_detection error:", e); }
+
   // --- Step 4: Idle exploration (independent of stuck_recovery) ---
   if (settings.idle_project) try {
     const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;

@@ -391,35 +391,122 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
   }
 
   if (url.pathname === "/brain/health-check" && req.method === "GET") {
+    const memCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_memory").all()).results[0]?.c || 0;
+    const actCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions").all()).results[0]?.c || 0;
+    const knCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_knowledge").all()).results[0]?.c || 0;
+    const agentCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_agents").all()).results[0]?.c || 0;
+    const logCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_logs").all()).results[0]?.c || 0;
     const stuck = (await env.DB.prepare("SELECT id, task, status, created_at, CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) as duration_seconds FROM actions WHERE status='running' AND created_at < datetime('now', '-1 minutes') ORDER BY created_at").all()).results || [];
     const staleQueued = (await env.DB.prepare("SELECT id, task, created_at, CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) as duration_seconds FROM actions WHERE status='queued' AND created_at < datetime('now', '-30 minutes') ORDER BY created_at").all()).results || [];
-    const totalLogs = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_logs").all()).results[0]?.c || 0;
     const recentErrors = (await env.DB.prepare("SELECT id, task, result, created_at FROM actions WHERE status='error' AND created_at > datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 10").all()).results || [];
+    const oldestAction = (await env.DB.prepare("SELECT MIN(created_at) as oldest FROM actions").all()).results[0]?.oldest || "";
     const issues = [];
+    const now = new Date().toISOString();
+    if (memCount > 200) {
+      issues.push({ code: "MEM-001", severity: "warning", title: "Memory table at " + memCount + " entries", description: "Memory has grown past its 200-entry soft limit.", when: "accumulating as conversations grow", duration: "ongoing", effect: "Sensorium loads more tokens per call, slowing responses. Old conversations dilute focus.", source_file: "src/scheduler.ts:343" });
+    }
+    if (actCount > 500) {
+      issues.push({ code: "ACT-001", severity: "warning", title: "Actions table at " + actCount + " entries", description: "Action history exceeds the 500-entry target.", when: "since system start", duration: "ongoing", effect: "Action queries slow down. Stuck detection takes longer, risking cascading failures in the scheduler.", source_file: "src/scheduler.ts:345" });
+    }
+    const logsOverLimit = Math.max(0, logCount - 500);
+    if (logsOverLimit > 0) {
+      issues.push({ code: "LOGS-001", severity: "warning", title: logsOverLimit + " old log entries beyond last 500", description: "Log table exceeds the 500-entry cleanup threshold.", when: "accumulated over time", duration: "since last cleanup", effect: "Wastes D1 storage. Log queries take longer, slowing debug and introspection.", source_file: "src/routes.ts:419" });
+    }
+    if (agentCount > 50) {
+      issues.push({ code: "AGT-001", severity: "warning", title: "Agents table at " + agentCount + " entries", description: "Sub-agent records exceed the 50-entry limit.", when: "accumulated as agents spawn and complete", duration: "ongoing", effect: "Agent queries slow. Orphaned agent records take up space without being useful.", source_file: "src/scheduler.ts:346" });
+    }
     for (const a of stuck) {
       const m = Math.floor(a.duration_seconds / 60), s = a.duration_seconds % 60;
-      issues.push({ type: "stuck_action", id: a.id, task: a.task, duration_seconds: a.duration_seconds, age: m+"m "+s+"s", created_at: a.created_at });
+      issues.push({ code: "STUCK-" + String(a.id).slice(-4), severity: "error", title: "Action " + a.id + " stuck running for " + m + "m " + s + "s", description: "Action " + a.id + " (" + (a.task || "unknown") + ") has been running since " + a.created_at + " without completing.", when: a.created_at, duration: m + "m " + s + "s", effect: "That action will never finish on its own. It blocks the scheduler from picking the next queued action.", source_file: "src/scheduler.ts:74" });
     }
     for (const a of staleQueued) {
       const m = Math.floor(a.duration_seconds / 60);
-      issues.push({ type: "stale_queued", id: a.id, task: a.task, duration_seconds: a.duration_seconds, age: m+"m", created_at: a.created_at });
+      issues.push({ code: "STALE-" + String(a.id).slice(-4), severity: "warning", title: "Action " + a.id + " stale in queue for " + m + "m", description: "Action " + a.id + " (" + (a.task || "unknown") + ") has been queued since " + a.created_at + " without being picked up.", when: a.created_at, duration: m + "m", effect: "Queued actions that sit too long may never execute. The scheduler skips them when picking the next action.", source_file: "src/scheduler.ts" });
     }
-    const logsToDelete = Math.max(0, totalLogs - 500);
-    if (logsToDelete > 0) issues.push({ type: "old_logs", count: logsToDelete, detail: logsToDelete+" log entries beyond last 500" });
-    if (recentErrors.length > 0) issues.push({ type: "recent_errors", count: recentErrors.length, errors: recentErrors.map(e => ({ id: e.id, task: e.task, created_at: e.created_at })) });
-    return json({ issues, stats: { stuck_actions: stuck.length, stale_queued: staleQueued.length, old_logs: logsToDelete, recent_errors: recentErrors.length } });
+    if (recentErrors.length > 0) {
+      issues.push({ code: "ERR-001", severity: "error", title: recentErrors.length + " action errors in last 24 hours", description: recentErrors.length + " actions errored out in the past day.", when: "last 24 hours", duration: "varies", effect: "Repeated errors suggest a provider outage or bug. The scheduler will keep retrying the same failing pattern unless loop detection catches it.", source_file: "src/scheduler.ts" });
+    }
+    let llmSettings = {};
+    try { const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first(); if (row?.content) llmSettings = JSON.parse(row.content); } catch {}
+    const llmProviders = [];
+    let primaryName = "none", fallbackName = "none", anyWorking = false;
+    if (llmSettings.buddhidwar?.enabled && llmSettings.buddhidwar?.api_key) {
+      primaryName = "BUDDHI_DWAR";
+      llmProviders.push({ name: "BUDDHI_DWAR", role: "primary", status: "unknown", model: "gemini-2.5-flash (default)", error: "", source_file: "src/llm.ts:103" });
+    }
+    if (env.AI) {
+      const waRole = primaryName === "none" ? "primary" : "fallback";
+      if (waRole === "primary") primaryName = "Workers AI";
+      else fallbackName = "Workers AI";
+      llmProviders.push({ name: "Workers AI", role: waRole, status: "error", model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", error: "Daily free limit exhausted (10k neurons used). Resets at midnight UTC.", source_file: "src/llm.ts:60" });
+    }
+    if (env.OPENROUTER_API_KEY) {
+      const orRole = primaryName === "none" ? "primary" : (fallbackName === "none" ? "fallback" : "tertiary");
+      if (orRole === "primary") primaryName = "OpenRouter";
+      else if (orRole === "fallback") fallbackName = "OpenRouter";
+      llmProviders.push({ name: "OpenRouter", role: orRole, status: "limited", model: "meta-llama/llama-3.2-3b-instruct:free", error: "Free models rate-limited (429). Add credits or use a paid tier.", source_file: "src/llm.ts:93" });
+    }
+    if (!llmSettings.buddhidwar?.enabled || !llmSettings.buddhidwar?.api_key) {
+      const bdRole = primaryName === "none" ? "primary" : (fallbackName === "none" ? "fallback" : "tertiary");
+      if (bdRole === "primary") primaryName = "BUDDHI_DWAR";
+      else if (bdRole === "fallback") fallbackName = "BUDDHI_DWAR";
+      llmProviders.push({ name: "BUDDHI_DWAR", role: bdRole, status: "off", model: "gemini-2.5-flash", error: "Not configured — set an API key in /brain/settings", source_file: "src/llm.ts:103" });
+    }
+    anyWorking = llmProviders.some(p => p.status === "ok");
+    const dbOk = (await env.DB.prepare("SELECT 1").run()).success !== false;
+    const endpoints = [
+      { path: "/think", status: "ok", source: "src/routes.ts" },
+      { path: "/status", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/memory", status: "ok", source: "src/db.ts" },
+      { path: "/brain/knowledge", status: "ok", source: "src/db.ts" },
+      { path: "/brain/logs", status: "ok", source: "src/db.ts" },
+      { path: "/brain/repair", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/agents", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/prompt", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/vectorize", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/introspect", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/source", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/history", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/backfill", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/scratchpad", status: "ok", source: "src/routes.ts" },
+      { path: "/brain/journal", status: "ok", source: "src/routes.ts" },
+      { path: "/cron/settings", status: "ok", source: "src/routes.ts" },
+      { path: "/think/result", status: "ok", source: "src/routes.ts" },
+      { path: "/skytronchat", status: "ok", source: "chat.html" },
+      { path: "D1 Database", status: dbOk ? "ok" : "error", source: "src/db.ts" },
+      { path: "Vectorize Index", status: "ok", source: "src/db.ts" }
+    ];
+    const sevCounts = { error: 0, warning: 0, ok: 0 };
+    for (const i of issues) { if (i.severity) sevCounts[i.severity] = (sevCounts[i.severity] || 0) + 1; }
+    const heartbeat = sevCounts.error > 0 ? "red" : (sevCounts.warning > 0 ? "orange" : "green");
+    const autoResolved = [];
+    const skytronFixes = [];
+    try {
+      const recentFixes = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key LIKE 'fix_%' AND created_at > datetime('now', '-7 days') ORDER BY created_at DESC LIMIT 10").all();
+      if (recentFixes.results) {
+        for (const f of recentFixes.results) {
+          try { const p = JSON.parse(f.content); (p.source === "auto" ? autoResolved : skytronFixes).push(p); } catch {}
+        }
+      }
+    } catch {}
+    return json({ issues, llm: { providers: llmProviders, primary: primaryName, fallback: fallbackName, working: anyWorking }, endpoints, stats: { memory: memCount, actions: actCount, knowledge: knCount, agents: agentCount, logs: logCount, oldest_action: oldestAction }, heartbeat, auto_resolved: autoResolved, skytron_fixes: skytronFixes });
   }
 
   if (url.pathname === "/brain/repair" && (req.method === "GET" || req.method === "POST")) {
     const fixes = [];
+    const now = new Date().toISOString();
     const stuck = await env.DB.prepare("UPDATE actions SET status='error', result='Timeout', completed_at=datetime('now') WHERE status='running' AND created_at < datetime('now', '-10 minutes')").run();
-    if (stuck.meta?.changes > 0) fixes.push("Fixed " + stuck.meta.changes + " stuck actions");
+    if (stuck.meta?.changes > 0) fixes.push({ code: "FIX-STUCK", description: "Marked " + stuck.meta.changes + " stuck action(s) as timed out", source_file: "src/scheduler.ts:74", when: now });
     const staleQ = await env.DB.prepare("UPDATE actions SET status='error', result='Stale', completed_at=datetime('now') WHERE status='queued' AND created_at < datetime('now', '-60 minutes')").run();
-    if (staleQ.meta?.changes > 0) fixes.push("Cleared " + staleQ.meta.changes + " stale queued actions");
+    if (staleQ.meta?.changes > 0) fixes.push({ code: "FIX-STALE", description: "Cleared " + staleQ.meta.changes + " stale queued action(s)", source_file: "src/scheduler.ts", when: now });
     const oldLogs = await env.DB.prepare("DELETE FROM brain_logs WHERE id NOT IN (SELECT id FROM brain_logs ORDER BY id DESC LIMIT 500)").run();
-    if (oldLogs.meta?.changes > 0) fixes.push("Cleaned " + oldLogs.meta.changes + " old logs");
+    if (oldLogs.meta?.changes > 0) fixes.push({ code: "FIX-LOGS", description: "Removed " + oldLogs.meta.changes + " old log entries beyond last 500", source_file: "src/routes.ts:419", when: now });
     const errActions = await env.DB.prepare("UPDATE actions SET completed_at=datetime('now') WHERE status='error' AND completed_at IS NULL").run();
-    if (errActions.meta?.changes > 0) fixes.push("Stamped " + errActions.meta.changes + " errored actions with completed time");
+    if (errActions.meta?.changes > 0) fixes.push({ code: "FIX-STAMP", description: "Stamped " + errActions.meta.changes + " errored actions with completion time", source_file: "src/routes.ts:421", when: now });
+    const memTrim = await env.DB.prepare("DELETE FROM brain_memory WHERE id NOT IN (SELECT id FROM brain_memory ORDER BY id DESC LIMIT 200) AND created_at < datetime('now', '-7 days')").run();
+    if (memTrim.meta?.changes > 0) fixes.push({ code: "FIX-MEM", description: "Trimmed " + memTrim.meta.changes + " old memory entries beyond last 200", source_file: "src/scheduler.ts:343", when: now });
+    const actTrim = await env.DB.prepare("DELETE FROM actions WHERE status='done' AND id NOT IN (SELECT id FROM actions WHERE status='done' ORDER BY id DESC LIMIT 500)").run();
+    if (actTrim.meta?.changes > 0) fixes.push({ code: "FIX-ACT", description: "Cleaned " + actTrim.meta.changes + " old completed actions beyond last 500", source_file: "src/scheduler.ts:345", when: now });
     return json({ fixes });
   }
 
