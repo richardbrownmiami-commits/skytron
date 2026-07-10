@@ -1,57 +1,7 @@
-# Secrets
-.credentials.json
-credentials.json
-.creds.json
-*.credentials
-
-# Chrome profiles / test junk
-work/chrome-profile/
-work/chrome-test/
-work/chrome-test2/
-work/brain-req.json
-
-# Nested git repo (will be handled separately)
-work/skytron-app/.git/
-
-# Node
-node_modules/
-# CI/CD needs these tracked
-# /package-lock.json
-# /package.json
-
-# Junk / backup files in root
-*.zip
-*.tmp
-app-debug*/
-extracted/
-work/skytron-app/web/dist/
-work/skytron-app/web/node_modules/
-screenshot.png
-skytron_device.db
-ui.xml
-
-# Build artifacts (Android)
-work/skytron-app/app/build/
-work/skytron-app/app/src/main/assets/index.html
-work/skytron-app/.gradle/
-work/skytron-app/local.properties
-*.apk
-*.aab
-*.keystore
-
-# IDE
-.idea/
-*.iml
-
-# Build artifacts
-.wrangler/
-dev/
-dist/
-replace.js
-
-# OS
-.DS_Store
-Thumbs.db
-*.log
-
-RESOURCES.md
+.vscode/
+debug_*.js
+find_error.js
+fix_runrepair.ps1
+format_repair.js
+test-discussion*.json
+worker-configuration.d.ts
