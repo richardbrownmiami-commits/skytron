@@ -59,8 +59,8 @@ export async function callLLM(env, body, sessionId) {
   // Priority 1: Workers AI
   if (settings.workers_ai?.enabled !== false && env.AI) {
     const waModels = [
-      { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", timeout: 25000 },
-      { model: "@cf/meta/llama-3.2-3b-instruct", timeout: 12000 }
+      { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", timeout: 8000 },
+      { model: "@cf/meta/llama-3.2-3b-instruct", timeout: 5000 }
     ];
     for (const { model: waModel, timeout } of waModels) {
       try {
@@ -173,7 +173,7 @@ export async function callOpenRouter(env, messages, maxTokens = 2000, model = "o
         "X-Title": "Skytron"
       },
       body: JSON.stringify({ messages, model, max_tokens: maxTokens }),
-      signal: AbortSignal.timeout(25000)
+      signal: AbortSignal.timeout(15000)
     });
     if (resp.ok) {
       const data = await resp.json();
