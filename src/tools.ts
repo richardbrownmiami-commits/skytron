@@ -886,4 +886,12 @@ export const toolDefinitions = {
       return "Priority queue tool: not yet implemented (stub)";
     },
   },
+
+  reminder: {
+    description: "Display a reminder message",
+    schema: string,
+    execute: async (env, input) => {
+get_tab('alert','. reminder: '+ text);
+    },
+  },
 }; // --- End tool definitions ---
