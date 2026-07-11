@@ -1190,9 +1190,17 @@ ${msgs.length ? `
       displayHtml = '<span style="color:#ef4444;font-size:0.85rem">❌ ' + esc(reason) + '</span>';
       extraClass = ' tool-error';
     } else if (m.role === 'assistant') {
-      const jsonIdx = content.search(/[\[{]/);
-      if (jsonIdx > 0) {
-        displayHtml = esc(content.slice(0, jsonIdx).trim());
+      const jsonNewlineIdx = content.search(/\n\s*[\[{]\s*$/m);
+      const jsonIdx = content.search(/^\s*[\[{]/);
+      const toolJsonIdx = content.indexOf('{"tool"');
+      if (toolJsonIdx > 0) {
+        const thought = content.slice(0, toolJsonIdx).trim();
+        const toolPart = content.slice(toolJsonIdx);
+        try { const j = JSON.parse(toolPart);
+          const args = j.arguments || j.input || {};
+          const argStr = Object.values(args).filter(v => typeof v === 'string').map(v => v.length > 80 ? v.slice(0,80)+'...' : v).join(', ');
+          displayHtml = esc(thought) + '<br><span style="color:#f59e0b;font-size:0.8rem">→ ' + esc(j.tool) + (argStr ? ': ' + esc(argStr) : '') + '</span>';
+        } catch { displayHtml = esc(content); }
       } else if (jsonIdx === 0) {
         try { const j = JSON.parse(content); 
           const args = j.arguments || j.input || {};
