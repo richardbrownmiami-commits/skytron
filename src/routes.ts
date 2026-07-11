@@ -1194,7 +1194,11 @@ ${msgs.length ? `
       if (jsonIdx > 0) {
         displayHtml = esc(content.slice(0, jsonIdx).trim());
       } else if (jsonIdx === 0) {
-        try { const j = JSON.parse(content); displayHtml = '<span style="color:#8b949e;font-size:0.85rem">running ' + esc(j.tool || 'tool') + '...</span>'; } catch { displayHtml = '<span style="color:#8b949e">working...</span>'; }
+        try { const j = JSON.parse(content); 
+          const args = j.arguments || j.input || {};
+          const argStr = Object.values(args).filter(v => typeof v === 'string').map(v => v.length > 80 ? v.slice(0,80)+'...' : v).join(', ');
+          displayHtml = '<span style="color:#f59e0b;font-size:0.85rem">🔧 ' + esc(j.tool || 'tool') + (argStr ? ': ' + esc(argStr) : '') + '</span>';
+        } catch { displayHtml = '<span style="color:#8b949e">working...</span>'; }
       } else {
         displayHtml = esc(content);
       }
