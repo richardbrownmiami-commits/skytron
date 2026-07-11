@@ -173,7 +173,7 @@ export async function handleScheduled(controller, env) {
       const lastAstral = (await env.DB.prepare("SELECT id, status, error FROM actions WHERE task='astral' ORDER BY id DESC LIMIT 1").all()).results?.[0];
       if (lastAstral && lastAstral.status === 'error') {
         // Check if all providers are down — if last 3 errors are all LLM failures, stop re-queuing
-        const recentErrs = (await env.DB.prepare("SELECT error FROM actions WHERE task='astral' AND status='error' ORDER BY id DESC LIMIT 3").all()).results || [];
+        const recentErrs = (await env.DB.prepare("SELECT error FROM actions WHERE task='astral' AND (status='error' OR error IS NOT NULL AND error != '') ORDER BY id DESC LIMIT 3").all()).results || [];
         const allProviderFailures = recentErrs.length >= 3 && recentErrs.every(function(r) { return (r.error || "").includes("LLM provider failed") || (r.error || "").includes("all providers unreachable") || (r.error || "").includes("provider fail"); });
         if (allProviderFailures) {
           // Add cooldown: set a flag so we only re-queue once per 5 minutes
