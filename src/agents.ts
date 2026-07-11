@@ -52,7 +52,6 @@ export async function processOneStep(env, action) {
     const chatResp = await callLLM(env, { messages: state.fullHistory, task: "chat" }, "skytron-astral");
     if (!chatResp?.content) {
       const errs = chatResp?.errors?.join("; ") || "unknown";
-      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "astral_llm_fail", "LLM returned null: " + errs.slice(0, 2000), "error").run(); } catch {}
       try { await db.prepare("UPDATE actions SET status='error', error=?1 WHERE id=?2").bind("LLM provider failed: " + errs.slice(0, 300), action.id).run(); } catch {}
       return;
     }
@@ -123,7 +122,6 @@ export async function processOneStep(env, action) {
     if (!resp || typeof content !== "string") {
       const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
       logActivity(db, "provider_fail", { actionId: action.id, summary: "Provider fail: " + errorSummary.slice(0, 100), details: errorSummary });
-      try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "provider_fail", "Both providers failed: " + errorSummary.slice(0, 200), "error").run(); } catch {}
       state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
       break;
     }

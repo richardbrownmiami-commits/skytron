@@ -530,7 +530,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     } catch {}
     const providerFailures = [];
     try {
-      const rows = await env.DB.prepare("SELECT content, created_at FROM brain_logs WHERE (step='astral_llm_fail' OR step='provider_fail') AND content IS NOT NULL ORDER BY id DESC LIMIT 5").all();
+      const rows = await env.DB.prepare("SELECT content, created_at FROM brain_logs WHERE step='llm_fail' AND content IS NOT NULL ORDER BY id DESC LIMIT 5").all();
       if (rows.results) {
         for (const r of rows.results) {
           providerFailures.push({ error: (r.content || "").slice(0, 500), when: r.created_at });

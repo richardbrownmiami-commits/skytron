@@ -166,6 +166,12 @@ export async function callLLM(env, body, sessionId) {
     } catch (e) { errors.push("Universal: " + (e.message || "timeout")); }
   }
 
+  if (errors.length && env.DB) {
+    try {
+      const errorSummary = errors.join(" | ").slice(0, 500);
+      await env.DB.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(sessionId || "0", "llm_fail", errorSummary, "error").run();
+    } catch {}
+  }
   return { content: null, errors, model: "none", tokens: { total: 0 } };
 }
 
