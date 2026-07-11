@@ -66,8 +66,11 @@ export async function processOneStep(env, action) {
         if (result !== null) {
           state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 3000) + "]" });
         } else {
-          state.fullHistory.push({ role: "user", content: "[TOOL ERROR: unknown tool]" });
+          state.fullHistory.push({ role: "user", content: "[TOOL ERROR: unknown tool or dispatch failed]" });
+          try { await db.prepare("UPDATE actions SET error=?1 WHERE id=?2").bind("Tool dispatch failed: " + (parsed.tool || "unknown"), action.id).run(); } catch {}
         }
+      } else {
+        try { await db.prepare("UPDATE actions SET error=?1 WHERE id=?2").bind("No valid tool call found in response", action.id).run(); } catch {}
       }
       state.step++;
     }
