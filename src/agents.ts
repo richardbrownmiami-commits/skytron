@@ -52,6 +52,8 @@ export async function processOneStep(env, action) {
     if (!chatResp?.content) {
       const errs = chatResp?.errors?.join("; ") || "unknown";
       try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model) VALUES (?1, ?2, ?3, ?4)").bind(action.id, "astral_llm_fail", "LLM returned null: " + errs.slice(0, 2000), "error").run(); } catch {}
+      try { await db.prepare("UPDATE actions SET status='error', error=?1 WHERE id=?2").bind("LLM provider failed: " + errs.slice(0, 300), action.id).run(); } catch {}
+      return;
     }
     if (chatResp?.content) {
       const trimmed = chatResp.content.trim();
