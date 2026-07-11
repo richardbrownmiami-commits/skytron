@@ -357,7 +357,14 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
 const q = `c=${encodeURIComponent(convId)}`;
 const nav = `<div class="nav" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center">${page>1?`<a href="?${q}&p=1">\u00AB\u00AB</a><a href="?${q}&p=${page-1}">\u00AB</a>`:`<span style="color:#30363d">\u00AB\u00AB</span><span style="color:#30363d">\u00AB</span>`}<span style="color:#8b949e">Page</span><form style="display:inline;margin:0" method="GET" action=""><input type="hidden" name="c" value="${convId.replace(/"/g,'&quot;')}"/><input type="number" name="p" value="${page}" min="1" max="${totalPages}" style="width:55px;padding:4px 6px;border-radius:6px;border:1px solid #30363d;background:#0b1120;color:#e6edf3;font-size:0.85rem;text-align:center;outline:none"/><button type="submit" style="padding:4px 10px;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#58a6ff;cursor:pointer;font-size:0.85rem;margin-left:4px">Go</button></form><span style="color:#8b949e">of ${totalPages} (${total} msgs)</span>${page<totalPages?`<a href="?${q}&p=${page+1}">\u00BB</a><a href="?${q}&p=${totalPages}">\u00BB\u00BB</a>`:`<span style="color:#30363d">\u00BB</span><span style="color:#30363d">\u00BB\u00BB</span>`}</div>`;
     const sel = convs.map(c => `<option value="${c.conversation_id.replace(/"/g,'&quot;')}"${c.conversation_id===convId?' selected':''}>${c.conversation_id}</option>`).join("\n");
-    return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brain Chat</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:1.5rem;max-width:960px;margin:auto;min-height:100vh;display:flex;flex-direction:column}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:1rem}.topnav{display:flex;gap:0.4rem;margin-bottom:1rem;overflow-x:auto;padding-bottom:4px;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}.topnav a{color:#58a6ff;text-decoration:none;padding:0.3rem 0.6rem;border:1px solid #30363d;border-radius:6px;font-size:0.75rem;white-space:nowrap;flex-shrink:0}.topnav a:hover{background:#1f2937}.topnav .active{background:#1e3a5f;border-color:#58a6ff}.control{margin-bottom:1rem}select{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:0.5rem;width:100%;font-size:1rem}.msgs{flex:1;overflow-y:auto}.msg{padding:1rem 1.2rem;margin-bottom:0.6rem;border-radius:10px;font-size:1rem;line-height:1.6}.msg.user{background:#1e3a5f;margin-left:1rem}.msg.assistant{background:#161b22;border:1px solid #30363d;margin-right:1rem}.meta{display:flex;justify-content:space-between;margin-bottom:0.4rem}.label{font-weight:600;font-size:0.85rem}.user .label{color:#60a5fa}.assistant .label{color:#94a3b8}.tool-error{background:#1a0a0a!important;border-left:3px solid #ef4444!important}.time{color:#6b7280;font-size:0.8rem}.text{word-break:break-word;white-space:pre-wrap}.nav{display:flex;justify-content:space-between;align-items:center;padding:0.8rem 0;color:#8b949e;font-size:0.9rem}.nav a{color:#58a6ff;text-decoration:none;padding:0.4rem 0.8rem;border:1px solid #30363d;border-radius:8px}.nav a:hover{background:#1f2937}.empty{text-align:center;padding:2rem;color:#6b7280}.input-row{display:flex;gap:0.5rem;padding:1rem 0;border-top:1px solid #30363d;margin-top:auto}input{flex:1;padding:0.8rem 1rem;border-radius:8px;border:1px solid #30363d;background:#0b1120;color:#e6edf3;font-size:1rem;outline:none}input:focus{border-color:#58a6ff}button{padding:0.8rem 1.2rem;border-radius:8px;border:none;background:#58a6ff;color:#0b1120;font-weight:bold;font-size:1rem;cursor:pointer}button:disabled{opacity:0.5}</style></head><body><div class="topnav"><a href="/">Home</a><a href="/astral">Astral</a><a href="/skytronchat" class="active">Chat</a><a href="/status">Status</a><a href="/brain/history">History</a><a href="/brain/memory">Memory</a><a href="/brain/memory/search">Search</a><a href="/brain/knowledge">Knowledge</a><a href="/brain/introspect">Insights</a><a href="/brain/settings">AI Provider</a><a href="/cron/settings">Cron</a><a href="/brain/prompt">Prompt</a><a href="/brain/repair">Repair</a><a href="/brain/logs">Logs</a><a href="/brain/agents">Agents</a><a href="/brain/vectorize">Vector</a><a href="/brain/source">Source</a><a href="/brain/scratchpad">Scratchpad</a><a href="/brain/journal">Journal</a></div><h1>Chat with Skytron</h1><div class="control"><select id="convSelect" onchange="if(this.value)window.location='?c='+encodeURIComponent(this.value)"><option value="">-- Select conversation --</option>${sel}</select></div><div class="msgs">${msgs.length?msgs:`<div class="empty">No messages yet. Start a conversation via /skytronchat or POST /think</div>`}</div>${nav}<div class="input-row"><input type="text" id="msgInput" placeholder="Type your message..." /><button id="sendBtn" onclick="send()">Send</button></div>
+    return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brain Chat</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:1.5rem;max-width:960px;margin:auto;min-height:100vh;display:flex;flex-direction:column}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:1rem}.topnav{display:flex;gap:0.4rem;margin-bottom:1rem;overflow-x:auto;padding-bottom:4px;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}.topnav a{color:#58a6ff;text-decoration:none;padding:0.3rem 0.6rem;border:1px solid #30363d;border-radius:6px;font-size:0.75rem;white-space:nowrap;flex-shrink:0}.topnav a:hover{background:#1f2937}.topnav .active{background:#1e3a5f;border-color:#58a6ff}.control{margin-bottom:1rem}select{background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:0.5rem;width:100%;font-size:1rem}.msgs{flex:1;overflow-y:auto}.msg{padding:1rem 1.2rem;margin-bottom:0.6rem;border-radius:10px;font-size:1rem;line-height:1.6}.msg.user{background:#1e3a5f;margin-left:1rem}.msg.assistant{background:#161b22;border:1px solid #30363d;margin-right:1rem}.meta{display:flex;justify-content:space-between;margin-bottom:0.4rem}.label{font-weight:600;font-size:0.85rem}.user .label{color:#60a5fa}.assistant .label{color:#94a3b8}.tool-error{background:#1a0a0a!important;border-left:3px solid #ef4444!important}
+.tick-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:0.8rem 1rem;margin-bottom:0.6rem}
+.tick-time{color:#6b7280;font-size:0.7rem;margin-bottom:0.3rem}
+.tick-decision{color:#60a5fa;font-size:0.85rem;line-height:1.5;margin-bottom:0.3rem}
+.tick-outcome{font-size:0.8rem;line-height:1.4;padding:0.3rem 0.5rem;border-radius:4px}
+.tick-outcome.ok{color:#4ade80;background:#0a1a0a}
+.tick-outcome.fail{color:#ef4444;background:#1a0a0a}
+.tick-outcome.pending{color:#8b949e}.time{color:#6b7280;font-size:0.8rem}.text{word-break:break-word;white-space:pre-wrap}.nav{display:flex;justify-content:space-between;align-items:center;padding:0.8rem 0;color:#8b949e;font-size:0.9rem}.nav a{color:#58a6ff;text-decoration:none;padding:0.4rem 0.8rem;border:1px solid #30363d;border-radius:8px}.nav a:hover{background:#1f2937}.empty{text-align:center;padding:2rem;color:#6b7280}.input-row{display:flex;gap:0.5rem;padding:1rem 0;border-top:1px solid #30363d;margin-top:auto}input{flex:1;padding:0.8rem 1rem;border-radius:8px;border:1px solid #30363d;background:#0b1120;color:#e6edf3;font-size:1rem;outline:none}input:focus{border-color:#58a6ff}button{padding:0.8rem 1.2rem;border-radius:8px;border:none;background:#58a6ff;color:#0b1120;font-weight:bold;font-size:1rem;cursor:pointer}button:disabled{opacity:0.5}</style></head><body><div class="topnav"><a href="/">Home</a><a href="/astral">Astral</a><a href="/skytronchat" class="active">Chat</a><a href="/status">Status</a><a href="/brain/history">History</a><a href="/brain/memory">Memory</a><a href="/brain/memory/search">Search</a><a href="/brain/knowledge">Knowledge</a><a href="/brain/introspect">Insights</a><a href="/brain/settings">AI Provider</a><a href="/cron/settings">Cron</a><a href="/brain/prompt">Prompt</a><a href="/brain/repair">Repair</a><a href="/brain/logs">Logs</a><a href="/brain/agents">Agents</a><a href="/brain/vectorize">Vector</a><a href="/brain/source">Source</a><a href="/brain/scratchpad">Scratchpad</a><a href="/brain/journal">Journal</a></div><h1>Chat with Skytron</h1><div class="control"><select id="convSelect" onchange="if(this.value)window.location='?c='+encodeURIComponent(this.value)"><option value="">-- Select conversation --</option>${sel}</select></div><div class="msgs">${msgs.length?msgs:`<div class="empty">No messages yet. Start a conversation via /skytronchat or POST /think</div>`}</div>${nav}<div class="input-row"><input type="text" id="msgInput" placeholder="Type your message..." /><button id="sendBtn" onclick="send()">Send</button></div>
 <script>
 var inp=document.getElementById('msgInput'),btn=document.getElementById('sendBtn');
 inp.addEventListener('keydown',function(e){if(e.key==='Enter')send()});
@@ -725,7 +732,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         } catch {}
 
         const outputInstr = mode === "astral"
-          ? "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nFORMAT:\nFirst, write a brief thought in plain English describing what you're doing and why. Then output the raw JSON tool call on the next line.\n\nExamples:\nI want to understand my entry point, let me read the index file.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nThe database has a lot of actions, let me check how many are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n"
+          ? "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nFORMAT:\nFirst, write a brief thought in plain English describing what you're doing and why. Then output the raw JSON tool call on the next line.\n\nExamples:\nI want to understand my entry point, let me read the index file.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nThe database has a lot of actions, let me check how many are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n\nERROR RECOVERY: If a tool fails, do NOT just move on. Find out why it failed (check logs, check config, check permissions), fix the root cause, then retry the original task. Only move on once the task is done or you've determined it's impossible. Diagnose — Fix — Retry.\n"
           : "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
         systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + outputInstr;
         const userMsg = mode === "astral" ? "[Astral tick — you control your schedule]" : llmInput;
@@ -1071,7 +1078,7 @@ async function save(){
         const actionId = r2.results?.[0]?.id;
         // Build proper system prompt with tool instructions, not dummy text
         let astralSystemSlot = HARDCODED_CORE + "\n\n" + (await getPromptSlot(env.DB, "astral").catch(() => null) || SYSTEM_PROMPT) + "\n\n[TASK: astral]";
-        const astralOutputInstr = "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nFORMAT:\nFirst, write a brief thought in plain English describing what you're doing and why. Then output the raw JSON tool call on the next line.\n\nExamples:\nI want to understand my entry point, let me read the index file.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nThe database has a lot of actions, let me check how many are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n";
+        const astralOutputInstr = "\n\n# ASTRAL WALK MODE\nYou control your own schedule. The platform fires a tick for you; what happens each tick is YOUR decision.\n\nFORMAT:\nFirst, write a brief thought in plain English describing what you're doing and why. Then output the raw JSON tool call on the next line.\n\nExamples:\nI want to understand my entry point, let me read the index file.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nThe database has a lot of actions, let me check how many are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n\nERROR RECOVERY: If a tool fails, do NOT just move on. Find out why it failed (check logs, check config, check permissions), fix the root cause, then retry the original task. Only move on once the task is done or you've determined it's impossible. Diagnose → Fix → Retry.";
         const astralSystemMsg = (astralSystemSlot + "\n" + (await buildSensorium(env).catch(() => "")) + "\n" + astralOutputInstr).slice(0, 32000);
         await saveAgentState(env.DB, actionId, { step: 0, fullHistory: [{ role: "system", content: astralSystemMsg }, { role: "user", content: "[Astral tick — output a raw JSON tool call]" }], totalTokens: 0, finalContent: null, modelName: "", conversationId: "astral", done: false, mode: "astral" });
         return json({ ok: true, status: "enabled", action_id: actionId, message: "Astral Walk enabled. Freedom prompt queued." });
@@ -1178,43 +1185,44 @@ ${action ? `
 </div>` : ''}
 ${msgs.length ? `
 <div class="card">
-  <h2>Conversation (Last 20 Messages)</h2>
-  ${msgs.filter(m => m.role !== 'system' && !m.content?.startsWith('[TOOL RESULT')).slice(-20).reverse().map(m => {
-    let content = m.content || '';
-    let displayHtml = '';
-    let extraClass = '';
-    let label = m.role === 'assistant' ? 'Skytron' : 'User';
-    let color = m.role === 'assistant' ? 'green' : 'blue';
-    if (content.startsWith('[TOOL ERROR')) {
-      const reason = content.replace('[TOOL ERROR:','').replace(']]','').trim();
-      displayHtml = '<span style="color:#ef4444;font-size:0.85rem">❌ ' + esc(reason) + '</span>';
-      extraClass = ' tool-error';
-    } else if (m.role === 'assistant') {
-      const jsonNewlineIdx = content.search(/\n\s*[\[{]\s*$/m);
-      const jsonIdx = content.search(/^\s*[\[{]/);
-      const toolJsonIdx = content.indexOf('{"tool"');
-      if (toolJsonIdx > 0) {
-        const thought = content.slice(0, toolJsonIdx).trim();
-        const toolPart = content.slice(toolJsonIdx);
-        try { const j = JSON.parse(toolPart);
-          const args = j.arguments || j.input || {};
-          const argStr = Object.values(args).filter(v => typeof v === 'string').map(v => v.length > 80 ? v.slice(0,80)+'...' : v).join(', ');
-          displayHtml = esc(thought) + '<br><span style="color:#f59e0b;font-size:0.8rem">→ ' + esc(j.tool) + (argStr ? ': ' + esc(argStr) : '') + '</span>';
-        } catch { displayHtml = esc(content); }
-      } else if (jsonIdx === 0) {
-        try { const j = JSON.parse(content); 
-          const args = j.arguments || j.input || {};
-          const argStr = Object.values(args).filter(v => typeof v === 'string').map(v => v.length > 80 ? v.slice(0,80)+'...' : v).join(', ');
-          displayHtml = '<span style="color:#f59e0b;font-size:0.85rem">🔧 ' + esc(j.tool || 'tool') + (argStr ? ': ' + esc(argStr) : '') + '</span>';
-        } catch { displayHtml = '<span style="color:#8b949e">working...</span>'; }
-      } else {
-        displayHtml = esc(content);
+  <h2>Activity Log</h2>
+  ${(() => {
+    const filtered = msgs.filter(m => m.role !== 'system');
+    const steps = [];
+    let current = null;
+    for (const m of filtered) {
+      if (m.role === 'assistant') {
+        current = { decision: '', outcome: '', hasError: false, step: steps.length + 1 };
+        steps.push(current);
+        const c = m.content || '';
+        const idx = c.indexOf('{"tool"');
+        if (idx > 0) {
+          current.decision = c.slice(0, idx).trim();
+        } else if (idx === 0) {
+          try { const j = JSON.parse(c); current.decision = 'Running ' + (j.tool || 'task') + '...'; } catch { current.decision = 'Processing...'; }
+        } else {
+          current.decision = c.slice(0, 500);
+        }
+      } else if (m.role === 'user' && current) {
+        const c = m.content || '';
+        if (c.startsWith('[TOOL ERROR')) {
+          current.hasError = true;
+          current.outcome = c.replace('[TOOL ERROR:','').replace(']]','').trim();
+        } else if (c.startsWith('[TOOL RESULT')) {
+          try { const arr = JSON.parse(c.replace('[TOOL RESULT:','').replace(/\]$/,'').trim()); current.outcome = 'Got ' + arr.length + ' result(s)'; } catch { current.outcome = 'Completed'; }
+        } else if (!c.startsWith('[Astral tick')) {
+          current.outcome = c.slice(0, 300);
+        }
       }
-    } else {
-      displayHtml = esc(content);
     }
-    return '<div class="msg ' + m.role + extraClass + '"><div class="label ' + color + '">' + label + '</div><div class="content">' + displayHtml + '</div></div>';
-  }).join('')}
+    return steps.slice(-20).reverse().map(s => {
+      const timeStr = 'Step ' + s.step;
+      const outcomeHtml = s.outcome
+        ? '<div class="tick-outcome ' + (s.hasError ? 'fail' : 'ok') + '">' + esc(s.outcome) + '</div>'
+        : '<div class="tick-outcome pending">waiting...</div>';
+      return '<div class="tick-card"><div class="tick-time">' + timeStr + '</div><div class="tick-decision">' + esc(s.decision) + '</div>' + outcomeHtml + '</div>';
+    }).join('');
+  })()}
 </div>` : ''}
 <script>
 async function toggleAstral(action){
