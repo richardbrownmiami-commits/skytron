@@ -1209,7 +1209,25 @@ ${msgs.length ? `
           current.hasError = true;
           current.outcome = c.replace('[TOOL ERROR:','').replace(']]','').trim();
         } else if (c.startsWith('[TOOL RESULT')) {
-          try { const arr = JSON.parse(c.replace('[TOOL RESULT:','').replace(/\]$/,'').trim()); current.outcome = 'Got ' + arr.length + ' result(s)'; } catch { current.outcome = 'Completed'; }
+          try {
+            const raw = c.replace('[TOOL RESULT:','').replace(/\]$/,'').trim();
+            const data = JSON.parse(raw);
+            let txt = '';
+            if (Array.isArray(data)) {
+              txt = data.slice(0, 3).map(item => {
+                if (typeof item === 'string') return item.slice(0, 120);
+                const vals = Object.values(item).filter(v => typeof v === 'string' && v.length < 300);
+                return vals[0] || JSON.stringify(item).slice(0, 100);
+              }).filter(Boolean).join('; ');
+              if (data.length > 3) txt += ' (+' + (data.length - 3) + ' more)';
+            } else if (typeof data === 'object' && data) {
+              const vals = Object.values(data).filter(v => typeof v === 'string' && v.length < 300);
+              txt = vals[0] || JSON.stringify(data).slice(0, 200);
+            } else {
+              txt = String(data).slice(0, 200);
+            }
+            current.outcome = txt || 'Done';
+          } catch { current.outcome = 'Completed'; }
         } else if (!c.startsWith('[Astral tick')) {
           current.outcome = c.slice(0, 300);
         }
