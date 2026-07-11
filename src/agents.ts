@@ -99,6 +99,19 @@ export async function processOneStep(env, action) {
       const chatId = "skytron-" + state.conversationId;
       logActivity(db, "llm_call", { actionId: action.id, summary: "LLM call — step " + state.step + ", model: pending", details: "messages: " + (reqBody.messages?.length || 0) + ", task: " + (action.task || "chat") });
       resp = await callLLM(env, reqBody, chatId);
+      // Track per-provider status in identity table
+      try {
+        if (resp?.model && !resp.model?.includes("none")) {
+          const pk = resp.model.startsWith("workers-ai") ? "llm_status_workers_ai" : resp.model.startsWith("openrouter") ? "llm_status_openrouter" : "llm_status_other";
+          await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES (?1,'ok',datetime('now'))").bind(pk).run();
+        }
+        if (resp?.errors) {
+          for (const e of resp.errors) {
+            const pk = e.includes("Workers AI") ? "llm_status_workers_ai" : e.includes("OpenRouter") ? "llm_status_openrouter" : e.includes("BUDDHI_DWAR") ? "llm_status_buddhidwar" : e.includes("Universal") ? "llm_status_universal" : null;
+            if (pk) await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES (?1,?2,datetime('now'))").bind(pk, "error:" + e.slice(0, 200)).run();
+          }
+        }
+      } catch {}
       if (!resp) continue;
       if (!resp.content && resp.errors) {
         lastErrors = resp.errors;
