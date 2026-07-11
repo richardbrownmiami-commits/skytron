@@ -12,8 +12,9 @@ import { dispatchTool, listTools, toolDefinitions } from './tools';
 import { storeMemory, saveAgentState, loadAgentState, deleteAgentState, logActivity } from './db';
 export async function processOneStep(env, action) {
   const db = env.DB;
-  const state = await loadAgentState(db, action.id);
-  if (!state) { await db.prepare("UPDATE actions SET status='error', error='missing state' WHERE id=?1").bind(action.id).run(); return; }
+  try {
+    const state = await loadAgentState(db, action.id);
+    if (!state) { await db.prepare("UPDATE actions SET status='error', error='missing state' WHERE id=?1").bind(action.id).run(); return; }
 
   if (state.done) { await finalizeAction(db, action.id, state); return; }
 
@@ -213,6 +214,9 @@ export async function processOneStep(env, action) {
     return;
   }
   await finalizeAction(db, action.id, state);
+  } catch (e) {
+    await db.prepare("UPDATE actions SET status='error', error=?1 WHERE id=?2").bind("processOneStep error: " + (e?.message || String(e)).slice(0, 500), action.id).run();
+  }
 }
 
 export async function finalizeAction(db, actionId, state) {
