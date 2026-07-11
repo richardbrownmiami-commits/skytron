@@ -1190,55 +1190,35 @@ ${msgs.length ? `
     const filtered = msgs.filter(m => m.role !== 'system');
     const steps = [];
     let current = null;
-    for (const m of filtered) {
+    let prevStep = null;
+    for (let i = 0; i < filtered.length; i++) {
+      const m = filtered[i];
       if (m.role === 'assistant') {
         current = { decision: '', outcome: '', hasError: false, step: steps.length + 1 };
         steps.push(current);
         const c = m.content || '';
         const idx = c.indexOf('{"tool"');
-        if (idx > 0) {
-          current.decision = c.slice(0, idx).trim();
-        } else if (idx === 0) {
-          try { const j = JSON.parse(c); current.decision = 'Running ' + (j.tool || 'task') + '...'; } catch { current.decision = 'Processing...'; }
-        } else {
-          current.decision = c.slice(0, 500);
+        const thought = idx > 0 ? c.slice(0, idx).trim() : (idx === 0 ? '' : c.slice(0, 500));
+        current.decision = thought || 'Working...';
+        if (prevStep && !prevStep.outcome && !prevStep.hasError) {
+          prevStep.outcome = thought || 'Done';
         }
+        prevStep = current;
       } else if (m.role === 'user' && current) {
         const c = m.content || '';
         if (c.startsWith('[TOOL ERROR')) {
           current.hasError = true;
           current.outcome = c.replace('[TOOL ERROR:','').replace(']]','').trim();
-        } else if (c.startsWith('[TOOL RESULT')) {
-          try {
-            const raw = c.replace('[TOOL RESULT:','').replace(/\]$/,'').trim();
-            const data = JSON.parse(raw);
-            let txt = '';
-            if (Array.isArray(data)) {
-              txt = data.slice(0, 3).map(item => {
-                if (typeof item === 'string') return item.slice(0, 120);
-                const vals = Object.values(item).filter(v => typeof v === 'string' && v.length < 300);
-                return vals[0] || JSON.stringify(item).slice(0, 100);
-              }).filter(Boolean).join('; ');
-              if (data.length > 3) txt += ' (+' + (data.length - 3) + ' more)';
-            } else if (typeof data === 'object' && data) {
-              const vals = Object.values(data).filter(v => typeof v === 'string' && v.length < 300);
-              txt = vals[0] || JSON.stringify(data).slice(0, 200);
-            } else {
-              txt = String(data).slice(0, 200);
-            }
-            current.outcome = txt || 'Done';
-          } catch { current.outcome = 'Completed'; }
-        } else if (!c.startsWith('[Astral tick')) {
-          current.outcome = c.slice(0, 300);
         }
       }
     }
     return steps.slice(-20).reverse().map(s => {
-      const timeStr = 'Step ' + s.step;
-      const outcomeHtml = s.outcome
-        ? '<div class="tick-outcome ' + (s.hasError ? 'fail' : 'ok') + '">' + esc(s.outcome) + '</div>'
-        : '<div class="tick-outcome pending">waiting...</div>';
-      return '<div class="tick-card"><div class="tick-time">' + timeStr + '</div><div class="tick-decision">' + esc(s.decision) + '</div>' + outcomeHtml + '</div>';
+      const outcomeHtml = s.hasError
+        ? '<div class="tick-outcome fail">' + esc(s.outcome) + '</div>'
+        : s.outcome
+          ? '<div class="tick-outcome ok">' + esc(s.outcome) + '</div>'
+          : '<div class="tick-outcome pending">waiting...</div>';
+      return '<div class="tick-card"><div class="tick-time">Step ' + s.step + '</div><div class="tick-decision">' + esc(s.decision) + '</div>' + outcomeHtml + '</div>';
     }).join('');
   })()}
 </div>` : ''}
