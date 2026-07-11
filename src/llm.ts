@@ -34,6 +34,7 @@ async function fetchWithRetry(url, opts, maxRetries = 3) {
 
 const DEFAULT_SETTINGS = {
   workers_ai: { enabled: true },
+  openrouter: { enabled: true },
   buddhidwar: { enabled: false, api_key: "" },
   universal: { enabled: false, endpoint: "", api_key: "", model: "" }
 };
@@ -50,6 +51,7 @@ export async function callLLM(env, body, sessionId) {
       if (row?.content) {
         const parsed = JSON.parse(row.content);
         if (parsed.workers_ai) settings.workers_ai = { ...settings.workers_ai, ...parsed.workers_ai };
+        if (parsed.openrouter) settings.openrouter = { ...settings.openrouter, ...parsed.openrouter };
         if (parsed.buddhidwar) settings.buddhidwar = { ...settings.buddhidwar, ...parsed.buddhidwar };
         if (parsed.universal) settings.universal = { ...settings.universal, ...parsed.universal };
       }
@@ -79,7 +81,7 @@ export async function callLLM(env, body, sessionId) {
   }
 
   // Priority 1.5: OpenRouter (direct emergency fallback via Cloudflare secret)
-  if (env.OPENROUTER_API_KEY) {
+  if (settings.openrouter?.enabled !== false && env.OPENROUTER_API_KEY) {
     try {
       // Truncate messages to stay within OpenRouter free model context limits
       const orMessages = body.messages.map(function(m) {

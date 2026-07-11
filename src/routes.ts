@@ -570,7 +570,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       } catch (e) { attempts.push({ action: "BD gateway health check", result: "failed", detail: e.message }); }
 
       // Attempt 2: Test OpenRouter directly
-      if (env.OPENROUTER_API_KEY) {
+    if (llmSettings.openrouter?.enabled !== false && env.OPENROUTER_API_KEY) {
         try {
           const orResp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
@@ -1034,10 +1034,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
   // === Settings page (LLM API config) ===
   if (url.pathname === "/brain/settings" && req.method === "GET") {
-    let settings = { workers_ai: { enabled: true }, buddhidwar: { enabled: false, api_key: "" }, universal: { enabled: false, endpoint: "", api_key: "", model: "" } };
+    let settings = { workers_ai: { enabled: true }, openrouter: { enabled: true }, buddhidwar: { enabled: false, api_key: "" }, universal: { enabled: false, endpoint: "", api_key: "", model: "" } };
     try {
       const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first();
-      if (row?.content) { const p = JSON.parse(row.content); if (p.workers_ai) settings.workers_ai = p.workers_ai; if (p.buddhidwar) settings.buddhidwar = p.buddhidwar; if (p.universal) settings.universal = p.universal; }
+      if (row?.content) { const p = JSON.parse(row.content); if (p.workers_ai) settings.workers_ai = p.workers_ai; if (p.openrouter) settings.openrouter = p.openrouter; if (p.buddhidwar) settings.buddhidwar = p.buddhidwar; if (p.universal) settings.universal = p.universal; }
     } catch {}
     const s = JSON.stringify(settings).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
     return new Response(`<!DOCTYPE html>
@@ -1083,10 +1083,11 @@ h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.25rem}
 <div id="app"><p style="color:#8b949e">Loading settings...</p></div>
 
 <script>
-const DEFAULT={workers_ai:{enabled:true},buddhidwar:{enabled:false,api_key:""},universal:{enabled:false,endpoint:"",api_key:"",model:""}};
+const DEFAULT={workers_ai:{enabled:true},openrouter:{enabled:true},buddhidwar:{enabled:false,api_key:""},universal:{enabled:false,endpoint:"",api_key:"",model:""}};
 const SETTINGS=${s};
 function render(s){
   const wa=s.workers_ai||DEFAULT.workers_ai;
+  const or=s.openrouter||DEFAULT.openrouter;
   const bd=s.buddhidwar||DEFAULT.buddhidwar;
   const univ=s.universal||DEFAULT.universal;
   return \`
@@ -1097,6 +1098,15 @@ function render(s){
         <label for="wa_enabled">Enabled</label>
       </div>
       <p style="color:#8b949e;font-size:0.8rem">Uses Cloudflare Workers AI binding (\${wa.enabled!==false?'@cf/zai-org/glm-4.7-flash':'disabled'}). No config needed — set up in wrangler.toml.</p>
+    </div>
+
+    <div class="card">
+      <h2>OpenRouter <span class="badge">Cloudflare secret</span></h2>
+      <div class="toggle">
+        <label class="switch"><input type="checkbox" id="or_enabled" \${or.enabled!==false?'checked':''}><span class="slider"></span></label>
+        <label for="or_enabled">Enabled</label>
+      </div>
+      <p style="color:#8b949e;font-size:0.8rem">Enabled/disabled via \${or.enabled!==false?'settings toggle':'settings toggle'}. API key is set as Cloudflare secret OPENROUTER_API_KEY. Toggle off to disable fallback to OpenRouter free models.</p>
     </div>
 
     <div class="card">
@@ -1142,6 +1152,7 @@ async function save(){
   const msg=document.getElementById('msg');msg.style.display='none';
   const settings={
     workers_ai:{enabled:document.getElementById('wa_enabled').checked},
+    openrouter:{enabled:document.getElementById('or_enabled').checked},
     buddhidwar:{enabled:document.getElementById('bd_enabled').checked,api_key:document.getElementById('bd_api_key').value.trim()},
     universal:{enabled:document.getElementById('univ_enabled').checked,endpoint:document.getElementById('univ_endpoint').value.trim(),api_key:document.getElementById('univ_api_key').value.trim(),model:document.getElementById('univ_model').value.trim()}
   };
@@ -1164,6 +1175,7 @@ async function save(){
       if (typeof body !== "object") return json({ error: "invalid JSON body" }, 400);
       const sanitized = {
         workers_ai: { enabled: body.workers_ai?.enabled !== false },
+        openrouter: { enabled: body.openrouter?.enabled !== false },
         buddhidwar: { enabled: !!body.buddhidwar?.enabled, api_key: (body.buddhidwar?.api_key || "").slice(0, 500) },
         universal: { enabled: !!body.universal?.enabled, endpoint: (body.universal?.endpoint || "").slice(0, 500), api_key: (body.universal?.api_key || "").slice(0, 500), model: (body.universal?.model || "").slice(0, 200) }
       };
