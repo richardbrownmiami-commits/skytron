@@ -559,15 +559,17 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       let llmSettings = {};
       try { const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first(); if (row?.content) llmSettings = JSON.parse(row.content); } catch {}
 
-      // Attempt 1: Test BD gateway with health endpoint
+      // Attempt 1: Test BD gateway with actual chat completion (not just health endpoint)
       try {
-        const bdResp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/health", {
-          headers: { Authorization: "Bearer " + env.BRAIN_KEY },
-          signal: AbortSignal.timeout(5000)
+        const bdResp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + (llmSettings.buddhidwar?.api_key || env.BRAIN_KEY || "") },
+          body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], model: "openrouter/free", max_tokens: 1 }),
+          signal: AbortSignal.timeout(10000)
         });
-        if (bdResp.ok) { fixed = true; attempts.push({ action: "BD gateway health check", result: "ok", detail: "Gateway responded OK" }); }
-        else { attempts.push({ action: "BD gateway health check", result: "failed", detail: "HTTP " + bdResp.status }); }
-      } catch (e) { attempts.push({ action: "BD gateway health check", result: "failed", detail: e.message }); }
+        if (bdResp.ok) { fixed = true; attempts.push({ action: "BD chat completion test", result: "ok", detail: "BD responded to chat completion" }); }
+        else { const err = await bdResp.text().catch(() => ""); attempts.push({ action: "BD chat completion test", result: "failed", detail: "HTTP " + bdResp.status + ": " + err.slice(0, 200) }); }
+      } catch (e) { attempts.push({ action: "BD chat completion test", result: "failed", detail: e.message }); }
 
       // Attempt 2: Test OpenRouter directly
     if (llmSettings.openrouter?.enabled !== false && env.OPENROUTER_API_KEY) {
@@ -1224,6 +1226,23 @@ async function save(){
       const msgs = state?.fullHistory?.filter(m => m.role !== "system") || [];
       const toolCalls = msgs.filter(m => m.role === "assistant" && m.content?.includes('"tool"')).length;
       const esc = s => (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      // Load provider statuses and recent failures for display
+      let providerStatuses = [];
+      try {
+        const rows = await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'llm_status_%'").all();
+        if (rows.results) {
+          const labels = { workers_ai: "Workers AI", openrouter: "OpenRouter", buddhidwar: "BUDDHI_DWAR", universal: "Universal AI" };
+          for (const r of rows.results) {
+            const name = labels[r.key.replace("llm_status_", "")];
+            if (name) providerStatuses.push({ name, value: r.value });
+          }
+        }
+      } catch {}
+      let recentProviderFails = [];
+      try {
+        const rows = await env.DB.prepare("SELECT content, created_at FROM brain_logs WHERE (step='astral_llm_fail' OR step='provider_fail' OR step='llm_call') AND content IS NOT NULL ORDER BY id DESC LIMIT 5").all();
+        if (rows.results) recentProviderFails = rows.results;
+      } catch {}
       return new Response(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1297,6 +1316,22 @@ ${astralActive
   <div class="row"><span class="lbl">Conversation Size</span><span class="val">${msgs.length} messages</span></div>
   ` : `<div class="empty">No astral walk actions yet</div>`}
 </div>
+${providerStatuses.length ? `
+<div class="card">
+  <h2>Provider Status</h2>
+  ${providerStatuses.map(function(p) {
+    const isOk = p.value === "ok";
+    const isError = p.value?.startsWith("error:");
+    const dotColor = isOk ? "#22c55e" : isError ? "#ef4444" : "#8b949e";
+    const errMsg = isError ? esc(p.value.slice(6)) : "";
+    return '<div class="row"><span class="lbl"><span style="color:' + dotColor + '">●</span> ' + esc(p.name) + '</span><span class="val" style="color:' + dotColor + ';font-size:0.8rem;text-align:right;max-width:60%;word-break:break-word">' + (isOk ? "OK" : errMsg || "unknown") + '</span></div>';
+  }).join('')}
+</div>` : ''}
+${recentProviderFails.length ? `
+<div class="card">
+  <h2>Recent Provider Failures</h2>
+  ${recentProviderFails.map(function(f) { return '<div style="padding:4px 0;border-bottom:1px solid #21262d;font-size:0.8rem;color:#ef4444;word-break:break-word">' + esc((f.content||"").slice(0,300)) + '</div>'; }).join('')}
+</div>` : ''}
 ${action ? `
 <div class="card">
   <h2>Latest Input</h2>

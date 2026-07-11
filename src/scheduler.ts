@@ -166,14 +166,31 @@ export async function handleScheduled(controller, env) {
     } catch {}
   }
 
-  // --- Astral auto-recovery: re-queue errored astral actions ---
+  // --- Astral auto-recovery: re-queue errored astral actions, but NOT if all providers are down ---
   try {
     const astralActive = (await env.DB.prepare("SELECT value FROM identity WHERE key='cron_cfg_astral_active'").all()).results?.[0]?.value === "true";
     if (astralActive) {
-      const lastAstral = (await env.DB.prepare("SELECT id, status FROM actions WHERE task='astral' ORDER BY id DESC LIMIT 1").all()).results?.[0];
+      const lastAstral = (await env.DB.prepare("SELECT id, status, error FROM actions WHERE task='astral' ORDER BY id DESC LIMIT 1").all()).results?.[0];
       if (lastAstral && lastAstral.status === 'error') {
-        await env.DB.prepare("UPDATE actions SET status='queued', error=NULL, result=NULL, completed_at=NULL WHERE id=?1").bind(lastAstral.id).run();
-        logActivity(env.DB, "astral_recovery", { summary: "Re-queued errored astral action " + lastAstral.id });
+        // Check if all providers are down — if last 3 errors are all LLM failures, stop re-queuing
+        const recentErrs = (await env.DB.prepare("SELECT error FROM actions WHERE task='astral' AND status='error' ORDER BY id DESC LIMIT 3").all()).results || [];
+        const allProviderFailures = recentErrs.length >= 3 && recentErrs.every(function(r) { return (r.error || "").includes("LLM provider failed") || (r.error || "").includes("all providers unreachable") || (r.error || "").includes("provider fail"); });
+        if (allProviderFailures) {
+          // Add cooldown: set a flag so we only re-queue once per 5 minutes
+          const cooldownRow = await env.DB.prepare("SELECT value FROM identity WHERE key='astral_cooldown_until'").first();
+          const cooldownUntil = cooldownRow?.value || "1970-01-01";
+          const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+          if (now > cooldownUntil) {
+            // Cooldown expired — re-queue once with an explanatory message, then set next cooldown
+            await env.DB.prepare("UPDATE actions SET status='queued', error='All LLM providers down — waiting 5 min before retry', result=NULL, completed_at=NULL WHERE id=?1").bind(lastAstral.id).run();
+            const nextCooldown = new Date(Date.now() + 300000).toISOString().replace("T", " ").slice(0, 19);
+            await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('astral_cooldown_until', ?1, datetime('now'))").bind(nextCooldown).run();
+            logActivity(env.DB, "astral_cooldown", { summary: "All providers down — re-queued astral " + lastAstral.id + " with 5 min cooldown" });
+          }
+        } else {
+          await env.DB.prepare("UPDATE actions SET status='queued', error=NULL, result=NULL, completed_at=NULL WHERE id=?1").bind(lastAstral.id).run();
+          logActivity(env.DB, "astral_recovery", { summary: "Re-queued errored astral action " + lastAstral.id });
+        }
       }
     }
   } catch (e) { console.error("astral_recovery error:", e); }
