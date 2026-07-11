@@ -166,6 +166,18 @@ export async function handleScheduled(controller, env) {
     } catch {}
   }
 
+  // --- Astral auto-recovery: re-queue errored astral actions ---
+  try {
+    const astralActive = (await env.DB.prepare("SELECT value FROM identity WHERE key='cron_cfg_astral_active'").all()).results?.[0]?.value === "true";
+    if (astralActive) {
+      const lastAstral = (await env.DB.prepare("SELECT id, status FROM actions WHERE task='astral' ORDER BY id DESC LIMIT 1").all()).results?.[0];
+      if (lastAstral && lastAstral.status === 'error') {
+        await env.DB.prepare("UPDATE actions SET status='queued', error=NULL, result=NULL, completed_at=NULL WHERE id=?1").bind(lastAstral.id).run();
+        logActivity(env.DB, "astral_recovery", { summary: "Re-queued errored astral action " + lastAstral.id });
+      }
+    }
+  } catch (e) { console.error("astral_recovery error:", e); }
+
   // --- Tick counter ---
   let tickCount = 0;
   try {
