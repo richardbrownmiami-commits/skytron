@@ -195,6 +195,15 @@ export async function handleScheduled(controller, env) {
     }
   } catch (e) { console.error("astral_recovery error:", e); }
 
+  // --- Source file index: keeps a flat list of all source_ keys in knowledge ---
+  try {
+    const srcRows = await env.DB.prepare("SELECT key FROM brain_knowledge WHERE key LIKE 'source_%' ORDER BY key").all();
+    if (srcRows.results?.length) {
+      const index = srcRows.results.map(r => r.key.replace("source_", "")).join("\n");
+      await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('file_index', ?1, 'system', 'cron')").bind(index).run();
+    }
+  } catch {}
+
   // --- Tick counter ---
   let tickCount = 0;
   try {

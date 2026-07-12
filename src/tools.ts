@@ -283,7 +283,7 @@ export const toolDefinitions = {
     },
   },
   github_get_file: {
-    description: "Read a file from a GitHub repository. Returns content and SHA. repo is the owner/name (e.g. 'user/repo'). path starts from repo root (e.g. 'src/index.ts'). branch defaults to 'main'. Your repo is 'richardbrownmiami-commits/skytron'.",
+    description: "Read a file from a GitHub repository. Returns content and SHA. repo is the owner/name (e.g. 'user/repo'). path starts from repo root (e.g. 'src/index.ts'). branch defaults to 'main'. Your repo is 'richardbrownmiami-commits/skytron'. Files prefixed source_ are auto-fetched from local knowledge — no GitHub needed.",
     schema: z.object({
       repo: z.string().describe("REQUIRED. Format: 'owner/repo'. Your repo: 'richardbrownmiami-commits/skytron'"),
       path: z.string().optional().describe("File path from repo root, e.g. 'src/index.ts'"),
@@ -292,10 +292,18 @@ export const toolDefinitions = {
       branch: z.string().optional().describe("Optional. Defaults to 'main'"),
     }).refine(d => d.path || d.file_path || d.filepath, { message: "path, file_path, or filepath is required" }),
     execute: async (env, input) => {
+      const filePath = input.path || input.file_path || input.filepath;
+      // Auto-redirect source_ paths to brain_knowledge (no GitHub call needed)
+      if (filePath && (filePath.startsWith("source_") || filePath.startsWith("source_src"))) {
+        const key = filePath.replace(/^.*?source_/, "source_");
+        try {
+          const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key=?1").bind(key).first();
+          if (row?.content) return "[READ FROM LOCAL KNOWLEDGE]\n" + row.content.slice(0, 8000);
+        } catch {}
+      }
       const token = env.GH_PAT;
       if (!token) return "[TOOL ERROR: No GitHub token configured (GH_PAT)]";
       if (!input.repo) return "[TOOL ERROR: repo is REQUIRED. Use 'richardbrownmiami-commits/skytron']";
-      const filePath = input.path || input.file_path || input.filepath;
       const url = "https://api.github.com/repos/" + input.repo + "/contents/" + filePath + (input.branch ? "?ref=" + encodeURIComponent(input.branch) : "");
       const resp = await fetch(url, { headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.v3+json", "User-Agent": "Saraha-Brain" }, signal: AbortSignal.timeout(10000) });
       if (!resp.ok) return "[TOOL ERROR: GitHub " + resp.status + " — " + (await resp.text().catch(() => "")).slice(0, 200) + ". Use 'richardbrownmiami-commits/skytron' as repo.]";
