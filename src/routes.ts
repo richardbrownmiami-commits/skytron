@@ -990,6 +990,16 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     } catch (e) { return json({ error: e.message }, 500); }
   }
 
+  if (url.pathname === "/brain/identity" && req.method === "GET") {
+    const key = url.searchParams.get("key");
+    if (!key) {
+      const rows = await env.DB.prepare("SELECT key, value, updated_at FROM identity WHERE key IN ('last_wake_up','last_emergency_repair')").all();
+      return json({ entries: rows.results || [] });
+    }
+    const row = await env.DB.prepare("SELECT value, updated_at FROM identity WHERE key=?1").bind(key).first();
+    return json({ key, value: row?.value || null, updated_at: row?.updated_at || null });
+  }
+
   if (url.pathname === "/brain/backfill" && req.method === "POST") {
     try {
       const keepCats = ["identity","architecture","tools","auto_learned","lesson","behavior"];
