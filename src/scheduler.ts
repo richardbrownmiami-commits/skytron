@@ -203,17 +203,17 @@ export async function handleScheduled(controller, env) {
       const index = srcRows.results.map(r => r.key.replace("source_", "")).join("\n");
       await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('file_index', ?1, 'system', 'cron')").bind(index).run();
     } else if (env.GH_PAT) {
-      // No source files found — seed them from GitHub
+      // No source files found — seed them from GitHub (parallel, fast, one batch per tick)
       const srcFiles = ["src/index.ts","src/routes.ts","src/agents.ts","src/tools.ts","src/llm.ts","src/scheduler.ts","src/constants.ts","src/db.ts"];
-      for (const fp of srcFiles) {
-        try {
-          const resp = await fetch("https://api.github.com/repos/richardbrownmiami-commits/skytron/contents/" + fp, { headers: { Authorization: "Bearer " + env.GH_PAT, Accept: "application/vnd.github.v3+json", "User-Agent": "Skytron" }, signal: AbortSignal.timeout(10000) });
-          if (resp.ok) {
-            const data = await resp.json();
-            const decoded = atob(data.content);
-            await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'source', 'github')").bind("source_" + fp.replace(/\//g, "_"), decoded).run();
-          }
-        } catch {}
+      const results = await Promise.allSettled(srcFiles.map(fp =>
+        fetch("https://api.github.com/repos/richardbrownmiami-commits/skytron/contents/" + fp, { headers: { Authorization: "Bearer " + env.GH_PAT, Accept: "application/vnd.github.v3+json", "User-Agent": "Skytron" }, signal: AbortSignal.timeout(8000) })
+          .then(r => r.ok ? r.json() : null)
+          .then(d => d?.content ? { key: "source_" + fp.replace(/\//g, "_"), content: atob(d.content) } : null)
+      ));
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) {
+          try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'source', 'github')").bind(r.value.key, r.value.content).run(); } catch {}
+        }
       }
       // Rebuild index after seeding
       const updated = await env.DB.prepare("SELECT key FROM brain_knowledge WHERE key LIKE 'source_%' ORDER BY key").all();
