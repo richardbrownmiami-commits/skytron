@@ -1,27 +1,28 @@
 // === Skytron Scheduler (CRON ENGINE) ===
-// Runs every 120s via [[triggers]] pattern in wrangler.toml.
-// Execution order per tick:
-//   1. Night sleep check (early return if UTC 20-2)
-//   2. Process queued actions (pick 1 queued → set running → processOneStep)
-//   3. Recover stuck actions (>2 min running → reset with checkpoint, independent of step 2)
-//   4. Idle exploration (if no actions pending and idle_project enabled)
-//   5. Process sub-agents (pick 1 queued brain_agent → processOneAgentStep, independent)
-//   6. Wake-up heartbeat (queue self-explore every ~15min, independent)
-//   7. Tick counter (persisted in identity table)
-//   8. Emergency self-repair (detect WA+BD down, use OpenRouter to fix)
-//   9. Maintenance Cycle (every 60 ticks = ~2h): extract lessons, memory loop, trim noise
-//  10. Daily cleanup: trim old memories (>200), logs (>1000), actions (>500), agents (>50)
+// Two cron triggers in wrangler.toml:
+//   * * * * *  → non-LLM tasks (every 1 min): maintenance, recovery, heartbeat, consolidation
+//   */5 * * * * → LLM tasks (every 5 min): process actions, sub-agents, emergency repair
 import { initSchema, indexKnowledgeForSearch, logActivity, buildSensorium } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 import { callOpenRouter } from './llm';
 import { collectToScratchpad } from './consolidate';
 
-export async function handleScheduled(controller, env) {
+export async function handleScheduled(controller, env, cronPattern = "* * * * *") {
   try { await initSchema(env.DB, env); } catch {}
   const db = env.DB;
-
-  // --- Load settings ---
   const settings = await getCronSettings(env.DB);
+  if (!settings.enabled) return;
+
+  if (cronPattern === "*/5 * * * *") {
+    await runLLMTasks(settings, env, db);
+  } else {
+    await runNonLLMTasks(settings, env, db);
+  }
+}
+
+// ── LLM CRON (every 5 min) ──────────────────────────────────────────
+// Only tasks that call the LLM: process actions, sub-agents, emergency repair
+async function runLLMTasks(settings, env, db) {
 
   // --- Step 2: Process queued actions ---
   if (settings.process_actions) try {
@@ -38,7 +39,64 @@ export async function handleScheduled(controller, env) {
     }
   } catch (e) { console.error("process_actions error:", e); }
 
-  // --- Step 3: Recover stuck actions (independent of step 2) ---
+  // --- Step 5: Process sub-agents ---
+  if (settings.process_agents) try {
+    await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run();
+    await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
+    const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
+    if (ar.results?.length) {
+      logActivity(db, "scheduler_tick", { summary: "Processing sub-agent " + ar.results[0].id + " — " + (ar.results[0].name || ""), details: "role: " + (ar.results[0].role || "").slice(0, 200) });
+      await processOneAgentStep(env, ar.results[0]);
+    }
+  } catch (e) { console.error("process_agents error:", e); }
+
+  // --- Emergency self-repair (LLM-dependent part only) ---
+  try {
+    const bdFails = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first();
+    const bdDown = bdFails?.value && parseInt(bdFails.value) >= 3;
+    const waLimited = await env.DB.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
+    const waDown = waLimited?.value && waLimited.value.startsWith(new Date().toISOString().split("T")[0]);
+    if (bdDown && waDown) {
+      const lastRepair = await env.DB.prepare("SELECT value FROM identity WHERE key='last_emergency_repair'").first();
+      const minsSince = lastRepair?.value ? (Date.now() - new Date(lastRepair.value).getTime()) / 60000 : 999;
+      if (minsSince > 30) {
+        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_emergency_repair',datetime('now'),datetime('now'))").run();
+        logActivity(db, "emergency_repair", { summary: "WA + BD both down — running self-repair via OpenRouter" });
+        const diag = await callOpenRouter(env, [
+          { role: "system", content: "You are Skytron's emergency repair routine. WA (Workers AI) and BD (BUDDHI_DWAR gateway) are both down. Available actions: (a) retry WA by clearing wa_limited flag, (b) retry BD by clearing bd_failures flag, (c) test BD connectivity by fetching /v1/status, (d) wait. Respond with one word: 'retry_wa', 'retry_bd', 'test_bd', or 'wait'." },
+          { role: "user", content: "Both LLM providers failed. Fix it." }
+        ], 500);
+        if (diag?.content) {
+          const action = diag.content.trim().toLowerCase();
+          if (action.includes("retry_wa")) {
+            await env.DB.prepare("DELETE FROM identity WHERE key='wa_limited'").run();
+            logActivity(db, "emergency_repair", { summary: "Cleared wa_limited — will retry WA next tick" });
+          } else if (action.includes("retry_bd")) {
+            await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
+            await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
+            logActivity(db, "emergency_repair", { summary: "Cleared bd_failures + health_flags — will retry BD next tick" });
+          } else if (action.includes("test_bd")) {
+            try {
+              const testResp = env.BRAIN_KEY ? await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/status", { signal: AbortSignal.timeout(5000) }).catch(() => null) : null;
+              const reachable = testResp?.ok ? "yes" : "no";
+              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('emergency_bd_test', ?1, 'lesson', 'auto')").bind("BD connectivity test at " + new Date().toISOString() + ": reachable=" + reachable + (testResp ? " status=" + testResp.status : "")).run();
+              logActivity(db, "emergency_repair", { summary: "Tested BD — reachable=" + reachable });
+            } catch {}
+          } else {
+            logActivity(db, "emergency_repair", { summary: "OpenRouter suggests waiting — " + diag.content.slice(0, 100) });
+          }
+        }
+      }
+    }
+  } catch (e) { console.error("emergency_repair error:", e); }
+
+}
+
+// ── NON-LLM CRON (every 1 min) ──────────────────────────────────────
+// All maintenance, recovery, heartbeat, consolidation, cleanup — no LLM calls
+async function runNonLLMTasks(settings, env, db) {
+
+  // --- Step 3: Recover stuck actions ---
   if (settings.stuck_recovery) try {
     const s = await env.DB.prepare("SELECT * FROM actions WHERE status='running' AND created_at < datetime('now', '-2 minutes') ORDER BY created_at ASC LIMIT 1").all();
     if (s.results?.length) {
@@ -121,7 +179,7 @@ export async function handleScheduled(controller, env) {
     }
   } catch (e) { console.error("loop_detection error:", e); }
 
-  // --- Step 4: Idle exploration (independent of stuck_recovery) ---
+  // --- Step 4: Idle exploration ---
   if (settings.idle_project) try {
     const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
     if (pendingCount === 0) {
@@ -140,48 +198,32 @@ export async function handleScheduled(controller, env) {
     }
   } catch (e) { console.error("idle_project error:", e); }
 
-  // --- Step 5: Process sub-agents (independent of process_actions) ---
-  if (settings.process_agents) try {
-    await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NOT NULL AND updated_at < datetime('now', '-2 minutes')").run();
-    await env.DB.prepare("UPDATE brain_agents SET status='queued', updated_at=datetime('now') WHERE status='running' AND updated_at IS NULL AND created_at < datetime('now', '-2 minutes')").run();
-    const ar = await env.DB.prepare("SELECT * FROM brain_agents WHERE status='queued' ORDER BY created_at ASC LIMIT 1").all();
-    if (ar.results?.length) {
-      logActivity(db, "scheduler_tick", { summary: "Processing sub-agent " + ar.results[0].id + " — " + (ar.results[0].name || ""), details: "role: " + (ar.results[0].role || "").slice(0, 200) });
-      await processOneAgentStep(env, ar.results[0]);
+  // --- Wake-up heartbeat ---
+  try {
+    const lastWake = await env.DB.prepare("SELECT value FROM identity WHERE key='last_wake_up'").first();
+    const lastWakeTime = lastWake?.value || "1970-01-01T00:00:00Z";
+    const minsSince = (Date.now() - new Date(lastWakeTime).getTime()) / 60000;
+    if (minsSince > 15) {
+      const sensorium = await buildSensorium(env);
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_wake_up',datetime('now'),datetime('now'))").run();
+      await env.DB.prepare("INSERT INTO actions (type,status,input,task,created_at) VALUES ('think','queued',?1,'self_explore',datetime('now'))").bind(sensorium + "\n\nWake up. Check your state. Queue tasks, run maintenance, or self-improve. Decide and act.").run();
+      logActivity(env.DB, "wake_up", { summary: "Heartbeat tick — wake-up action queued" });
     }
-  } catch (e) { console.error("process_agents error:", e); }
+  } catch {}
 
-  // --- Wake-up heartbeat (independent of queue state) ---
-  if (settings.enabled) {
-    try {
-      const lastWake = await env.DB.prepare("SELECT value FROM identity WHERE key='last_wake_up'").first();
-      const lastWakeTime = lastWake?.value || "1970-01-01T00:00:00Z";
-      const minsSince = (Date.now() - new Date(lastWakeTime).getTime()) / 60000;
-      if (minsSince > 15) {
-        const sensorium = await buildSensorium(env);
-        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_wake_up',datetime('now'),datetime('now'))").run();
-        await env.DB.prepare("INSERT INTO actions (type,status,input,task,created_at) VALUES ('think','queued',?1,'self_explore',datetime('now'))").bind(sensorium + "\n\nWake up. Check your state. Queue tasks, run maintenance, or self-improve. Decide and act.").run();
-        logActivity(env.DB, "wake_up", { summary: "Heartbeat tick — wake-up action queued" });
-      }
-    } catch {}
-  }
-
-  // --- Astral auto-recovery: re-queue errored astral actions, but NOT if all providers are down ---
+  // --- Astral auto-recovery ---
   try {
     const astralActive = (await env.DB.prepare("SELECT value FROM identity WHERE key='cron_cfg_astral_active'").all()).results?.[0]?.value === "true";
     if (astralActive) {
       const lastAstral = (await env.DB.prepare("SELECT id, status, error FROM actions WHERE task='astral' ORDER BY id DESC LIMIT 1").all()).results?.[0];
       if (lastAstral && lastAstral.status === 'error') {
-        // Check if all providers are down — if last 3 errors are all LLM failures, stop re-queuing
         const recentErrs = (await env.DB.prepare("SELECT error FROM actions WHERE task='astral' AND (status='error' OR error IS NOT NULL AND error != '') ORDER BY id DESC LIMIT 3").all()).results || [];
         const allProviderFailures = recentErrs.length >= 3 && recentErrs.every(function(r) { return (r.error || "").includes("LLM provider failed") || (r.error || "").includes("all providers unreachable") || (r.error || "").includes("provider fail"); });
         if (allProviderFailures) {
-          // Add cooldown: set a flag so we only re-queue once per 5 minutes
           const cooldownRow = await env.DB.prepare("SELECT value FROM identity WHERE key='astral_cooldown_until'").first();
           const cooldownUntil = cooldownRow?.value || "1970-01-01";
           const now = new Date().toISOString().replace("T", " ").slice(0, 19);
           if (now > cooldownUntil) {
-            // Cooldown expired — re-queue once with an explanatory message, then set next cooldown
             await env.DB.prepare("UPDATE actions SET status='queued', error='All LLM providers down — waiting 5 min before retry', result=NULL, completed_at=NULL WHERE id=?1").bind(lastAstral.id).run();
             const nextCooldown = new Date(Date.now() + 300000).toISOString().replace("T", " ").slice(0, 19);
             await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('astral_cooldown_until', ?1, datetime('now'))").bind(nextCooldown).run();
@@ -195,32 +237,12 @@ export async function handleScheduled(controller, env) {
     }
   } catch (e) { console.error("astral_recovery error:", e); }
 
-  // --- Source file index: keeps a flat list of all source_ keys in knowledge ---
-  // Also auto-seeds missing source files from GitHub
+  // --- Source file index ---
   try {
     const srcRows = await env.DB.prepare("SELECT key FROM brain_knowledge WHERE key LIKE 'source_%' ORDER BY key").all();
     if (srcRows.results?.length) {
       const index = srcRows.results.map(r => r.key.replace("source_", "")).join("\n");
       await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('file_index', ?1, 'system', 'cron')").bind(index).run();
-    } else if (env.GH_PAT) {
-      // No source files found — seed them from GitHub (parallel, fast, one batch per tick)
-      const srcFiles = ["src/index.ts","src/routes.ts","src/agents.ts","src/tools.ts","src/llm.ts","src/scheduler.ts","src/constants.ts","src/db.ts"];
-      const results = await Promise.allSettled(srcFiles.map(fp =>
-        fetch("https://api.github.com/repos/richardbrownmiami-commits/skytron/contents/" + fp, { headers: { Authorization: "Bearer " + env.GH_PAT, Accept: "application/vnd.github.v3+json", "User-Agent": "Skytron" }, signal: AbortSignal.timeout(8000) })
-          .then(r => r.ok ? r.json() : null)
-          .then(d => d?.content ? { key: "source_" + fp.replace(/\//g, "_"), content: atob(d.content) } : null)
-      ));
-      for (const r of results) {
-        if (r.status === "fulfilled" && r.value) {
-          try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'source', 'github')").bind(r.value.key, r.value.content).run(); } catch {}
-        }
-      }
-      // Rebuild index after seeding
-      const updated = await env.DB.prepare("SELECT key FROM brain_knowledge WHERE key LIKE 'source_%' ORDER BY key").all();
-      if (updated.results?.length) {
-        const idx = updated.results.map(r => r.key.replace("source_", "")).join("\n");
-        await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('file_index', ?1, 'system', 'cron')").bind(idx).run();
-      }
     }
   } catch {}
 
@@ -234,16 +256,13 @@ export async function handleScheduled(controller, env) {
     logActivity(db, "scheduler_tick", { summary: "Tick #" + tickCount });
   } catch { tickCount = 1; }
 
-  // --- Consolidation: collect new data to scratchpad (every tick) ---
+  // --- Consolidation ---
   try {
     const result = await collectToScratchpad(env);
     if (result.totalRows > 0) logActivity(db, "consolidation_collect", { summary: "Collected " + result.totalRows + " new records to scratchpad (batch: " + result.batchId + ")" });
   } catch (e) { console.error("consolidation collect error:", e); }
 
-  // --- Maintenance Cycle (every 60 ticks = ~2 hours) ---
-  // Replaces the old idle LLM cycle that ran every 60 seconds.
-  // Instead of polling the LLM for busywork, this runs deterministic
-  // maintenance: extract lessons, summarize conversations, trim noise, memory loop.
+  // --- Maintenance Cycle (every 60 ticks = ~1h at 1-min cadence) ---
   if (settings.idle_cycle) {
     const pendingCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
     if (pendingCount === 0) {
@@ -267,47 +286,7 @@ export async function handleScheduled(controller, env) {
         } catch {}
       }
 
-      // --- Emergency self-repair: when both WA and BD are down, use OpenRouter ---
-      try {
-        const bdFails = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first();
-        const bdDown = bdFails?.value && parseInt(bdFails.value) >= 3;
-        const waLimited = await env.DB.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
-        const waDown = waLimited?.value && waLimited.value.startsWith(new Date().toISOString().split("T")[0]);
-        if (bdDown && waDown) {
-          const lastRepair = await env.DB.prepare("SELECT value FROM identity WHERE key='last_emergency_repair'").first();
-          const minsSince = lastRepair?.value ? (Date.now() - new Date(lastRepair.value).getTime()) / 60000 : 999;
-          if (minsSince > 30) {
-            await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_emergency_repair',datetime('now'),datetime('now'))").run();
-            logActivity(db, "emergency_repair", { summary: "WA + BD both down — running self-repair via OpenRouter" });
-            const diag = await callOpenRouter(env, [
-              { role: "system", content: "You are Skytron's emergency repair routine. WA (Workers AI) and BD (BUDDHI_DWAR gateway) are both down. Available actions: (a) retry WA by clearing wa_limited flag, (b) retry BD by clearing bd_failures flag, (c) test BD connectivity by fetching /v1/status, (d) wait. Respond with one word: 'retry_wa', 'retry_bd', 'test_bd', or 'wait'." },
-              { role: "user", content: "Both LLM providers failed. Fix it." }
-            ], 500);
-            if (diag?.content) {
-              const action = diag.content.trim().toLowerCase();
-              if (action.includes("retry_wa")) {
-                await env.DB.prepare("DELETE FROM identity WHERE key='wa_limited'").run();
-                logActivity(db, "emergency_repair", { summary: "Cleared wa_limited — will retry WA next tick" });
-              } else if (action.includes("retry_bd")) {
-                await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
-                await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
-                logActivity(db, "emergency_repair", { summary: "Cleared bd_failures + health_flags — will retry BD next tick" });
-              } else if (action.includes("test_bd")) {
-                try {
-                  const testResp = env.BRAIN_KEY ? await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/status", { signal: AbortSignal.timeout(5000) }).catch(() => null) : null;
-                  const reachable = testResp?.ok ? "yes" : "no";
-                  await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('emergency_bd_test', ?1, 'lesson', 'auto')").bind("BD connectivity test at " + new Date().toISOString() + ": reachable=" + reachable + (testResp ? " status=" + testResp.status : "")).run();
-                  logActivity(db, "emergency_repair", { summary: "Tested BD — reachable=" + reachable });
-                } catch {}
-              } else {
-                logActivity(db, "emergency_repair", { summary: "OpenRouter suggests waiting — " + diag.content.slice(0, 100) });
-              }
-            }
-          }
-        }
-      } catch (e) { console.error("emergency_repair error:", e); }
-
-      if (maintCounter >= 60) { // ~2 hours elapsed
+      if (maintCounter >= 60) {
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('maintenance_counter','0',datetime('now'))").run();
 
         // 1. Extract errors from recent actions → store as lessons
@@ -324,9 +303,9 @@ export async function handleScheduled(controller, env) {
           }
         } catch {}
 
-        // 2. Memory loop: summarize recent conversations → durable knowledge (code-based, no LLM)
+        // 2. Memory loop: summarize recent conversations → durable knowledge
         try {
-          const SW = new Set(["the","you","your","this","that","with","from","have","been","were","they","their","what","about","which","when","where","how","why","just","like","know","think","want","need","can","will","would","should","could","did","does","doing","done","make","made","gets","got","get","say","says","said","tell","told","ask","asked","use","used","using","look","looking","found","find","help","need","take","took","thing","things","much","many","some","any","all","each","every","both","few","more","most","other","into","over","after","before","between","under","again","further","then","once","here","there","very","too","also","not","yes","no","maybe","always","never","sometimes","often","usually","well","back","still","already","yet","because","though","although","while","during","until","since","result","answer","question","previous","last","next","first","second","new","old","good","bad","big","small","long","short","high","low","same","different","own","very","really","actually","basically","literally","probably","maybe","perhaps","please","thank","thanks","ok","okay","hi","hello","hey","sure","fine","great","nice","cool","awesome","amazing","perfect","love","hate","sorry","wait","stop","go","come","let","put","set","run","move","show","try","keep","start","end","begin","done","doing","going","coming","taking","making","giving","using","working","looking","trying","asking","telling","saying","thinking","feeling","knowing","seeing","hearing","being","having","test","testing","check","checking","gonna","wanna","gotta","kinda","sorta","lots","stuff","bit","shall","may","might","must","dont","doesnt","wont","cant","couldnt","shouldnt","wouldnt","isnt","arent","wasnt","werent","hasnt","havent","hadnt","for","are","was","but","not","its","has","had","him","her","out","did","top","see","way","who","now","get","two","our","may","than","been","them","now","then","such","only","very","than","also","must","over","these","where","here","there","while","well","much","some","still","your","they","them","their","itself","yourself","themselves","couldnt","shouldnt","wouldnt","wont","dont","doesnt","cant","isnt","arent","wasnt","werent","hasnt","havent","hadnt","yes","no","yeah","nope"]);
+          const SW = new Set(["the","you","your","this","that","with","from","have","been","were","they","their","what","about","which","when","where","how","why","just","like","know","think","want","need","can","will","would","should","could","did","does","doing","done","make","made","gets","got","get","say","says","said","tell","told","ask","asked","use","used","using","look","looking","found","find","help","need","take","took","thing","things","much","many","some","any","all","each","every","both","few","more","most","other","into","over","after","before","between","under","again","further","then","once","here","there","very","too","also","not","yes","no","maybe","always","never","sometimes","often","usually","well","back","still","already","yet","because","though","although","while","during","until","since","result","answer","question","previous","last","next","first","second","new","old","good","bad","big","small","long","short","high","low","same","different","own","very","really","actually","basically","literally","probably","maybe","perhaps","please","thank","thanks","ok","okay","hi","hello","hey","sure","fine","great","nice","cool","awesome","amazing","perfect","love","hate","sorry","wait","stop","go","come","let","put","set","run","move","show","try","keep","start","end","begin","done","doing","going","coming","taking","making","giving","using","working","looking","trying","asking","telling","saying","thinking","feeling","knowing","seeing","hearing","being","having","test","testing","check","checking","gonna","wanna","gotta","kinda","sorta","lots","stuff","bit","shall","may","might","must","dont","doesnt","wont","cant","couldnt","shouldnt","wouldnt","isnt","arent","wasnt","werent","hasnt","havent","hadnt","for","are","was","but","not","its","has","had","him","her","out","did","top","see","way","who","now","get","two","our","may","than","been","them","now","then","such","only","very","than","also","must","over","these","where","here","there","while","well"]);
           const convs = await env.DB.prepare("SELECT DISTINCT conversation_id FROM brain_memory WHERE created_at > datetime('now', '-2 hours')").all();
           for (const c of (convs.results || [])) {
             const msgs = await env.DB.prepare("SELECT role, content, created_at FROM brain_memory WHERE conversation_id=?1 AND created_at > datetime('now', '-2 hours') ORDER BY id ASC").bind(c.conversation_id).all();
@@ -360,7 +339,7 @@ export async function handleScheduled(controller, env) {
               }
               function cleanContent(text) {
                 let t = text.replace(/\{\\"tool\\"[^}]+}/g, " ").replace(/\{"tool"[^}]+}/g, " ");
-                t = t.replace(/TOOL:\w+[\(\[][\s\S]{0,200}[\)\]\]]/g, " ");
+                t = t.replace(/TOOL:\w+[\(\[][\s\S]{0,200}[\)\]]/g, " ");
                 t = t.replace(/\[TOOL CALL\]/g, " ");
                 t = t.replace(/\[Max steps reached[^\]]*\]/gi, " ");
                 t = t.replace(/@(?:cf|hf)\/[^\s]+/g, " ");
@@ -405,7 +384,6 @@ export async function handleScheduled(controller, env) {
               }
 
               if (tools.length) parts.push("Used tools: " + tools.join(", ") + ".");
-
               let summary = parts.join(" ");
               if (!summary) {
                 const rawSamples = msgs.results.filter(m => m.role === "user" && m.content.length > 10).map(m => m.content.replace(/\[Creator\]\s*/g, "").slice(0, 200)).filter(Boolean).slice(0, 3);
@@ -419,7 +397,7 @@ export async function handleScheduled(controller, env) {
           }
         } catch {}
 
-        // 3. Extract stats: action counts, error rates → store as knowledge
+        // 3. Extract stats
         try {
           const stats = await env.DB.prepare("SELECT status, COUNT(*) as c FROM actions WHERE created_at > datetime('now', '-24 hours') GROUP BY status").all();
           if (stats.results?.length) {

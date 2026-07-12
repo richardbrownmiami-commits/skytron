@@ -16,7 +16,7 @@ index_name = "saraha-brain-memory"
 binding = "AI"
 
 [triggers]
-crons = ["*/2 * * * *"]
+crons = ["* * * * *", "*/5 * * * *"]
 
 [vars]
 BRAIN_KEY = "Saraha-Brain-Key"

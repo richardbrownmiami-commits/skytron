@@ -13,6 +13,6 @@ export default {
   },
 
   async scheduled(controller, env) {
-    return handleScheduled(controller, env);
+    return handleScheduled(controller, env, controller.cron);
   },
 };
