@@ -13,7 +13,13 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - name: Debug - test token
+        run: |
+          echo "Token length: ${#CLOUDFLARE_API_TOKEN}"
+          curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/user/tokens/verify
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       - name: Deploy to Cloudflare Workers
-        run: node node_modules/wrangler/bin/wrangler.js deploy
+        run: node node_modules/wrangler/bin/wrangler.js deploy --log-level debug 2>&1
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
