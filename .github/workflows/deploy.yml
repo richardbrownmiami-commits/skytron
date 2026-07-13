@@ -13,19 +13,7 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
-      - name: Debug - test token
-        run: |
-          set -x
-          RESP=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/user/tokens/verify)
-          HTTP_CODE=$(echo "$RESP" | tail -1)
-          BODY=$(echo "$RESP" | head -n -1)
-          echo "HTTP code: $HTTP_CODE"
-          echo "Response: $BODY"
-          if [ "$HTTP_CODE" != "200" ]; then exit 1; fi
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       - name: Deploy to Cloudflare Workers
-        run: |
-          npm run deploy 2>&1; EXIT_CODE=$?; echo "WRANGLER_EXIT_CODE=$EXIT_CODE" >> $GITHUB_ENV; exit $EXIT_CODE
+        run: npm run deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}

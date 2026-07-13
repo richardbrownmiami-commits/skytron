@@ -2,6 +2,7 @@ name = "saraha-brain"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
 compatibility_flags = ["global_fetch_strictly_public"]
+account_id = "913f3a2576a358054eba9a58a9573949"
 
 [[d1_databases]]
 binding = "DB"
