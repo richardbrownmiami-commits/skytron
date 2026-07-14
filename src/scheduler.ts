@@ -115,7 +115,7 @@ async function runNonLLMTasks(settings, env, db) {
         logActivity(db, "action_recovered", { actionId: sid, summary: "Action " + sid + " stuck for " + ageMins + " min — recovering (attempt " + (retryCount + 1) + "/3)", details: "step: " + (s.results[0].step || "?") });
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(retryKey, String(retryCount + 1)).run();
         try {
-          const stateRow = await env.DB.prepare("SELECT state FROM agent_states WHERE action_id=?1").bind(sid).first();
+          const stateRow = await env.DB.prepare("SELECT value as state FROM identity WHERE key='agent_state_' || ?1").bind(sid).first();
           if (stateRow?.state) {
             const state = JSON.parse(stateRow.state);
             const lastStep = state.step || 0;
@@ -126,7 +126,7 @@ async function runNonLLMTasks(settings, env, db) {
               ckSummary = ckRows.results.map((r, i) => "  Step " + (i + 1) + ": " + r.content.slice(0, 300)).join("\n");
             }
             state.fullHistory.push({ role: "user", content: "[TASK RESUMED at step " + lastStep + (ckSummary ? " — previous steps:\n" + ckSummary : " — no checkpoints found") + "\n\nContinue from step " + lastStep + ". DO NOT repeat completed steps.]" });
-            await env.DB.prepare("UPDATE agent_states SET state=?1 WHERE action_id=?2").bind(JSON.stringify(state), sid).run();
+            await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES ('agent_state_' || ?2, ?1, datetime('now'))").bind(JSON.stringify(state), sid).run();
           }
         } catch {}
         await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();

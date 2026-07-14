@@ -623,7 +623,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       // Attempt 4: Health-check all endpoints
       try {
-        const hcResp = await fetch("https://saraha-brain.richard-brown-miami.workers.dev/brain/health", {
+        const hcResp = await fetch(url.origin + "/brain/health", {
           headers: { Authorization: "Bearer " + env.BRAIN_KEY },
           signal: AbortSignal.timeout(5000)
         });
