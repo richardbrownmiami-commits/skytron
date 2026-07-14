@@ -47,6 +47,7 @@ work/skytron-app/local.properties
 .wrangler/
 dev/
 dist/
+worker-configuration.d.ts
 replace.js
 
 # OS
