@@ -737,15 +737,55 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       await storeMemory(env.DB, "user", llmInput.slice(0, 2000), conversationId);
 
-      const taskType = mode === "astral" ? ASTRAL_WALK
-          : "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
-        systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + outputInstr;
-        const userMsg = mode === "astral" ? "[Astral tick]" : llmInput;
-        fullHistory = [
-          { role: "system", content: systemMsg.slice(0, 32000) },
-          { role: "user", content: userMsg }
-        ];
+      if (mode === "astral") {
+        await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-30 seconds')").run();
       }
+      const taskType = mode === "astral" ? "astral" : detectTaskType(input);
+      const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', ?1, ?2, ?3) RETURNING id").bind(mode === "astral" ? "queued" : "running", input, taskType).all();
+      const aid = r.results[0].id;
+      logActivity(env.DB, "user_action", { actionId: aid, summary: "User asked: " + input.slice(0, 150), details: JSON.stringify({ from: from || "Creator", taskType, mode, input: input.slice(0, 500) }) });
+
+      let systemMsg, fullHistory;
+      let slotContent = await getPromptSlot(env.DB, taskType);
+      if (!slotContent) {
+        const ov = await env.DB.prepare("SELECT value FROM identity WHERE key='prompt_override'").all().catch(() => ({}));
+        slotContent = (ov.results?.[0]?.value && ov.results[0].value !== "null" && ov.results[0].value !== "DELETE|OVERRIDE") ? ov.results[0].value : SYSTEM_PROMPT;
+      }
+      const basePrompt = HARDCODED_CORE + "\n\n" + slotContent + "\n\n[TASK: " + taskType + "]";
+
+      const stateData = await getState(env.DB);
+      const mood = describeMood(stateData.emotions, stateData.reg.energy);
+      const sensorium = await buildSensorium(env);
+      const recentMem = await getRecentMemory(env.DB, 50, conversationId);
+
+      let conversationContext = "";
+      if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
+
+      let knowledgeContext = "";
+      try {
+        const kw = await searchKnowledge(env.DB, input, 3);
+        if (kw.length) knowledgeContext = "\n\nRELEVANT KNOWLEDGE:\n" + kw.map(k => "- " + k.key + " (" + k.category + "): " + k.content.slice(0, 200)).join("\n") + "\n";
+      } catch {}
+
+      let memoryContext = "";
+      try {
+        const rawWords = input.split(/\s+/).filter(w => w.length > 2).slice(0, 12).map(w => w.replace(/[^a-zA-Z0-9-]/g, "").toLowerCase()).filter(Boolean);
+        const likes = rawWords.map(k => "LOWER(content) LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
+        if (likes) {
+          const loops = await env.DB.prepare("SELECT key, content FROM brain_knowledge WHERE category='memory_loop' AND (" + likes + ") ORDER BY key DESC LIMIT 5").all();
+          if (loops.results?.length) {
+            memoryContext = "\n\nPAST CONVERSATION SUMMARIES:\n" + loops.results.map(l => "- " + l.key + ": " + l.content.slice(0, 500)).join("\n") + "\n";
+          }
+        }
+      } catch {}
+
+      const outputInstr = mode === "astral" ? ASTRAL_WALK : "";
+      systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + outputInstr;
+      const userMsg = mode === "astral" ? "[Astral tick]" : llmInput;
+      fullHistory = [
+        { role: "system", content: systemMsg.slice(0, 32000) },
+        { role: "user", content: userMsg }
+      ];
 
       // DEBUG: return assembled prompt without queuing
       if (debug) {
