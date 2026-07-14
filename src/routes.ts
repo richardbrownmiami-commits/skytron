@@ -158,16 +158,16 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       const entries = r.results || [];
       const esc = s => (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
       const html = entries.map(e => {
-        let c; try { c = JSON.parse(e.content); } catch { c = {}; }
-        const colors = { productive:"#3fb950", built:"#58a6ff", mixed:"#d29922", rough:"#f85149", light:"#8b949e", planned:"#a371f7", completed:"#3fb950", discussed:"#58a6ff", failed:"#f85149", partial:"#d29922", pending:"#8b949e" };
-        const col = colors[c.status] || "#8b949e";
-        const date = c.date || (c.date_start || "").slice(0, 10);
-        const topics = c.topics?.length ? c.topics.join(", ") : c.topic || "Entry";
-        const narrative = c.narrative || c.what_happened || c.recall_response || c.summary || "";
-        const lines = narrative.split("\n").filter(Boolean).map(l => `<div class="nl">${esc(l)}</div>`).join("");
-        const paras = narrative.split("\n\n").filter(Boolean).map(p => `<div class="para">${esc(p)}</div>`).join("");
-        const tags = c.tags?.length ? `<div class="tgs">${c.tags.map(t => `<span class="tg">${esc(t)}</span>`).join("")}</div>` : "";
-        return `<div class="e" style="border-left:4px solid ${col}"><div class="eh"><span class="ed">${esc(date)}</span><span class="et">${esc(topics)}</span><span class="s" style="background:${col}18;color:${col}">${esc(c.status||"unknown")}</span></div><div class="eb">${paras || lines}${tags}</div></div>`;
+        let c, narrative, topics, status, date, tags;
+      try { c = JSON.parse(e.content); narrative = c.narrative || c.what_happened || c.recall_response || c.summary || ""; topics = c.topics?.length ? c.topics.join(", ") : c.topic || "Entry"; status = c.status || "entry"; date = c.date || (c.date_start || "").slice(0, 10); tags = c.tags || []; } catch { narrative = e.content; topics = e.key; status = "entry"; date = e.created_at?.slice(0, 10) || ""; tags = []; }
+      const colors = { productive:"#3fb950", built:"#58a6ff", mixed:"#d29922", rough:"#f85149", light:"#8b949e", planned:"#a371f7", completed:"#3fb950", discussed:"#58a6ff", failed:"#f85149", partial:"#d29922", pending:"#8b949e", entry:"#8b949e" };
+      let c, narrative, topics, status, date, tags;
+      try { c = JSON.parse(e.content); narrative = c.narrative || c.what_happened || c.recall_response || c.summary || ""; topics = c.topics?.length ? c.topics.join(", ") : c.topic || "Entry"; status = c.status || "entry"; date = c.date || (c.date_start || "").slice(0, 10); tags = c.tags || []; } catch { narrative = e.content; topics = e.key; status = "entry"; date = e.created_at?.slice(0, 10) || ""; tags = []; }
+      const col = colors[status] || "#8b949e";
+      const lines = narrative.split("\n").filter(Boolean).map(l => `<div class="nl">${esc(l)}</div>`).join("");
+      const paras = narrative.split("\n\n").filter(Boolean).map(p => `<div class="para">${esc(p)}</div>`).join("");
+      const tagsHtml = tags.length ? `<div class="tgs">${tags.map(t => `<span class="tg">${esc(t)}</span>`).join("")}</div>` : "";
+      return `<div class="e" style="border-left:4px solid ${col}"><div class="eh"><span class="ed">${esc(date)}</span><span class="et">${esc(topics)}</span><span class="s" style="background:${col}18;color:${col}">${esc(status)}</span></div><div class="eb">${paras || lines}${tagsHtml}</div></div>`;
       }).join("\n");
       return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skytron Journal</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:1.5rem;max-width:960px;margin:auto}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.3rem}.sub{color:#8b949e;font-size:0.85rem;margin-bottom:1.5rem}.e{background:#161b22;border:1px solid #30363d;border-radius:10px;margin-bottom:0.9rem;overflow:hidden}.eh{display:flex;align-items:center;gap:0.75rem;padding:0.65rem 1rem;background:#1c2333;border-bottom:1px solid #30363d}.ed{color:#8b949e;font-size:0.8rem;white-space:nowrap}.et{flex:1;font-weight:600;font-size:0.95rem}.s{font-size:0.75rem;padding:0.15rem 0.6rem;border-radius:999px;font-weight:500;text-transform:capitalize}.eb{padding:0.75rem 1rem}.para{padding:0.5rem 0;font-size:0.9rem;line-height:1.6;color:#c9d1d9}.nl{padding:0.35rem 0;font-size:0.88rem;line-height:1.5;color:#c9d1d9;border-bottom:1px solid #21262d}.nl:last-child{border:none}.tgs{display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid #21262d}.tg{background:#1c2540;color:#58a6ff;font-size:0.7rem;padding:0.12rem 0.5rem;border-radius:999px;border:1px solid #2a3a60}.empty{text-align:center;padding:2rem;color:#6b7280}</style></head><body><h1>Skytron Journal</h1><p class="sub">${entries.length} entries</p>${entries.length ? html : '<div class="empty">No entries found</div>'}</body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" } });
     } catch (e) { return json({ error: e.message }, 500); }
@@ -379,6 +379,13 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     const slots = await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'prompt_slot_%'").all();
     const slotMap = {};
     for (const r of slots.results || []) slotMap[r.key.replace("prompt_slot_", "")] = r.value.slice(0, 200) + "...";
+    const accept = req.headers.get("accept") || "";
+    if (accept.includes("text/html")) {
+      const esc = s => (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      const active = ov.results[0]?.value || "";
+      const slotRows = Object.entries(slotMap).map(([k,v]) => `<div class="slot"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`).join("");
+      return new Response(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skytron Prompt</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0b1120;color:#e6edf3;font-family:system-ui;padding:1.5rem;max-width:960px;margin:auto}h1{color:#58a6ff;font-size:1.5rem;margin-bottom:0.3rem}.sub{color:#8b949e;font-size:0.85rem;margin-bottom:1.5rem}.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1rem;margin-bottom:0.9rem}h2{color:#58a6ff;font-size:1.1rem;margin-bottom:0.5rem}.active{background:#1c2333;padding:0.75rem;border-radius:6px;border:1px solid #30363d;font-size:0.85rem;color:#c9d1d9;white-space:pre-wrap;max-height:400px;overflow-y:auto}.empty{color:#6b7280;font-style:italic}.slot{display:flex;gap:0.75rem;padding:0.5rem 0;border-bottom:1px solid #21262d;font-size:0.85rem}.slot:last-child{border:none}.sk{color:#58a6ff;font-weight:600;white-space:nowrap}.sv{color:#c9d1d9;word-break:break-word}.fresh{text-align:center;padding:2rem;color:#6b7280}</style></head><body><h1>Skytron Prompt</h1><p class="sub">Custom prompt overrides and slots</p><div class="card"><h2>Active Prompt</h2><div class="active">${active ? esc(active) : '<span class="empty">Using default system prompt — no override set</span>'}</div></div><div class="card"><h2>Slots (${Object.keys(slotMap).length})</h2>${slotRows || '<div class="fresh">No custom slots defined</div>'}</div></body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-cache" } });
+    }
     return json({ active: !!ov.results[0]?.value, editable: (ov.results[0]?.value || SYSTEM_PROMPT).slice(0, 500) + "...", slots: slotMap });
   }
 
