@@ -10,7 +10,7 @@
 import { z } from "zod";
 
 export const CF_AI = { account: "913f3a2576a358054eba9a58a9573949" };
-export const SCHEMA_VERSION = '12';
+export const SCHEMA_VERSION = '13';
 
 export const TABLES = [
   `CREATE TABLE IF NOT EXISTS identity (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now')))`,
