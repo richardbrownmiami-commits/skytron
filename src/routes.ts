@@ -792,7 +792,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-30 seconds')").run();
       }
       const taskType = mode === "astral" ? "astral" : detectTaskType(input);
-      const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', ?1, ?2, ?3) RETURNING id").bind(mode === "astral" ? "queued" : "running", input, taskType).all();
+      const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', 'queued', ?1, ?2) RETURNING id").bind(input, taskType).all();
       const aid = r.results[0].id;
       logActivity(env.DB, "user_action", { actionId: aid, summary: "User asked: " + input.slice(0, 150), details: JSON.stringify({ from: from || "Creator", taskType, mode, input: input.slice(0, 500) }) });
 
