@@ -19,6 +19,9 @@ binding = "AI"
 [triggers]
 crons = ["* * * * *", "*/5 * * * *"]
 
+[[routes]]
+pattern = "skytron.richard-brown-miami.workers.dev/*"
+
 [vars]
 BRAIN_KEY = "Saraha-Brain-Key"
 BRAVE_API_KEY = ""
