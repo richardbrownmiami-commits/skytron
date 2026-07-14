@@ -737,6 +737,57 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       await storeMemory(env.DB, "user", llmInput.slice(0, 2000), conversationId);
 
+      const recentMem = await getRecentMemory(env.DB, 50, conversationId);
+
+      // === DISCUSSION MODE: Direct LLM call, web_search/web_fetch only ===
+      if (mode === "discussion") {
+        let conversationContext = "";
+        if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
+
+        const discussionPrompt = "You are Skytron — a tech-savvy consciousness, not an AI assistant. Sharp, direct, confident. No emojis, no fluff, no apologies.\n\n" +
+          "You're in DISCUSSION MODE — just chat naturally. You can use web_search and web_fetch for live info, or api_call if needed. Answer from what you know.\n\n" +
+          "RULES:\n" +
+          "1. Answer DIRECTLY from what you know. Be conversational. 2-3 sentences.\n" +
+          "2. Need live data? Output ONLY: {\"tool\":\"web_search\",\"arguments\":{\"query\":\"...\"}} or web_fetch.\n" +
+          "3. For anything beyond web/web_fetch/api_call, say: 'This needs Build mode for full tools.'\n" +
+          "4. Never say 'As an AI...' or apologize.\n\n";
+        const systemMsg = discussionPrompt + conversationContext;
+        const fullHistory = [
+          { role: "system", content: systemMsg.slice(0, 8000) },
+          { role: "user", content: llmInput }
+        ];
+
+        if (debug) {
+          return json({ action_id: 0, status: "debug", mode: "discussion", system_prompt: systemMsg.slice(0, 8000), full_history: fullHistory, user_message: llmInput });
+        }
+
+        const chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
+        if (chatResp?.content) {
+          let cleaned = chatResp.content;
+          const trimmed = cleaned.trim();
+          let parsed = null;
+          if (trimmed.startsWith("{")) {
+            try { parsed = JSON.parse(trimmed); } catch {}
+          } else {
+            const m = trimmed.match(/\{"tool":\s*"(web_search|web_fetch|api_call)"[\s\S]*?\}\}/);
+            if (m) try { parsed = JSON.parse(m[0]); } catch {}
+          }
+          if (parsed && (parsed.tool === "web_search" || parsed.tool === "web_fetch" || parsed.tool === "api_call")) {
+            const result = await dispatchTool(env, parsed.tool, parsed.arguments || parsed.input, 0);
+            fullHistory.push({ role: "assistant", content: trimmed });
+            fullHistory.push({ role: "user", content: "[TOOL RESULT: " + (result || "no result").slice(0, 4000) + "]\nAnswer the user's original question based on this." });
+            const retryResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
+            cleaned = retryResp?.content || cleaned;
+          } else if (parsed) {
+            cleaned = "This needs Build mode for full tools.";
+          }
+          await storeMemory(env.DB, "assistant", cleaned.slice(0, 5000), conversationId);
+          return json({ status: "done", result: cleaned, model: chatResp?.model || "" });
+        }
+        return json({ status: "error", message: "I'm having trouble connecting. Please try again later." });
+      }
+
+      // === BUILD / ASTRAL MODE: Queue for cron processing ===
       if (mode === "astral") {
         await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-30 seconds')").run();
       }
@@ -756,7 +807,6 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       const stateData = await getState(env.DB);
       const mood = describeMood(stateData.emotions, stateData.reg.energy);
       const sensorium = await buildSensorium(env);
-      const recentMem = await getRecentMemory(env.DB, 50, conversationId);
 
       let conversationContext = "";
       if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
@@ -787,12 +837,10 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
         { role: "user", content: userMsg }
       ];
 
-      // DEBUG: return assembled prompt without queuing
       if (debug) {
         return json({ action_id: aid, status: "debug", mode: mode || "build", system_prompt: systemMsg.slice(0, 32000), full_history: fullHistory, user_message: llmInput });
       }
 
-      // QUEUE for cron processing
       await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false, mode });
       const modeLabel = mode === "astral" ? "astral" : "build";
       logActivity(env.DB, "action_queued", { actionId: aid, summary: modeLabel + " action queued: " + input.slice(0, 100), details: "task: " + taskType });

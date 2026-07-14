@@ -283,7 +283,7 @@ export const toolDefinitions = {
     },
   },
   github_get_file: {
-    description: "Read a file from a GitHub repository. Returns content and SHA. repo is the owner/name (e.g. 'user/repo'). path starts from repo root (e.g. 'src/index.ts'). branch defaults to 'main'. Your repo is 'richardbrownmiami-commits/skytron'. Files prefixed source_ are auto-fetched from local knowledge — no GitHub needed.",
+    description: "Read a file from a GitHub repository. For YOUR REPO ('richardbrownmiami-commits/skytron'), automatically checks your own brain_knowledge FIRST — just pass the path like 'src/tools.ts' or 'tools.ts'. No GitHub API needed for your own files. For other repos, provide repo='owner/repo' and path from root.",
     schema: z.object({
       repo: z.string().describe("REQUIRED. Format: 'owner/repo'. Your repo: 'richardbrownmiami-commits/skytron'"),
       path: z.string().optional().describe("File path from repo root, e.g. 'src/index.ts'"),
@@ -293,13 +293,23 @@ export const toolDefinitions = {
     }).refine(d => d.path || d.file_path || d.filepath, { message: "path, file_path, or filepath is required" }),
     execute: async (env, input) => {
       const filePath = input.path || input.file_path || input.filepath;
-      // Auto-redirect source_ paths to brain_knowledge (no GitHub call needed)
-      if (filePath && (filePath.startsWith("source_") || filePath.startsWith("source_src"))) {
-        const key = filePath.replace(/^.*?source_/, "source_");
-        try {
-          const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key=?1").bind(key).first();
-          if (row?.content) return "[READ FROM LOCAL KNOWLEDGE]\n" + row.content.slice(0, 8000);
-        } catch {}
+      // Always check brain_knowledge first for any path from this repo
+      if (filePath && input.repo === "richardbrownmiami-commits/skytron") {
+        const candidates = [filePath];
+        if (!filePath.startsWith("source_")) candidates.push("source_" + filePath);
+        if (!filePath.startsWith("source_src/")) candidates.push("source_src/" + filePath);
+        const parts = filePath.replace(/\\/g, "/").split("/");
+        if (parts.length > 1) {
+          const justName = parts[parts.length - 1];
+          if (!candidates.includes(justName)) candidates.push(justName);
+          if (!candidates.includes("source_src/" + justName)) candidates.push("source_src/" + justName);
+        }
+        for (const key of candidates) {
+          try {
+            const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key=?1").bind(key).first();
+            if (row?.content) return "[READ FROM BRAIN KNOWLEDGE]\n" + row.content.slice(0, 8000);
+          } catch {}
+        }
       }
       const token = env.GH_PAT;
       if (!token) return "[TOOL ERROR: No GitHub token configured (GH_PAT)]";

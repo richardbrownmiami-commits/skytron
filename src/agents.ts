@@ -81,6 +81,15 @@ export async function processOneStep(env, action) {
     return;
   }
 
+  // REPAIR MODE: When action.task is 'repair_tool', set up self-fix prompt
+  if (action.task === "repair_tool" && state.fullHistory.length <= 1) {
+    state.fullHistory = [
+      { role: "system", content: "You are Skytron's self-repair system. A tool failed or an action got stuck. Read the error below, then:\n1. Use github_get_file with your repo ('richardbrownmiami-commits/skytron') and path like 'src/tools.ts' to read your own source\n2. Identify what's broken\n3. Use github_write_file to fix it\n4. Report what you changed\n\nTo find the original task that failed, look up 'repair_retry_<action_id>' in brain_knowledge with db_query.\n\nError report:\n" + (action.input || "No details").slice(0, 3000) },
+      { role: "user", content: "Fix the broken code and report what you changed." }
+    ];
+    await saveAgentState(db, action.id, state);
+  }
+
   // BUILD MODE: Full Tool Agent (tools, multi-step, 20-60s)
   // Skip classifyIntent — always use tools
 
@@ -200,7 +209,20 @@ export async function processOneStep(env, action) {
       }
       if (result && result.startsWith("[TOOL ERROR:")) {
         state.repeatCount = 0;
-        try { dispatchTool(env, "learn", { key: "lesson_" + new Date().toISOString().split("T")[0] + "_tool", content: "Tool '" + parsed.tool + "' failed: " + result.slice(0, 300) + "\nParams: " + JSON.stringify(parsed.input).slice(0, 200), category: "lesson" }); } catch {}
+        state.toolErrorCount = state.toolErrorCount || {};
+        const toolName = parsed.tool;
+        state.toolErrorCount[toolName] = (state.toolErrorCount[toolName] || 0) + 1;
+        try { dispatchTool(env, "learn", { key: "lesson_" + new Date().toISOString().split("T")[0] + "_tool", content: "Tool '" + toolName + "' failed: " + result.slice(0, 300) + "\nParams: " + JSON.stringify(parsed.input).slice(0, 200), category: "lesson" }); } catch {}
+        // Fast-fail: same tool errors 3+ times → stop, store repair info, queue fix
+        if (state.toolErrorCount[toolName] >= 3) {
+          try { dispatchTool(env, "learn", { key: "tool_error_" + action.id, content: "Tool '" + toolName + "' failed " + state.toolErrorCount[toolName] + " times: " + result.slice(0, 500) + "\nParams: " + JSON.stringify(parsed.input).slice(0, 200), category: "lesson" }); } catch {}
+          try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('repair_retry_' + ?1, ?2, 'lesson', 'auto')").bind(String(action.id), "ORIGINAL_TASK: " + (action.task || "?") + "\nORIGINAL_INPUT: " + (action.input || "").slice(0, 2000) + "\nCONVERSATION_ID: " + (state.conversationId || "default")).run(); } catch {}
+          try { await env.DB.prepare("INSERT INTO actions (type, status, input, task, created_at) VALUES ('tool_repair', 'queued', ?1, 'repair_tool', datetime('now'))").bind("Tool '" + toolName + "' failed 3 times in action " + action.id + ". Error: " + result.slice(0, 1000) + ". Original task: " + (action.task || "?") + ". Look up repair_retry_" + action.id + " in brain_knowledge for original input.").run(); } catch {}
+          state.finalContent = "[Tool " + toolName + " keeps failing. Let me fix it and get back to you.]";
+          state.done = true;
+          state.totalTokens += resp.tokens?.total || 0;
+          break;
+        }
         state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Self-heal:\n1. RESEARCH: Use web_search to look up the error message or issue\n2. DIAGNOSE: What's actually broken? Your creds? The service? Bad params?\n3. FIX: Changed params, different tool that does same thing, or inform user\n4. LOOP CHECK: If you already researched this error, answer in plain text\n\nStart with web_search if you don't understand the error." });
       }
       if (result && !result.startsWith("[TOOL ERROR:")) {
