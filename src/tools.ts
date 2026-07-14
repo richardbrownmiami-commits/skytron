@@ -926,4 +926,14 @@ export const toolDefinitions = {
       return "Priority queue tool: not yet implemented (stub)";
     },
   },
+
+  prompt_edit: {
+    description: "Edit prompt",
+    schema: {"type":"object","properties":{"input":{"type":"string"}}},
+    execute: async (env, input) => {
+async function body(prompt) {
+  return prompt;
+}
+    },
+  },
 }; // --- End tool definitions ---
