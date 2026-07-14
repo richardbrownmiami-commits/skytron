@@ -109,7 +109,8 @@ async function runNonLLMTasks(settings, env, db) {
         logActivity(db, "action_stuck", { actionId: sid, summary: "Action " + sid + " failed after 3 recovery attempts — " + ageMins + " min stuck", details: "step: " + (s.results[0].step || "?") });
         await env.DB.prepare("UPDATE actions SET status='error', result='Stuck after 3 recovery attempts', completed_at=datetime('now') WHERE id=?1").bind(sid).run();
         try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
-        try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("Action " + sid + " [" + (s.results[0].task || "?") + "] kept getting stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". Input: " + (s.results[0].input || "").slice(0, 200) + ". Auto-failed after 3 attempts.").run(); } catch {}
+        const qCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
+        try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("Action " + sid + " [" + (s.results[0].task || "?") + "] kept getting stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". Input: " + (s.results[0].input || "").slice(0, 200) + ". Auto-failed after 3 attempts. Status: killed. Actions in queue: " + qCount + ".").run(); } catch {}
       } else {
         logActivity(db, "action_recovered", { actionId: sid, summary: "Action " + sid + " stuck for " + ageMins + " min — recovering (attempt " + (retryCount + 1) + "/3)", details: "step: " + (s.results[0].step || "?") });
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key, value, updated_at) VALUES (?1, ?2, datetime('now'))").bind(retryKey, String(retryCount + 1)).run();
@@ -129,9 +130,8 @@ async function runNonLLMTasks(settings, env, db) {
           }
         } catch {}
         await env.DB.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(sid).run();
-        if (retryCount === 0 && ageMins > 10) {
-          try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("Action " + sid + " has been stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". Recovering.").run(); } catch {}
-        }
+        const qCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status IN ('queued','running')").all()).results?.[0]?.c || 0;
+        try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("Action " + sid + " [" + (s.results[0].task || "?") + "] was stuck for " + ageMins + " minutes at step " + (s.results[0].step || "?") + ". Input: " + (s.results[0].input || "").slice(0, 200) + ". Status: recovered. Requeued. Actions in queue: " + qCount + ".").run(); } catch {}
       }
     }
   } catch (e) { console.error("stuck_recovery error:", e); }
