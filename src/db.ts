@@ -34,6 +34,7 @@ export async function initSchema(db, env) {
     for (const idx of indexes) { try { await db.exec(idx); } catch {} }
     try { await db.exec("CREATE TABLE IF NOT EXISTS consolidation_scratchpad (id INTEGER PRIMARY KEY AUTOINCREMENT, source_table TEXT NOT NULL, record_id INTEGER, content TEXT NOT NULL, collected_at TEXT DEFAULT (datetime('now')), batch_id TEXT NOT NULL)"); } catch {}
     try { await db.exec("ALTER TABLE actions ADD COLUMN task TEXT DEFAULT 'chat'"); } catch {}
+    try { await db.exec("ALTER TABLE actions ADD COLUMN updated_at TEXT"); } catch {}
     await db.exec("DELETE FROM brain_knowledge WHERE source='seed'");
     for (const item of SEED_KNOWLEDGE) { try { await db.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, ?3, 'seed')").bind(item.k, item.c, item.cat).run(); } catch {} }
     try { await db.exec("DROP TABLE IF EXISTS knowledge_fts"); } catch {}

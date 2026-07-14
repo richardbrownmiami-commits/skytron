@@ -14,7 +14,7 @@ export async function processOneStep(env, action) {
   const db = env.DB;
   try {
     const state = await loadAgentState(db, action.id);
-    if (!state) { await db.prepare("UPDATE actions SET status='error', error='missing state' WHERE id=?1").bind(action.id).run(); return; }
+    if (!state) { await db.prepare("UPDATE actions SET status='error', error='missing state', updated_at=datetime('now') WHERE id=?1").bind(action.id).run(); return; }
 
   if (state.done) { await finalizeAction(db, action.id, state); return; }
 
@@ -52,7 +52,7 @@ export async function processOneStep(env, action) {
     const chatResp = await callLLM(env, { messages: state.fullHistory, task: "chat" }, "skytron-astral");
     if (!chatResp?.content) {
       const errs = chatResp?.errors?.join("; ") || "unknown";
-      try { await db.prepare("UPDATE actions SET status='error', error=?1 WHERE id=?2").bind("LLM provider failed: " + errs.slice(0, 300), action.id).run(); } catch {}
+      try { await db.prepare("UPDATE actions SET status='error', error=?1, updated_at=datetime('now') WHERE id=?2").bind("LLM provider failed: " + errs.slice(0, 300), action.id).run(); } catch {}
       return;
     }
     if (chatResp?.content) {
@@ -77,7 +77,7 @@ export async function processOneStep(env, action) {
     // Never done — save state and re-queue for next tick
     state.done = false;
     await saveAgentState(db, action.id, state);
-    await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
+    await db.prepare("UPDATE actions SET status='queued', updated_at=datetime('now') WHERE id=?1").bind(action.id).run();
     return;
   }
 
@@ -154,7 +154,7 @@ export async function processOneStep(env, action) {
       state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
       state.fullHistory.push({ role: "user", content: "[CONTRADICTION] You have the create_tool tool. Output EXACTLY: {\"tool\":\"create_tool\",\"input\":{\"repo\":\"richardbrownmiami-commits/skytron\",\"name\":\"...\",\"description\":\"...\",\"paramsSchema\":\"z.object({...})\",\"executeCode\":\"...\"}}" });
       await saveAgentState(db, action.id, state);
-      await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
+      await db.prepare("UPDATE actions SET status='queued', updated_at=datetime('now') WHERE id=?1").bind(action.id).run();
       return;
     }
     if (!parsed && repromptCount < 2 && (trimmed.includes('"tool":') || Object.keys(toolDefinitions).some(t => { var lc = trimmed.toLowerCase(); var tn = t.toLowerCase(); return lc.includes('"' + tn + '"') || lc.includes("use " + tn) || lc.includes("use the " + tn) || lc.includes("using " + tn) || lc.includes("- " + tn) || lc.includes(tn + ":"); }))) {
@@ -167,7 +167,7 @@ export async function processOneStep(env, action) {
         state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
         state.fullHistory.push({ role: "user", content: "[SYSTEM: You described using a tool but did NOT output the JSON. Output ONLY the raw JSON: {\"tool\":\"name\",\"input\":{...}}. No text, no explanation. Just the JSON object.]" });
         await saveAgentState(db, action.id, state);
-        await db.prepare("UPDATE actions SET status='running' WHERE id=?1").bind(action.id).run();
+        await db.prepare("UPDATE actions SET status='running', updated_at=datetime('now') WHERE id=?1").bind(action.id).run();
         return;
       }
     }
@@ -243,12 +243,12 @@ export async function processOneStep(env, action) {
 
   await saveAgentState(db, action.id, state);
   if (!state.done) {
-    await db.prepare("UPDATE actions SET status='queued' WHERE id=?1").bind(action.id).run();
+    await db.prepare("UPDATE actions SET status='queued', updated_at=datetime('now') WHERE id=?1").bind(action.id).run();
     return;
   }
   await finalizeAction(db, action.id, state);
   } catch (e) {
-    await db.prepare("UPDATE actions SET status='error', error=?1 WHERE id=?2").bind("processOneStep error: " + (e?.message || String(e)).slice(0, 500), action.id).run();
+    await db.prepare("UPDATE actions SET status='error', error=?1, updated_at=datetime('now') WHERE id=?2").bind("processOneStep error: " + (e?.message || String(e)).slice(0, 500), action.id).run();
   }
 }
 
@@ -256,7 +256,7 @@ export async function finalizeAction(db, actionId, state) {
   if (!state.finalContent) state.finalContent = "[Reached max steps]";
   if (typeof state.finalContent !== "string") state.finalContent = String(state.finalContent);
   await storeMemory(db, "assistant", state.finalContent.slice(0, 5000), state.conversationId);
-  await db.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(state.finalContent.slice(0, 5000), actionId).run();
+  await db.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now'), updated_at=datetime('now') WHERE id=?2").bind(state.finalContent.slice(0, 5000), actionId).run();
   logActivity(db, "action_done", { actionId, summary: (state.finalContent || "").slice(0, 150), details: "Step: " + state.step + " | Model: " + (state.modelName || "?") + " | Tokens: " + (state.totalTokens || 0) });
   try {
     const date = new Date().toISOString().split("T")[0];
