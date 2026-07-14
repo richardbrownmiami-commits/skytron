@@ -95,7 +95,7 @@ export async function processOneStep(env, action) {
 
   const startTime = Date.now();
   const MAX_BATCH_MS = 60000;
-  let codingModel = action.task === "coding" ? "deepseek-v4-flash-free" : "";
+  let codingModel = "";
 
   while (!state.done && state.step < 25 && (Date.now() - startTime) < MAX_BATCH_MS) {
     let resp, content;
