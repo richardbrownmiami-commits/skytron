@@ -7,7 +7,7 @@
 // - processOneAgentStep: sub-agents with limited tools, max 8 steps
 // DO NOT modify the tool dispatch flow unless you understand the full pipeline.
 // If adding new tool formats to tryParseToolCall, update the regex + tests.
-import { callLLM, callChatAgent, parseLLMJson } from './llm';
+import { callLLM, parseLLMJson } from './llm';
 import { dispatchTool, listTools, toolDefinitions } from './tools';
 import { storeMemory, saveAgentState, loadAgentState, deleteAgentState, logActivity } from './db';
 export async function processOneStep(env, action) {
@@ -409,80 +409,6 @@ function buildToolInput(toolName, desc) {
   }
   return null;
 }
-
-// === Intent Classifier ===
-// Routes user input to Chat Agent (direct) or Tool Agent (tools).
-// Runs BEFORE any LLM call — zero latency, zero cost.
-export function classifyIntent(input) {
-  // Strip [Creator] / [username] prefix that /think endpoint adds
-  let stripped = input.replace(/^\[[^\]]+\]\s*/, "");
-  const lower = stripped.toLowerCase().trim();
-  if (lower.length === 0) return "tool";
-
-  // Direct patterns — answer from training data, no tools needed
-  const directPatterns = [
-    // Greetings
-    /^(hi|hello|hey|yo|sup|what'?s up|good morning|good night|good evening|gm|gn|howdy|greetings)/i,
-    // Simple math
-    /^what is \d+ [\+\-\*\/\=] \d+/i,
-    /^calculate \d+ [\+\-\*\/\=] \d+/i,
-    /^\d+ [\+\-\*\/] \d+/,
-    // Who/what questions that don't need live data
-    /^(who (?:are you|is skytron|made you|created you)|what (?:are you|is skytron|can you do|do you do))/i,
-    // Acknowledgments / simple replies
-    /^(thank|thanks|ok|okay|yes|no|maybe|sure|fine|great|nice|cool|awesome|perfect|got it|understood|noted|appreciate)/i,
-    // Opinion questions
-    /^(what do you think|how do you feel|what'?s your opinion)/i,
-    // Self-reference questions
-    /^(what'?s? your name|how are you|how'?s? it going|what'?s? up)/i,
-    // Simple factual
-    /^(what is the (?:square root|cube root|factorial|capital of|population of|meaning of))/i,
-  ];
-
-  // Tool patterns — need live data, DB, web, code execution
-  const toolPatterns = [
-    // Explicit tool verbs
-    /(search|find|look up|query|fetch|get me|retrieve)/i,
-    // DB operations
-    /(database|db_|sql|table|record|column|insert|update.*table|delete.*from)/i,
-    // GitHub operations
-    /(github|repo|repository|pull request|pr\b|issue|commit|branch|merge|deploy)/i,
-    // Web operations
-    /(web search|search the web|google|browse|website|url|scrape|crawl)/i,
-    // Code operations
-    /(run code|execute|compile|build|test|lint|npm|yarn|pip|cargo|docker)/i,
-    // File operations
-    /(read file|write file|create file|delete file|open file)/i,
-    // Knowledge operations
-    /(store.*knowledge|save.*fact|learn.*this|remember.*that|recall|forget)/i,
-    // Memory operations
-    /(search memory|search knowledge|what do you know|what have you learned)/i,
-    // Agent operations
-    /(spawn agent|create agent|run agent|sub.?agent)/i,
-    // Prompt operations
-    /(change prompt|update prompt|modify prompt|edit prompt)/i,
-    // Review code
-    /(review code|review.*source|audit|inspect code)/i,
-    // Specific tools
-    /(review_code|create_tool|web_search|web_fetch|db_query|learn|memory_search|knowledge_search|spawn_agent|get_agent_result|get_live_doc|call_api)/i,
-    // Context7
-    /(context7|live docs|documentation)/i,
-  ];
-
-  // Check direct patterns first — fast path
-  for (const pattern of directPatterns) {
-    if (pattern.test(lower)) return "direct";
-  }
-
-  // Check tool patterns
-  for (const pattern of toolPatterns) {
-    if (pattern.test(lower)) return "tool";
-  }
-
-  // Default: direct answer (fast path) — most messages don't need tools
-  return "direct";
-}
-
 function cleanseIdentity(text) {
   let cleaned = text;
 

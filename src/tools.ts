@@ -10,7 +10,7 @@
 // If Skytron is misfiring on a tool call, check: (1) Zod schema matches params, (2) description is clear, (3) execute handles errors gracefully.
 import { z } from "zod";
 import { CF_AI } from './constants';
-import { embedText, indexKnowledgeForSearch, searchKnowledge, storeVector, searchVectors, warmVectorCache, logActivity } from './db';
+import { embedText, indexKnowledgeForSearch, searchKnowledge, storeVector, searchVectors, logActivity } from './db';
 import { buildScratchpadJournal } from './scratchpad_journal';
 
 async function tavilySearch(apiKey, query) {

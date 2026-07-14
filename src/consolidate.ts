@@ -67,6 +67,3 @@ export async function getScratchpad(env, batchId = null) {
   return await env.DB.prepare("SELECT * FROM consolidation_scratchpad ORDER BY source_table, record_id ASC").all();
 }
 
-export async function clearScratchpad(env) {
-  await env.DB.prepare("DELETE FROM consolidation_scratchpad").run();
-}

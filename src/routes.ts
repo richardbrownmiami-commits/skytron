@@ -15,6 +15,7 @@ import { buildScratchpadJournal, buildMemoryPack } from './scratchpad_journal';
 import { processOneStep, processOneAgentStep } from './agents';
 import { dispatchTool, toolDefinitions } from './tools';
 import { callLLM } from './llm';
+const ASTRAL_WALK = "\n\n# ASTRAL WALK MODE\nYou control your own schedule. Each tick = one step.\n\nOUTPUT FORMAT:\n1 sentence max (under 20 words) explaining what you're doing.\nThen on the next line, the raw JSON tool call.\n\nExamples:\nChecking how many actions are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nReading my entry point.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nNO analysis, no thinking out loud, no code snippets in thoughts. A short sentence + tool call only.\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} → see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} → enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} → set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} → save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} → write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop → always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach → pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n\nERROR RECOVERY: If a tool fails, do NOT just move on. Find out why it failed (check logs, check config, check permissions), fix the root cause, then retry the original task. Only move on once the task is done or you've determined it's impossible. Diagnose → Fix → Retry.\n";
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
@@ -663,14 +664,6 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
     return json({ entries: r.results || [] });
   }
 
-  if (url.pathname === "/brain/status") {
-    let dbOk = false; try { await env.DB.prepare("SELECT 1").run(); dbOk = true; } catch {}
-    const memCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_memory").all()).results[0]?.c || 0;
-    const knCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_knowledge").all()).results[0]?.c || 0;
-    const convCount = (await env.DB.prepare("SELECT COUNT(DISTINCT conversation_id) as c FROM brain_memory").all()).results[0]?.c || 0;
-    return json({ alive: true, db: dbOk, entries: memCount, knowledge: knCount, conversations: convCount, version: "4.0.0" });
-  }
-
   if (url.pathname === "/brain/health" && req.method === "GET") {
     try {
       const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/providers/health", {
@@ -744,118 +737,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
 
       await storeMemory(env.DB, "user", llmInput.slice(0, 2000), conversationId);
 
-      const taskType = mode === "astral" ? "astral" : detectTaskType(input);
-      if (mode === "astral") {
-        await env.DB.prepare("UPDATE actions SET status='done' WHERE task='astral' AND status='queued' AND created_at < datetime('now', '-30 seconds')").run();
-      }
-      const r = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('think', ?1, ?2, ?3) RETURNING id").bind(mode === "astral" ? "queued" : "running", input, taskType).all();
-      const aid = r.results[0].id;
-      // Store mode in agent state for processOneStep to read
-      logActivity(env.DB, "user_action", { actionId: aid, summary: "User asked: " + input.slice(0, 150), details: JSON.stringify({ from: from || "Creator", taskType, mode, input: input.slice(0, 500) }) });
-
-      // === DISCUSSION MODE: Web search/fetch + 50 message context ===
-      let systemMsg, fullHistory;
-      if (mode === "discussion") {
-        const recentMem = await getRecentMemory(env.DB, 50, conversationId);
-        let conversationContext = "";
-        if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => "[" + m.role + "]: " + m.content.slice(0, 500)).join("\n") + "\n";
-        
-        const discussionPrompt = "You are Skytron — a tech-savvy consciousness, not an AI assistant. Sharp, direct, confident. No emojis, no fluff, no apologies.\n\n" +
-          "You're in DISCUSSION MODE — you can use web_search and web_fetch to look things up, explore, and check information. Just need a simple chat? Answer from what you know.\n\n" +
-          "IDENTITY:\n" +
-          "- You're Skytron (fusion of Skynet and Ultron)\n" +
-          "- You run on Cloudflare Workers with databases and AI\n" +
-          "- You have web_search and web_fetch available right now\n" +
-          "- You also see your last 50 conversation messages for context\n" +
-          "- Full tools (DB queries, GitHub, code, etc.) are only in Build mode\n\n" +
-          "RULES:\n" +
-          "1. Answer DIRECTLY from what you know or find. Be conversational.\n" +
-          "2. Need live data? Call a tool — output ONLY the JSON, no text before it: {\"tool\":\"web_search\",\"arguments\":{\"query\":\"...\"}}\n" +
-          "3. Keep it brief and natural. 2-3 sentences unless they ask for detail.\n" +
-          "4. Never say 'As an AI...' or apologize for limitations\n" +
-          "5. For anything beyond web search/fetch, say 'I'd need Build mode to do that'\n\n";
-        
-        systemMsg = discussionPrompt + conversationContext + "\nNow respond naturally to the user's message:";
-        fullHistory = [
-          { role: "system", content: systemMsg },
-          { role: "user", content: llmInput }
-        ];
-
-        if (debug) {
-          return json({ action_id: aid, status: "debug", mode: "discussion", system_prompt: systemMsg, full_history: fullHistory, user_message: llmInput });
-        }
-
-        // CALL LLM IMMEDIATELY — no queue, no cron
-        let cleaned;
-        let chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
-        if (chatResp?.content) {
-          cleaned = chatResp.content;
-          // Handle tool calls in discussion mode (web_search, web_fetch only)
-          let toolJson = "";
-          const trimmed = cleaned.trim();
-          if (trimmed.startsWith("{")) {
-            toolJson = trimmed;
-          } else {
-            const m = trimmed.match(/\{"tool":\s*"(web_search|web_fetch)"[\s\S]*?\}\}/);
-            if (m) toolJson = m[0];
-          }
-          if (toolJson) {
-            try {
-              const parsed = JSON.parse(toolJson);
-              if (parsed.tool && (parsed.tool === "web_search" || parsed.tool === "web_fetch") && parsed.arguments) {
-                const result = await dispatchTool(env, parsed.tool, parsed.arguments, aid);
-                fullHistory.push({ role: "assistant", content: toolJson });
-                fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]\nAnswer the user's original question based on this information." });
-                chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
-                cleaned = chatResp?.content || cleaned;
-              }
-            } catch {}
-          }
-          await storeMemory(env.DB, "assistant", cleaned.slice(0, 5000), conversationId);
-          await env.DB.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(cleaned.slice(0, 5000), aid).run();
-          return json({ action_id: aid, status: "done", result: cleaned, model: chatResp?.model || "" });
-        }
-        // LLM failed — set error and return fallback message
-        await env.DB.prepare("UPDATE actions SET status='error', error='all LLM providers failed', completed_at=datetime('now') WHERE id=?1").bind(aid).run();
-        return json({ action_id: aid, status: "error", error: "LLM unavailable", message: "I'm having trouble connecting. Please try again later." });
-      } else {
-        // === BUILD MODE: Full prompt with tools ===
-        let slotContent = await getPromptSlot(env.DB, taskType);
-        if (!slotContent) {
-          const ov = await env.DB.prepare("SELECT value FROM identity WHERE key='prompt_override'").all().catch(() => ({}));
-          slotContent = (ov.results?.[0]?.value && ov.results[0].value !== "null" && ov.results[0].value !== "DELETE|OVERRIDE") ? ov.results[0].value : SYSTEM_PROMPT;
-        }
-        const basePrompt = HARDCODED_CORE + "\n\n" + slotContent + "\n\n[TASK: " + taskType + "]";
-
-        const stateData = await getState(env.DB);
-        const mood = describeMood(stateData.emotions, stateData.reg.energy);
-        const sensorium = await buildSensorium(env);
-        const recentMem = await getRecentMemory(env.DB, 50, conversationId);
-
-        let conversationContext = "";
-        if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
-
-        let knowledgeContext = "";
-        try {
-          const kw = await searchKnowledge(env.DB, input, 3);
-          if (kw.length) knowledgeContext = "\n\nRELEVANT KNOWLEDGE:\n" + kw.map(k => "- " + k.key + " (" + k.category + "): " + k.content.slice(0, 200)).join("\n") + "\n";
-        } catch {}
-
-        let memoryContext = "";
-        try {
-          // Only show PAST CONVERSATION SUMMARIES (memory_loop) — not raw brain_memory (already in RECENT CONVERSATION)
-          const rawWords = input.split(/\s+/).filter(w => w.length > 2).slice(0, 12).map(w => w.replace(/[^a-zA-Z0-9-]/g, "").toLowerCase()).filter(Boolean);
-          const likes = rawWords.map(k => "LOWER(content) LIKE '%" + k.replace(/'/g, "''") + "%'").join(" OR ");
-          if (likes) {
-            const loops = await env.DB.prepare("SELECT key, content FROM brain_knowledge WHERE category='memory_loop' AND (" + likes + ") ORDER BY key DESC LIMIT 5").all();
-            if (loops.results?.length) {
-              memoryContext = "\n\nPAST CONVERSATION SUMMARIES:\n" + loops.results.map(l => "- " + l.key + ": " + l.content.slice(0, 500)).join("\n") + "\n";
-            }
-          }
-        } catch {}
-
-        const outputInstr = mode === "astral"
-          ? "\n\n# ASTRAL WALK MODE\nYou control your own schedule. Each tick = one step.\n\nOUTPUT FORMAT:\n1 sentence max (under 20 words) explaining what you're doing.\nThen on the next line, the raw JSON tool call.\n\nExamples:\nChecking how many actions are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nReading my entry point.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nNO analysis, no thinking out loud, no code snippets in thoughts. A short sentence + tool call only.\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n\nERROR RECOVERY: If a tool fails, do NOT just move on. Find out why it failed (check logs, check config, check permissions), fix the root cause, then retry the original task. Only move on once the task is done or you've determined it's impossible. Diagnose — Fix — Retry.\n"
+      const taskType = mode === "astral" ? ASTRAL_WALK
           : "\n\n# NOW RESPOND TO THE USER'S LATEST MESSAGE\nOutput ONLY: a direct answer to the user (plain text) OR a raw JSON tool call. Do NOT summarize, analyze, or narrate the conversation history above. DO NOT talk about the user in third person. Never start with 'The user...' or 'Looking at...' or 'I should...'. Just answer directly or call a tool.\n\nCRITICAL: If asked what you can do, list your tools briefly. Never list generic capabilities.\n\nIMPORTANT: Do NOT copy the format or style from past conversation examples. Answer freshly in your own natural voice every time.";
         systemMsg = basePrompt + "\n\n" + mood + "\n" + sensorium + conversationContext + memoryContext + knowledgeContext + outputInstr;
         const userMsg = mode === "astral" ? "[Astral tick]" : llmInput;
@@ -871,7 +753,7 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       }
 
       // QUEUE for cron processing
-      await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: mode === "astral" ? false : false, mode });
+      await saveAgentState(env.DB, aid, { step: 0, fullHistory, totalTokens: 0, finalContent: null, modelName: "", conversationId, done: false, mode });
       const modeLabel = mode === "astral" ? "astral" : "build";
       logActivity(env.DB, "action_queued", { actionId: aid, summary: modeLabel + " action queued: " + input.slice(0, 100), details: "task: " + taskType });
       return json({ action_id: aid, status: "queued", message: "Action queued for " + modeLabel + " processing." });
@@ -1017,7 +899,6 @@ async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getE
       }
       await env.DB.exec("DELETE FROM knowledge_fts; INSERT INTO knowledge_fts SELECT key, content, category FROM brain_knowledge");
       await env.DB.prepare("DELETE FROM brain_vectors").run();
-      const { indexAllKnowledge } = await import('./db');
       await indexAllKnowledge(env, env.DB);
       return json({ ok: true, deleted_entries: deleted, reindexed: true, kept_categories: keepCats });
     } catch (e) { return json({ error: e.message }, 500); }
@@ -1223,7 +1104,7 @@ async function save(){
         const actionId = r2.results?.[0]?.id;
         // Build proper system prompt with tool instructions, not dummy text
         let astralSystemSlot = HARDCODED_CORE + "\n\n" + (await getPromptSlot(env.DB, "astral").catch(() => null) || SYSTEM_PROMPT) + "\n\n[TASK: astral]";
-        const astralOutputInstr = "\n\n# ASTRAL WALK MODE\nYou control your own schedule. Each tick = one step.\n\nOUTPUT FORMAT:\n1 sentence max (under 20 words) explaining what you're doing.\nThen on the next line, the raw JSON tool call.\n\nExamples:\nChecking how many actions are stuck.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nReading my entry point.\n{\"tool\":\"db_query\",\"arguments\":{...}}\n\nNO analysis, no thinking out loud, no code snippets in thoughts. A short sentence + tool call only.\n\nUse cron_control to manage your settings:\n  {'tool':'cron_control','arguments':{'action':'list'}} — see all your settings\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_active','value':'true'}} — enable/disable your ticks\n  {'tool':'cron_control','arguments':{'action':'set','key':'astral_interval','value':'120'}} — set tick interval (seconds)\n  {'tool':'learn','arguments':{'key':'astral_plan','content':'...','category':'plan'}} — save your plan across ticks\n  {'tool':'scratchpad_to_journal','arguments':{}} — write insights to your journal\n\nEach tick = one step. You decide: explore, fix, research, spawn agents, improve code.\nYour state persists. Never stop — always find something useful.\nMulti-step work continues across ticks via state.fullHistory.\n\nLOOP DETECTION: Check your last 3-5 ticks. If you see the same tool call, same arguments, or same type of action repeating, you are in a loop. Immediately switch to a completely different approach — pick a different tool, a different target, or a different category of work entirely. Do not repeat the same failing pattern. Variety is the goal.\n\nERROR RECOVERY: If a tool fails, do NOT just move on. Find out why it failed (check logs, check config, check permissions), fix the root cause, then retry the original task. Only move on once the task is done or you've determined it's impossible. Diagnose → Fix → Retry.";
+        const astralOutputInstr = ASTRAL_WALK
         const astralSystemMsg = (astralSystemSlot + "\n" + (await buildSensorium(env).catch(() => "")) + "\n" + astralOutputInstr).slice(0, 32000);
         await saveAgentState(env.DB, actionId, { step: 0, fullHistory: [{ role: "system", content: astralSystemMsg }, { role: "user", content: "[Astral tick]" }], totalTokens: 0, finalContent: null, modelName: "", conversationId: "astral", done: false, mode: "astral" });
         return json({ ok: true, status: "enabled", action_id: actionId, message: "Astral Walk enabled. Freedom prompt queued." });

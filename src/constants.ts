@@ -10,7 +10,6 @@
 import { z } from "zod";
 
 export const CF_AI = { account: "913f3a2576a358054eba9a58a9573949" };
-export const AI_MODEL = "@cf/zai-org/glm-4.7-flash";
 export const SCHEMA_VERSION = '12';
 
 export const TABLES = [
