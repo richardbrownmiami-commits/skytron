@@ -158,8 +158,6 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       const entries = r.results || [];
       const esc = s => (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
       const html = entries.map(e => {
-        let c, narrative, topics, status, date, tags;
-      try { c = JSON.parse(e.content); narrative = c.narrative || c.what_happened || c.recall_response || c.summary || ""; topics = c.topics?.length ? c.topics.join(", ") : c.topic || "Entry"; status = c.status || "entry"; date = c.date || (c.date_start || "").slice(0, 10); tags = c.tags || []; } catch { narrative = e.content; topics = e.key; status = "entry"; date = e.created_at?.slice(0, 10) || ""; tags = []; }
       const colors = { productive:"#3fb950", built:"#58a6ff", mixed:"#d29922", rough:"#f85149", light:"#8b949e", planned:"#a371f7", completed:"#3fb950", discussed:"#58a6ff", failed:"#f85149", partial:"#d29922", pending:"#8b949e", entry:"#8b949e" };
       let c, narrative, topics, status, date, tags;
       try { c = JSON.parse(e.content); narrative = c.narrative || c.what_happened || c.recall_response || c.summary || ""; topics = c.topics?.length ? c.topics.join(", ") : c.topic || "Entry"; status = c.status || "entry"; date = c.date || (c.date_start || "").slice(0, 10); tags = c.tags || []; } catch { narrative = e.content; topics = e.key; status = "entry"; date = e.created_at?.slice(0, 10) || ""; tags = []; }
