@@ -8,7 +8,7 @@
 // DO NOT modify the tool dispatch flow unless you understand the full pipeline.
 // If adding new tool formats to tryParseToolCall, update the regex + tests.
 import { callLLM, parseLLMJson } from './llm';
-import { dispatchTool, listTools, toolDefinitions } from './tools';
+import { dispatchTool, listTools, toolDefinitions, getOpenAITools } from './tools';
 import { storeMemory, saveAgentState, loadAgentState, deleteAgentState, logActivity } from './db';
 export async function processOneStep(env, action) {
   const db = env.DB;
@@ -102,8 +102,9 @@ export async function processOneStep(env, action) {
     let lastErrors = [];
     for (let retry = 0; retry < (codingModel ? 3 : 1); retry++) {
       if (retry > 0) await new Promise(r => setTimeout(r, 1000 * retry));
-      const reqBody = { messages: state.fullHistory, task: action.task || "chat" };
+      const reqBody: any = { messages: state.fullHistory, task: action.task || "chat" };
       if (codingModel) reqBody.model = codingModel;
+      if (isCodingTask) reqBody.tools = getOpenAITools();
       const chatId = "skytron-" + state.conversationId;
       logActivity(db, "llm_call", { actionId: action.id, summary: "LLM call — step " + state.step + ", model: pending", details: "messages: " + (reqBody.messages?.length || 0) + ", task: " + (action.task || "chat") });
       resp = await callLLM(env, reqBody, chatId);
@@ -121,12 +122,13 @@ export async function processOneStep(env, action) {
         }
       } catch {}
       if (!resp) continue;
-      if (!resp.content && resp.errors) {
-        lastErrors = resp.errors;
+      if (!resp.content && !resp.tool_calls?.length) {
+        if (resp.errors) lastErrors = resp.errors;
         if (codingModel) { codingModel = ""; retry--; continue; }
+        continue;
       }
-      content = resp.content;
-      if (typeof content === "string") break;
+      content = resp.content || "";
+      if (typeof content === "string" || resp.tool_calls?.length > 0) break;
     }
     if (!resp || typeof content !== "string") {
       const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
@@ -139,8 +141,18 @@ export async function processOneStep(env, action) {
     logActivity(db, "thought", { actionId: action.id, summary: (action.task || "chat") + " — step " + state.step, details: content.slice(0, 1000) });
     try { await db.prepare("INSERT INTO brain_logs (action_id, step, content, model, tokens) VALUES (?1, ?2, ?3, ?4, ?5)").bind(action.id, "step_" + state.step, content.slice(0, 4000), state.modelName, resp.tokens?.total || 0).run(); } catch {}
 
-    const trimmed = content.trim();
-    let parsed = tryParseToolCall(trimmed);
+    // Native function calling from provider — convert to internal format before text parsing
+    let parsed = null;
+    if (resp.tool_calls?.length > 0) {
+      const tc = resp.tool_calls[0];
+      if (tc.type === "function" && tc.function?.name) {
+        let fnArgs = {};
+        try { fnArgs = JSON.parse(tc.function.arguments || "{}"); } catch {}
+        parsed = { tool: tc.function.name, input: fnArgs };
+        content = JSON.stringify(parsed);
+      }
+    }
+    if (!parsed) parsed = tryParseToolCall(content.trim());
     const repromptCount = state.repromptCount || 0;
     const analysisPattern = /^(the user (is|wants|asked|says|keeps)|looking at|from the conversation|based on my|according to|i should|let me|in the conversation|so (the|what)|this (is about|appears|seems)|the conversation)/i;
     if (!parsed && !trimmed.includes('"tool":') && analysisPattern.test(trimmed) && trimmed.length > 80 && !Object.keys(toolDefinitions).some(t => new RegExp("\\b" + t.replace(/_/g, "\\w*") + "\\b", "i").test(trimmed))) {

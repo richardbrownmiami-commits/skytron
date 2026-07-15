@@ -937,3 +937,32 @@ export const toolDefinitions = {
     },
   },
 }; // --- End tool definitions ---
+
+// Convert toolDefinitions to OpenAI function-calling format
+export function getOpenAITools() {
+  const tools = [];
+  for (const [name, def] of Object.entries(toolDefinitions)) {
+    const shape = def.schema?.shape || {};
+    const properties = {};
+    const required = [];
+    for (const [key, field] of Object.entries(shape)) {
+      let type = "string";
+      const tn = field._def?.typeName;
+      if (tn === "ZodNumber") type = "number";
+      else if (tn === "ZodBoolean") type = "boolean";
+      else if (tn === "ZodEnum") type = "string";
+      const isOpt = field.isOptional ? field.isOptional() : field._def?.isOptional;
+      if (!isOpt) required.push(key);
+      properties[key] = { type, description: field.description || field._def?.description || "" };
+    }
+    tools.push({
+      type: "function",
+      function: {
+        name,
+        description: def.description,
+        parameters: { type: "object", properties, ...(required.length ? { required } : {}) }
+      }
+    });
+  }
+  return tools;
+}

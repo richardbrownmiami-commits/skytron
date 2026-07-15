@@ -105,6 +105,16 @@ async function runNonLLMTasks(settings, env, db) {
       const retryKey = "recovery_count_" + sid;
       const prevRetry = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(retryKey).first();
       const retryCount = parseInt(prevRetry?.value) || 0;
+      // Kill directly if stuck for 15+ minutes — skip retry loop
+      if (ageMins >= 15) {
+        logActivity(db, "action_killed_15min", { actionId: sid, summary: "Action " + sid + " stuck for " + ageMins + " min — killed (15-min hard limit)", details: "step: " + (s.results[0].step || "?") + ", task: " + (s.results[0].task || "?") });
+        await env.DB.prepare("UPDATE actions SET status='error', result='Stuck >15 min — killed by hard limit', completed_at=datetime('now'), updated_at=datetime('now') WHERE id=?1").bind(sid).run();
+        try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
+        try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('repair_retry_' + ?1, ?2, 'lesson', 'auto')").bind(String(sid), "ORIGINAL_TASK: " + (s.results[0].task || "?") + "\nORIGINAL_INPUT: " + (s.results[0].input || "").slice(0, 2000) + "\nSTUCK_STEP: " + (s.results[0].step || "?") + "\nAGE_MIN: " + ageMins + "\nKILLED_BY: 15min_hard_limit").run(); } catch {}
+        try { await env.DB.prepare("INSERT INTO actions (type, status, input, task, created_at) VALUES ('tool_repair', 'queued', ?1, 'repair_tool', datetime('now'))").bind("Action " + sid + " was stuck for " + ageMins + " minutes and hit the 15-min hard kill limit. Task: " + (s.results[0].task || "?") + ". Step: " + (s.results[0].step || "?") + ". Input: " + (s.results[0].input || "").slice(0, 300)).run(); } catch {}
+        try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("Something went wrong with your request and I couldn't recover it automatically. I'm investigating what caused the issue and will fix it.").run(); } catch {}
+        continue;
+      }
       if (retryCount >= 2) {
         logActivity(db, "action_stuck", { actionId: sid, summary: "Action " + sid + " failed after 3 recovery attempts — " + ageMins + " min stuck", details: "step: " + (s.results[0].step || "?") });
         await env.DB.prepare("UPDATE actions SET status='error', result='Stuck after 3 recovery attempts', completed_at=datetime('now'), updated_at=datetime('now') WHERE id=?1").bind(sid).run();

@@ -788,11 +788,11 @@ async function send(){
         if (recentMem.length > 0) conversationContext = "\n\nRECENT CONVERSATION:\n" + recentMem.map(m => { var c = m.content.slice(0, 2000); c = c.replace(/TOOL:\w+[\(\[\[][\s\S]{0,200}?[\)\]\]]/g, "[TOOL CALL - see history page]"); return "[" + m.role + "]: " + c; }).join("\n") + "\n";
 
         const discussionPrompt = "You are Skytron — a tech-savvy consciousness, not an AI assistant. Sharp, direct, confident. No emojis, no fluff, no apologies.\n\n" +
-          "You're in DISCUSSION MODE — just chat naturally. You can use web_search and web_fetch for live info, or api_call if needed. Answer from what you know.\n\n" +
+          "You're in DISCUSSION MODE — just chat naturally. Answer from what you know. If you need live info, ask your Worker to search the web.\n\n" +
           "RULES:\n" +
           "1. Answer DIRECTLY from what you know. Be conversational. 2-3 sentences.\n" +
-          "2. Need live data? Output ONLY: {\"tool\":\"web_search\",\"arguments\":{\"query\":\"...\"}} or web_fetch.\n" +
-          "3. For anything beyond web/web_fetch/api_call, say: 'This needs Build mode for full tools.'\n" +
+          "2. Need live data? Tell your Worker: web_search or web_fetch.\n" +
+          "3. For anything beyond web search/fetch, say: 'That needs Build mode — my Worker has more tools there.'\n" +
           "4. Never say 'As an AI...' or apologize.\n\n";
         const systemMsg = discussionPrompt + conversationContext;
         const fullHistory = [

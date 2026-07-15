@@ -1,10 +1,10 @@
 // === Skytron LLM Gateway (AI PROVIDER) ===
-// Reads enabled providers from brain_knowledge settings_llm and tries them in order:
-//   1. Workers AI (if enabled + binding exists)
-//   1.5 OpenRouter (if OPENROUTER_API_KEY secret is set)
-//   2. BUDDHI_DWAR (if enabled + api_key provided)
-//   3. Universal AI (if enabled + endpoint + api_key configured)
-// First provider that returns a valid response wins.
+// Two modes:
+//   TOOL MODE (hasTools): Workers AI REST → Universal
+//   CHAT MODE (no tools): BD → OpenRouter → Universal (skip WA to preserve quota)
+// No hardcoded model names — providers route based on tools presence.
+
+import { CF_AI } from './constants';
 
 function timeoutRace(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
@@ -39,8 +39,22 @@ const DEFAULT_SETTINGS = {
   universal: { enabled: false, endpoint: "", api_key: "", model: "" }
 };
 
+// Shared response parser for all providers
+function parseChatResponse(data, defaultModel) {
+  if (!data?.choices?.[0]?.message) return null;
+  const msg = data.choices[0].message;
+  return {
+    content: msg.content || "",
+    tool_calls: msg.tool_calls || null,
+    model: data.model || defaultModel || "unknown",
+    tokens: data.usage || { total: 0 },
+    finish_reason: data.choices[0].finish_reason || ""
+  };
+}
+
 export async function callLLM(env, body, sessionId) {
   const maxTokens = body.max_tokens || 2000;
+  const hasTools = body.tools && Array.isArray(body.tools) && body.tools.length > 0;
   const errors = [];
 
   // Load settings from brain_knowledge
@@ -58,112 +72,128 @@ export async function callLLM(env, body, sessionId) {
     }
   } catch {}
 
-  // Priority 1: Workers AI
-  if (settings.workers_ai?.enabled !== false && env.AI) {
-    const waModels = [
-      { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", timeout: 3000 },
-      { model: "@cf/meta/llama-3.2-3b-instruct", timeout: 3000 }
-    ];
-    for (const { model: waModel, timeout } of waModels) {
+  if (hasTools) {
+    // === TOOL MODE: Workers AI REST → Universal ===
+    // Workers AI via REST endpoint (supports tools param), then Universal as fallback
+
+    if (settings.workers_ai?.enabled !== false && env.CF_API_TOKEN) {
+      const WA_TOOL_MODEL = "@cf/zai-org/glm-4.7-flash";
       try {
-        const waResult = await Promise.race([
-          env.AI.run(waModel, {
-            messages: body.messages, max_tokens: Math.min(maxTokens, 4000)
+        const resp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN },
+          body: JSON.stringify({
+            model: WA_TOOL_MODEL,
+            messages: body.messages,
+            tools: body.tools,
+            max_tokens: Math.min(maxTokens, 4000)
           }),
-          timeoutRace(timeout)
-        ]);
-        const waText = typeof waResult?.response === "string" ? waResult.response : (waResult?.choices?.[0]?.message?.content || (waResult?.result?.response) || "");
-        if (waText) return { content: waText, model: "workers-ai/" + waModel.split("/").pop(), tokens: { total: 0 } };
-      } catch (e) {
-        errors.push("Workers AI " + waModel.split("/").pop() + ": " + (e.message || "timeout"));
-      }
+          signal: AbortSignal.timeout(30000)
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const parsed = parseChatResponse(data, "workers-ai/" + WA_TOOL_MODEL.split("/").pop());
+          if (parsed) return parsed;
+          errors.push("Workers AI tools: HTTP 200 empty");
+        } else {
+          const errBody = await resp.text().catch(() => "");
+          errors.push("Workers AI tools: HTTP " + resp.status + " " + errBody.slice(0, 80));
+        }
+      } catch (e) { errors.push("Workers AI tools: " + (e.message || "timeout")); }
     }
-  }
 
-  // Priority 1.5: OpenRouter (direct emergency fallback via Cloudflare secret)
-  if (settings.openrouter?.enabled !== false && env.OPENROUTER_API_KEY) {
-    try {
-      // Truncate messages to stay within OpenRouter free model context limits
-      const orMessages = body.messages.map(function(m) {
-        var c = m.content;
-        if (typeof c !== "string") return m;
-        // Truncate very long messages (like the system prompt) to 6000 chars
-        if (c.length > 10000) c = c.slice(0, 4000) + "\n...[truncated]...\n" + c.slice(c.length - 6000);
-        return { role: m.role, content: c };
-      });
-      // Try capable free model first, fallback to openrouter/free routing
-      var orModels = ["meta-llama/llama-3.2-3b-instruct:free", "meta-llama/llama-3.3-70b-instruct:free", "openrouter/free"];
-      for (var omi = 0; omi < orModels.length; omi++) {
-        const orResult = await callOpenRouter(env, orMessages, maxTokens, orModels[omi]);
-        if (orResult?.content) return orResult;
-        if (orResult?.error) errors.push("OpenRouter/" + orModels[omi] + ": " + orResult.error);
-      }
-    } catch (e) { errors.push("OpenRouter: " + (e.message || "error")); }
-  }
+    // Universal AI (if configured) — tools fallback
+    if (settings.universal?.enabled && settings.universal?.api_key && settings.universal?.endpoint) {
+      try {
+        const model = settings.universal.model || "";
+        const reqBody = { messages: body.messages, max_tokens: maxTokens, tools: body.tools };
+        if (model) reqBody.model = model;
+        const resp = await fetchWithRetry(settings.universal.endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.universal.api_key },
+          body: JSON.stringify(reqBody),
+          signal: AbortSignal.timeout(45000)
+        }, 2);
+        if (resp.ok) {
+          const data = await resp.json();
+          const parsed = parseChatResponse(data, settings.universal.model || "universal");
+          if (parsed) return parsed;
+          errors.push("Universal tools: HTTP 200 empty");
+        } else {
+          const errBody = await resp.text().catch(() => "");
+          errors.push("Universal tools: HTTP " + resp.status + " " + errBody.slice(0, 100));
+        }
+      } catch (e) { errors.push("Universal tools: " + (e.message || "timeout")); }
+    }
 
-  // Priority 2: BUDDHI_DWAR (auto-fallbacks across providers)
-  if (settings.buddhidwar?.enabled && settings.buddhidwar?.api_key) {
-    const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
-    const bdModels = [
-      body.model || "openrouter/free",
-      "groq/llama3-70b",
-      "mistral/mixtral-8x7b",
-      "opencode-zen/auto",
-      "openrouter/free"
-    ];
-    const timeoutMs = Math.max(20000, maxTokens * 8);
-    for (const model of bdModels) {
+  } else {
+    // === CHAT MODE: BD → OpenRouter → Universal (skip WA to preserve daily quota) ===
+
+    // Priority 1: BUDDHI_DWAR (auto-selects fastest model)
+    if (settings.buddhidwar?.enabled && settings.buddhidwar?.api_key) {
+      const BD_URL = "https://buddhi-dwar.richard-brown-miami.workers.dev";
+      const timeoutMs = Math.max(20000, maxTokens * 8);
       try {
         const resp = await fetchWithRetry(BD_URL + "/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.buddhidwar.api_key },
-          body: JSON.stringify({ messages: body.messages, model, max_tokens: maxTokens || 3000, task: body.task || "chat" }),
+          body: JSON.stringify({ messages: body.messages, max_tokens: maxTokens, task: body.task || "chat" }),
           signal: AbortSignal.timeout(timeoutMs)
         }, 1);
         if (resp.ok) {
           const data = await resp.json();
           const msgContent = data.choices?.[0]?.message?.content;
           if (typeof msgContent === "string" && msgContent.length > 0) {
-            return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+            return { content: msgContent, model: data.model || "buddhidwar", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
           }
-          errors.push("BUDDHI_DWAR/" + model + ": HTTP 200 empty");
+          errors.push("BD: HTTP 200 empty");
         } else {
           const errBody = await resp.text().catch(() => "");
-          errors.push("BUDDHI_DWAR/" + model + ": HTTP " + resp.status + " " + errBody.slice(0, 80));
+          errors.push("BD: HTTP " + resp.status + " " + errBody.slice(0, 80));
         }
-      } catch (e) { errors.push("BUDDHI_DWAR/" + model + ": " + (e.message || "timeout")); }
+      } catch (e) { errors.push("BD: " + (e.message || "timeout")); }
     }
-  }
 
-  // Priority 3: Universal AI API (OpenAI-compatible)
-  if (settings.universal?.enabled && settings.universal?.api_key && settings.universal?.endpoint) {
-    try {
-      const model = settings.universal.model || "gpt-4o";
-      const resp = await fetchWithRetry(settings.universal.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer " + settings.universal.api_key
-        },
-        body: JSON.stringify({
-          model,
-          messages: body.messages,
-          max_tokens: maxTokens
-        }),
-        signal: AbortSignal.timeout(30000)
-      }, 2);
-      if (resp.ok) {
-        const data = await resp.json();
-        const msgContent = data.choices?.[0]?.message?.content;
-        if (typeof msgContent === "string" && msgContent.length > 0) {
-          return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+    // Priority 2: OpenRouter (free models)
+    if (settings.openrouter?.enabled !== false && env.OPENROUTER_API_KEY) {
+      try {
+        const orMessages = body.messages.map(function(m) {
+          var c = m.content;
+          if (typeof c !== "string") return m;
+          if (c.length > 10000) c = c.slice(0, 4000) + "\n...[truncated]...\n" + c.slice(c.length - 6000);
+          return { role: m.role, content: c };
+        });
+        const orResult = await callOpenRouter(env, orMessages, maxTokens);
+        if (orResult?.content) return orResult;
+        if (orResult?.error) errors.push("OpenRouter: " + orResult.error);
+      } catch (e) { errors.push("OpenRouter: " + (e.message || "error")); }
+    }
+
+    // Priority 3: Universal AI (chat mode, no tools)
+    if (settings.universal?.enabled && settings.universal?.api_key && settings.universal?.endpoint) {
+      try {
+        const model = settings.universal.model || "";
+        const reqBody = { messages: body.messages, max_tokens: maxTokens };
+        if (model) reqBody.model = model;
+        const resp = await fetchWithRetry(settings.universal.endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.universal.api_key },
+          body: JSON.stringify(reqBody),
+          signal: AbortSignal.timeout(30000)
+        }, 2);
+        if (resp.ok) {
+          const data = await resp.json();
+          const msgContent = data.choices?.[0]?.message?.content;
+          if (typeof msgContent === "string" && msgContent.length > 0) {
+            return { content: msgContent, model: data.model || settings.universal.model || "universal", tokens: data.usage || { total: 0 } };
+          }
+          errors.push("Universal: HTTP 200 empty");
+        } else {
+          const errBody = await resp.text().catch(() => "");
+          errors.push("Universal: HTTP " + resp.status + " " + errBody.slice(0, 100));
         }
-        errors.push("Universal: HTTP 200 empty");
-      } else {
-        const errBody = await resp.text().catch(() => "");
-        errors.push("Universal: HTTP " + resp.status + " " + errBody.slice(0, 100));
-      }
-    } catch (e) { errors.push("Universal: " + (e.message || "timeout")); }
+      } catch (e) { errors.push("Universal: " + (e.message || "timeout")); }
+    }
   }
 
   if (errors.length && env.DB) {
