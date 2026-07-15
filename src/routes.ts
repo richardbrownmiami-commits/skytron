@@ -368,7 +368,50 @@ const nav = `<div class="nav" style="display:flex;align-items:center;gap:8px;fle
 var inp=document.getElementById('msgInput'),btn=document.getElementById('sendBtn');
 inp.addEventListener('keydown',function(e){if(e.key==='Enter')send()});
 btn.addEventListener('click',send);
-async function send(){var t=inp.value.trim();if(!t)return;var conv=document.getElementById('convSelect').value;inp.value='';btn.disabled=true;btn.textContent='...';try{var r=await fetch('/think?c='+encodeURIComponent(conv),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:t})});var d=await r.json();location.reload()}catch(e){btn.disabled=false;btn.textContent='Send'}}
+async function send(){
+  var t=inp.value.trim();if(!t)return;
+  var conv=document.getElementById('convSelect').value;
+  inp.value='';btn.disabled=true;btn.textContent='...';
+  var controller=new AbortController();
+  var pollTimer=null;
+  var timeoutId=setTimeout(function(){
+    controller.abort();
+    btn.disabled=false;btn.textContent='Send';
+    // Start polling for response in case backend is still working
+    var retries=0;
+    (function poll(){
+      retries++;
+      fetch('/brain/memory?c='+encodeURIComponent(conv)+'&limit=3').then(function(r){return r.json()}).then(function(d){
+        var entries=d.entries||[];
+        var last=entries[entries.length-1];
+        if(last&&last.role==='assistant'&&last.content.indexOf(t.slice(0,20))===-1){
+          location.reload();
+        }else if(retries<24){
+          pollTimer=setTimeout(poll,5000);
+        }
+      }).catch(function(){
+        if(retries<12) pollTimer=setTimeout(poll,10000);
+      });
+    })();
+  },25000);
+  try{
+    var r=await fetch('/think?c='+encodeURIComponent(conv),{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({input:t}),
+      signal:controller.signal
+    });
+    clearTimeout(timeoutId);
+    location.reload()
+  }catch(e){
+    if(e.name==='AbortError'){
+      // timeout already handled above
+    }else{
+      btn.disabled=false;btn.textContent='Send';
+      location.reload();
+    }
+  }
+}
 </script>
 </body></html>`, { headers: { "Content-Type": "text/html;charset=utf-8" } });
   }
