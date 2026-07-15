@@ -936,6 +936,39 @@ export const toolDefinitions = {
       return "Priority queue tool: not yet implemented (stub)";
     },
   },
+
+  send_notification: {
+    description: "Send a notification via webhook/REST API with formatted messages and severity levels",
+    schema: z.object({
+      webhookUrl: z.string().url().describe("Webhook URL to send the notification to"),
+      message: z.string().describe("Message body content"),
+      title: z.string().optional().describe("Optional title/header for the notification"),
+      level: z.enum(["info", "warning", "error", "success"]).optional().describe("Severity level indicator")
+    }),
+    execute: async (env, input) => {
+      const { webhookUrl, message, title, level = "info" } = input;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      try {
+        const response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: title ? `*${title}*\n${message}` : message,
+            level,
+            timestamp: new Date().toISOString()
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (!response.ok) return `Notification failed: HTTP ${response.status}`;
+        return `Notification sent to webhook — ${response.status}`;
+      } catch (error) {
+        clearTimeout(timeout);
+        return `Notification error: ${error.message}`;
+      }
+    },
+  },
 }; // --- End tool definitions ---
 
 // Convert toolDefinitions to OpenAI function-calling format
