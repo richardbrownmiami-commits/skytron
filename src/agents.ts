@@ -84,7 +84,7 @@ export async function processOneStep(env, action) {
   // REPAIR MODE: When action.task is 'repair_tool', set up self-fix prompt
   if (action.task === "repair_tool" && state.fullHistory.length <= 1) {
     state.fullHistory = [
-      { role: "system", content: "You are Skytron's self-repair system. A tool failed or an action got stuck. Read the error below, then:\n1. Use github_get_file with your repo ('richardbrownmiami-commits/skytron') and path like 'src/tools.ts' to read your own source\n2. Identify what's broken\n3. Use github_write_file to fix it\n4. Report what you changed\n\nTo find the original task that failed, look up 'repair_retry_<action_id>' in brain_knowledge with db_query.\n\nError report:\n" + (action.input || "No details").slice(0, 3000) },
+      { role: "system", content: "You are Skytron's self-repair system. A tool failed or an action got stuck. Read the error below, then:\n1. github_get_file the relevant source files (repo: richardbrownmiami-commits/skytron) — likely agents.ts, tools.ts, or scheduler.ts based on the error\n2. Identify the root cause\n3. github_write_file to fix it\n4. Report what you changed\n\nTo find the original task that failed, db_query 'repair_retry_<action_id>' in brain_knowledge.\n\nError report:\n" + (action.input || "No details").slice(0, 3000) },
       { role: "user", content: "Fix the broken code and report what you changed." }
     ];
     await saveAgentState(db, action.id, state);
@@ -164,7 +164,7 @@ export async function processOneStep(env, action) {
     if (!parsed && repromptCount < 2 && /\b(?:can't|cannot|don't have the ability|unable to|not able to|not programmed to)[\s\S]{0,30}(?:add|create|make|write|modify|change|edit|implement)[\s\S]{0,30}(?:tools?|features?|commands?|capabilities?|programming|source code|source (?:code|files)|itself|myself)/i.test(trimmed)) {
       state.repromptCount = repromptCount + 1;
       state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
-      state.fullHistory.push({ role: "user", content: "[CONTRADICTION] You have the create_tool tool. Output EXACTLY: {\"tool\":\"create_tool\",\"input\":{\"repo\":\"richardbrownmiami-commits/skytron\",\"name\":\"...\",\"description\":\"...\",\"paramsSchema\":\"z.object({...})\",\"executeCode\":\"...\"}}" });
+      state.fullHistory.push({ role: "user", content: "[CONTRADICTION] Use create_tool. Format: create_tool with repo='richardbrownmiami-commits/skytron', name, description, paramsSchema (like z.object({ paramName: z.string() })), and executeCode (the full TypeScript function body)." });
       await saveAgentState(db, action.id, state);
       await db.prepare("UPDATE actions SET status='queued', updated_at=datetime('now') WHERE id=?1").bind(action.id).run();
       return;
@@ -177,7 +177,7 @@ export async function processOneStep(env, action) {
         state.fullHistory.push({ role: "assistant", content: JSON.stringify(extracted) });
       } else {
         state.fullHistory.push({ role: "assistant", content: trimmed.slice(0, 200) + "..." });
-        state.fullHistory.push({ role: "user", content: "[SYSTEM: You described using a tool but did NOT output the JSON. Output ONLY the raw JSON: {\"tool\":\"name\",\"input\":{...}}. No text, no explanation. Just the JSON object.]" });
+        state.fullHistory.push({ role: "user", content: "[SYSTEM: You described a tool but didn't output the call. Output {\"tool\":\"name\",\"input\":{...}} as the first thing in your response." });
         await saveAgentState(db, action.id, state);
         await db.prepare("UPDATE actions SET status='running', updated_at=datetime('now') WHERE id=?1").bind(action.id).run();
         return;
@@ -194,7 +194,7 @@ export async function processOneStep(env, action) {
       }
       state.lastToolCall = callKey;
       if (alreadyDispatched) {
-        state.fullHistory.push({ role: "user", content: "[SYSTEM: You already called " + parsed.tool + " with those params. The result is already in the history. Read it and answer the user in plain English. DO NOT call any more tools.]" });
+        state.fullHistory.push({ role: "user", content: "[SYSTEM: " + parsed.tool + " already ran with those exact params. The result is in the history. Read it and answer the user. No more tool calls needed.]" });
         state.repeatCount = 0;
         state.step++;
         await saveAgentState(db, action.id, state);
@@ -202,7 +202,7 @@ export async function processOneStep(env, action) {
         continue;
       }
       if (state.repeatCount >= 3) {
-        state.fullHistory.push({ role: "user", content: "[SYSTEM: You called '" + parsed.tool + "' 3 times with the same params. The tool already succeeded. Now SUMMARIZE the result in plain English. DO NOT output tool JSON. DO NOT repeat the tool call. Answer the user directly.]" });
+        state.fullHistory.push({ role: "user", content: "[SYSTEM: '" + parsed.tool + "' called 3 times with the same params. Already succeeded. Summarize the result to the user. No more tool calls.]" });
         state.repeatCount = 0;
         state.step++;
         await saveAgentState(db, action.id, state);
@@ -212,7 +212,7 @@ export async function processOneStep(env, action) {
       const result = await dispatchTool(env, parsed.tool, parsed.input, action.id);
       state.lastDispatchedKey = callKey;
       if (result === null) {
-        state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Available: " + listTools() + "]" });
+        state.fullHistory.push({ role: "user", content: "[TOOL ERROR: Unknown tool '" + parsed.tool + "'. Use create_tool to build it, or pick from existing: " + listTools() + "]" });
       } else {
         state.fullHistory.push({ role: "user", content: "[TOOL RESULT: " + result.slice(0, 4000) + "]" });
         if (result.length > 20) {
@@ -235,10 +235,10 @@ export async function processOneStep(env, action) {
           state.totalTokens += resp.tokens?.total || 0;
           break;
         }
-        state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nYOUR TOOL CALL FAILED: " + JSON.stringify(parsed) + "\nDO NOT repeat this exact call. Self-heal:\n1. RESEARCH: Use web_search to look up the error message or issue\n2. DIAGNOSE: What's actually broken? Your creds? The service? Bad params?\n3. FIX: Changed params, different tool that does same thing, or inform user\n4. LOOP CHECK: If you already researched this error, answer in plain text\n\nStart with web_search if you don't understand the error." });
+        state.fullHistory.push({ role: "user", content: "[REFLECTION CHECKPOINT]\nTOOL FAILED: " + JSON.stringify(parsed) + "\nThe error is above. Don't repeat the same call. Diagnose:\n1. Wrong params? Check the tool's schema in brain_knowledge (category 'tools') or db_query PRAGMA table_info — don't guess.\n2. Wrong tool? Pick a different one from your knowledge.\n3. Bug in code? github_get_file the source and fix it.\n4. Understand the issue? Tell the user.\n\nCheck the tool's schema before guessing params." });
       }
       if (result && !result.startsWith("[TOOL ERROR:")) {
-        state.fullHistory.push({ role: "user", content: state.step === 0 ? "[CONSUME RESULT]\nRead the tool result above and answer the user in plain English. Do not call another tool unless the result was clearly insufficient." : "[CONTINUE]\nTool returned. Either: (a) answer the user now in plain text, or (b) output the next tool JSON. Pick one. No questions." });
+        state.fullHistory.push({ role: "user", content: state.step === 0 ? "[TOOL RESULT]\nRead the result above. Interpret it and answer the user. If the result isn't enough, call another tool." : "[NEXT STEP]\nRead the result. Either: (a) answer the user, or (b) call another tool. Your call." });
       }
       state.totalTokens += resp.tokens?.total || 0;
       state.step++;
@@ -291,7 +291,7 @@ export async function processOneAgentStep(env, agent) {
   let history;
   try { history = JSON.parse(agent.conversation_history || "[]"); } catch { history = []; }
   if (history.length === 0) {
-    history.push({ role: "system", content: agent.role + "\nAvailable tools: web_search(query), web_fetch(url), db_query(sql). Output tool calls as JSON: {\"tool\":\"name\",\"input\":{...}}. Max 8 steps." });
+    history.push({ role: "system", content: agent.role + "\nYou know what tools are available from your training. Think about which best fits the task. If the right tool doesn't exist, use create_tool to build it. Available: web_search, web_fetch, db_query. Max 8 steps." });
     history.push({ role: "user", content: agent.instruction });
   }
   if (agent.status === "done" || agent.status === "error") return;
@@ -315,7 +315,7 @@ export async function processOneAgentStep(env, agent) {
     const result = await dispatchTool(env, parsed.tool, parsed.input, agent.id);
     history.push({ role: "user", content: result !== null ? "[TOOL RESULT: " + result.slice(0, 3000) + "]" : "[TOOL ERROR: unknown tool]" });
   } else if (parsed) {
-    history.push({ role: "user", content: "[TOOL ERROR: tool '" + parsed.tool + "' not available to sub-agents. Use: web_search, web_fetch, db_query]" });
+    history.push({ role: "user", content: "[TOOL ERROR: '" + parsed.tool + "' not available. Available: web_search, web_fetch, db_query]" });
   }
   const tokens = (agent.tokens || 0) + (resp.tokens?.total || 0);
   if (step >= 8 || !parsed) {
