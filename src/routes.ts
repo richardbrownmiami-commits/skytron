@@ -456,8 +456,6 @@ fetchData();setInterval(fetchData,10000);
     }
     return json({ error: "use ?q= parameter for queries" }, 100);
   }
-    return json({ error: "use ?q= parameter for queries" }, 400);
-  }
 
   if (url.pathname === "/brain/history") {
     const convId = url.searchParams.get("c") || "default";
@@ -920,9 +918,6 @@ async function send(){
           return json({ action_id: 0, status: "debug", mode: "discussion", system_prompt: systemMsg.slice(0, 8000), full_history: fullHistory, user_message: llmInput });
         }
 
-        const chatAction = await env.DB.prepare("INSERT INTO actions (type, status, input, task) VALUES ('chat', 'running', ?1, 'discussion') RETURNING id").bind(input.slice(0, 2000)).all();
-        const chatActionId = chatAction.results?.[0]?.id;
-
         const chatResp = await callLLM(env, { messages: fullHistory, max_tokens: 1500, task: "chat" }, "skytron-" + conversationId);
         if (chatResp?.content) {
           let cleaned = chatResp.content;
@@ -944,13 +939,9 @@ async function send(){
             cleaned = "This needs Build mode for full tools.";
           }
           await storeMemory(env.DB, "assistant", cleaned.slice(0, 5000), conversationId);
-          if (chatActionId) await env.DB.prepare("UPDATE actions SET status='done', result=?1, completed_at=datetime('now') WHERE id=?2").bind(cleaned.slice(0, 200), chatActionId).run();
           return json({ status: "done", result: cleaned, model: chatResp?.model || "" });
         }
-        const errMsg = "I'm having trouble connecting. Please try again later.";
-        if (chatActionId) await env.DB.prepare("UPDATE actions SET status='error', error=?1, result=?1, completed_at=datetime('now') WHERE id=?2").bind(errMsg, chatActionId).run();
-        await storeMemory(env.DB, "assistant", errMsg, conversationId).catch(() => {});
-        return json({ status: "error", message: errMsg });
+        return json({ status: "error", message: "I'm having trouble connecting. Please try again later." });
       }
 
       // === BUILD / ASTRAL MODE: Queue for cron processing ===
