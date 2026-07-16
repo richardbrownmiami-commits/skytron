@@ -969,6 +969,14 @@ export const toolDefinitions = {
       }
     },
   },
+
+  memory_search: {
+    description: "Searches your knowledge base using semantic (meaning-based) vector search + keyword fallback. Returns most relevant entries with relevance scores. Use this to recall past lessons, find related knowledge, or remember what you learned. Results include category, key, content preview, and score.",
+    schema: z.object({...}),
+    execute: async (env, input) => {
+async function body
+    },
+  },
 }; // --- End tool definitions ---
 
 // Convert toolDefinitions to OpenAI function-calling format
