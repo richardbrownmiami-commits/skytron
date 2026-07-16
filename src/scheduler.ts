@@ -105,7 +105,13 @@ async function runNonLLMTasks(settings, env, db) {
       const retryKey = "recovery_count_" + sid;
       const prevRetry = await env.DB.prepare("SELECT value FROM identity WHERE key=?1").bind(retryKey).first();
       const retryCount = parseInt(prevRetry?.value) || 0;
-      if (ageMins >= 15) {
+      if (s.results[0].type === "chat") {
+        logActivity(db, "chat_timeout", { actionId: sid, summary: "Chat action " + sid + " stuck for " + ageMins + " min — killing (chat actions skip retries)", details: "input: " + (s.results[0].input || "").slice(0, 200) });
+        await env.DB.prepare("UPDATE actions SET status='error', result='Chat action timed out', error='Never responded — killed by stuck_recovery after ' || ?1 || ' min', completed_at=datetime('now'), updated_at=datetime('now') WHERE id=?2").bind(String(ageMins), sid).run();
+        try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
+        try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('assistant', ?1, 'default')").bind("Your request timed out — Skytron couldn't respond in time. Try asking again.").run(); } catch {}
+        try { await env.DB.prepare("INSERT INTO actions (type, status, input, task, created_at) VALUES ('tool_repair', 'queued', ?1, 'repair_tool', datetime('now'))").bind("Chat action " + sid + " timed out after " + ageMins + " min. Input: " + (s.results[0].input || "").slice(0, 300)).run(); } catch {}
+      } else if (ageMins >= 15) {
         logActivity(db, "action_killed_15min", { actionId: sid, summary: "Action " + sid + " stuck for " + ageMins + " min — killed (15-min hard limit)", details: "step: " + (s.results[0].step || "?") + ", task: " + (s.results[0].task || "?") });
         await env.DB.prepare("UPDATE actions SET status='error', result='Stuck >15 min — killed by hard limit', completed_at=datetime('now'), updated_at=datetime('now') WHERE id=?1").bind(sid).run();
         try { await env.DB.prepare("DELETE FROM identity WHERE key=?1").bind(retryKey).run(); } catch {}
