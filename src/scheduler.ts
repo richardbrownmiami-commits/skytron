@@ -51,7 +51,7 @@ async function runLLMTasks(settings, env, db) {
   } catch (e) { console.error("process_agents error:", e); }
 
   // --- Emergency self-repair (LLM-dependent part only) ---
-  try {
+  if (settings.emergency_repair) try {
     const bdFails = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first();
     const bdDown = bdFails?.value && parseInt(bdFails.value) >= 3;
     const waLimited = await env.DB.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
@@ -152,7 +152,7 @@ async function runNonLLMTasks(settings, env, db) {
   } catch (e) { console.error("stuck_recovery error:", e); }
 
   // --- Step 3.5: Loop detection — detect repeated failure patterns ---
-  try {
+  if (settings.loop_detection) try {
     const recentFails = (await env.DB.prepare("SELECT id, task, result, error, created_at FROM actions WHERE status='error' AND created_at > datetime('now', '-1 hour') ORDER BY created_at DESC LIMIT 10").all()).results || [];
     if (recentFails.length >= 3) {
       const patternCounts = {};
@@ -216,7 +216,7 @@ async function runNonLLMTasks(settings, env, db) {
   } catch (e) { console.error("idle_project error:", e); }
 
   // --- Wake-up heartbeat ---
-  try {
+  if (settings.wake_up) try {
     const lastWake = await env.DB.prepare("SELECT value FROM identity WHERE key='last_wake_up'").first();
     const lastWakeTime = lastWake?.value || "1970-01-01T00:00:00Z";
     const minsSince = (Date.now() - new Date(lastWakeTime).getTime()) / 60000;
@@ -257,7 +257,7 @@ async function runNonLLMTasks(settings, env, db) {
   } catch (e) { console.error("astral_recovery error:", e); }
 
   // --- Source file index ---
-  try {
+  if (settings.file_index) try {
     const srcRows = await env.DB.prepare("SELECT key FROM brain_knowledge WHERE key LIKE 'source_%' ORDER BY key").all();
     if (srcRows.results?.length) {
       const index = srcRows.results.map(r => r.key.replace("source_", "")).join("\n");
@@ -276,7 +276,7 @@ async function runNonLLMTasks(settings, env, db) {
   } catch { tickCount = 1; }
 
   // --- Consolidation ---
-  try {
+  if (settings.consolidation) try {
     const result = await collectToScratchpad(env);
     if (result.totalRows > 0) logActivity(db, "consolidation_collect", { summary: "Collected " + result.totalRows + " new records to scratchpad (batch: " + result.batchId + ")" });
   } catch (e) { console.error("consolidation collect error:", e); }
@@ -454,7 +454,7 @@ async function getCronSettings(db) {
   const defaults = {
     enabled: true, idle_cycle: true, health_check: true,
     idle_project: true, process_actions: true, stuck_recovery: true,
-    process_agents: true, daily_cleanup: true, wake_up: true
+    process_agents: true, daily_cleanup: true, wake_up: true, emergency_repair: true, loop_detection: true, file_index: true, consolidation: true
   };
   try {
     const rows = await db.prepare("SELECT key, value FROM identity WHERE key LIKE 'cron_cfg_%'").all();
