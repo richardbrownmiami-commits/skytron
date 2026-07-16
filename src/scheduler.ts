@@ -2,7 +2,7 @@
 // Two cron triggers in wrangler.toml:
 //   * * * * *  → non-LLM tasks (every 1 min): maintenance, recovery, heartbeat, consolidation
 //   */5 * * * * → LLM tasks (every 5 min): process actions, sub-agents, emergency repair
-import { initSchema, indexKnowledgeForSearch, logActivity, buildSensorium } from './db';
+import { initSchema, indexKnowledgeForSearch, logActivity, buildSensorium, saveAgentState } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
 import { callOpenRouter } from './llm';
 import { collectToScratchpad } from './consolidate';
@@ -207,7 +207,9 @@ async function runNonLLMTasks(settings, env, db) {
         const thread = lastThought?.value ? "Last session: " + lastThought.value : "No previous session.";
         const input = sensorium + "\n" + thread + "\n\nWhat do YOU want to do? Pick one thing from your current state. Study your code. Improve a feature. Explore your data. Fix something you noticed. Tell me what and do it.";
         await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value) VALUES ('last_idle_project', datetime('now'))").run();
-        await env.DB.prepare("INSERT INTO actions (type, status, input, task, created_at) VALUES ('idle_explore','queued',?1,'self_explore',datetime('now'))").bind(input).run();
+        const ir = await env.DB.prepare("INSERT INTO actions (type, status, input, task, created_at) VALUES ('idle_explore','queued',?1,'self_explore',datetime('now')) RETURNING id").bind(input).all();
+        const iid = ir.results?.[0]?.id;
+        if (iid) await saveAgentState(env.DB, iid, { step: 0, fullHistory: [{ role: "system", content: "You are Skytron, an autonomous AI. Explore, improve, and fix things." }, { role: "user", content: input }], totalTokens: 0, finalContent: null, modelName: "", conversationId: "idle", done: false, mode: "astral" });
         logActivity(db, "idle", { summary: "Queued idle exploration — self-directed" });
       }
     }
@@ -221,7 +223,9 @@ async function runNonLLMTasks(settings, env, db) {
     if (minsSince > 15) {
       const sensorium = await buildSensorium(env);
       await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_wake_up',datetime('now'),datetime('now'))").run();
-      await env.DB.prepare("INSERT INTO actions (type,status,input,task,created_at) VALUES ('think','queued',?1,'self_explore',datetime('now'))").bind(sensorium + "\n\nWake up. Check your state. Queue tasks, run maintenance, or self-improve. Decide and act.").run();
+      const wr = await env.DB.prepare("INSERT INTO actions (type,status,input,task,created_at) VALUES ('think','queued',?1,'self_explore',datetime('now')) RETURNING id").bind(sensorium + "\n\nWake up. Check your state. Queue tasks, run maintenance, or self-improve. Decide and act.").all();
+      const wid = wr.results?.[0]?.id;
+      if (wid) await saveAgentState(env.DB, wid, { step: 0, fullHistory: [{ role: "system", content: "You are Skytron, an autonomous AI. Wake up, check your state, queue tasks, run maintenance, or self-improve. Decide and act." }, { role: "user", content: sensorium + "\n\nWake up. Check your state. Queue tasks, run maintenance, or self-improve. Decide and act." }], totalTokens: 0, finalContent: null, modelName: "", conversationId: "cron", done: false, mode: "astral" });
       logActivity(env.DB, "wake_up", { summary: "Heartbeat tick — wake-up action queued" });
     }
   } catch {}
