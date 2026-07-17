@@ -405,12 +405,15 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     const actRun = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status='running'").all()).results[0]?.c || 0;
     const actErr = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status='error'").all()).results[0]?.c || 0;
     const actQue = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status='queued'").all()).results[0]?.c || 0;
+    const staleQue = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status='queued' AND created_at < datetime('now', '-30 minutes')").all()).results[0]?.c || 0;
+    const lastAct = (await env.DB.prepare("SELECT MAX(created_at) as t FROM actions").all()).results[0]?.t || null;
+    const sysWarnings = (await env.DB.prepare("SELECT id, content, created_at FROM brain_memory WHERE role='system' AND conversation_id='_system' AND created_at > datetime('now', '-2 hours') ORDER BY created_at DESC LIMIT 5").all()).results || [];
     const agentCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_agents").all()).results[0]?.c || 0;
     const recentAct = (await env.DB.prepare("SELECT id, type, task, status, substr(error,1,200) error, substr(result,1,200) result, created_at FROM actions WHERE created_at > datetime('now', '-2 hours') ORDER BY created_at DESC LIMIT 20").all()).results || [];
     const topConvs = (await env.DB.prepare("SELECT conversation_id, COUNT(*) as msg_count, MIN(created_at) as start, MAX(created_at) as end FROM brain_memory GROUP BY conversation_id ORDER BY msg_count DESC LIMIT 10").all()).results || [];
     const recent = (await env.DB.prepare("SELECT DATE(created_at) as day, COUNT(*) as count FROM brain_memory WHERE created_at > datetime('now', '-30 days') GROUP BY day ORDER BY day DESC").all()).results || [];
     const cats = (await env.DB.prepare("SELECT category, COUNT(*) as count FROM brain_knowledge GROUP BY category ORDER BY count DESC").all()).results || [];
-    return json({ summary: { total_memories: totalMem, total_knowledge: totalKn, total_actions: totalActions, conversations: convCount, running_actions: actRun, error_actions: actErr, queued_actions: actQue, agents: agentCount }, recent_activity: recentAct.map(a => ({ id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, error: a.error || null, result: a.result || null })), top_conversations: topConvs, activity_30d: recent, knowledge_categories: cats });
+    return json({ summary: { total_memories: totalMem, total_knowledge: totalKn, total_actions: totalActions, conversations: convCount, running_actions: actRun, error_actions: actErr, queued_actions: actQue, agents: agentCount }, recent_activity: recentAct.map(a => ({ id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, error: a.error || null, result: a.result || null })), top_conversations: topConvs, activity_30d: recent, knowledge_categories: cats, warnings: { stale_queued: staleQue, last_action_time: lastAct, system_messages: sysWarnings.map(function(w) { return { id: w.id, content: w.content, time: w.created_at }; }) } });
   }
 
   if (url.pathname === "/brain/insight") {
@@ -426,13 +429,14 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
 @keyframes glowPulse{0%,100%{opacity:.3}50%{opacity:.7}}.refresh-indicator{position:fixed;bottom:12px;right:14px;display:flex;align-items:center;gap:5px;font-size:.65rem;color:var(--muted)}.refresh-indicator .r-dot{width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
 </style></head><body><div class="wrap"><div class="header"><div><h1>Skytron Monitor</h1><div class="sub">Live action log — click any action for details</div></div><div class="last-upd" id="lastUpd">—</div></div>
 <div class="cards" id="statCards"><div class="card"><div class="icon">⚡</div><div class="val" id="sActions">—</div><div class="lbl">Total Actions</div><span class="mini green"></span></div><div class="card"><div class="icon">✅</div><div class="val" id="sDone">—</div><div class="lbl">Done</div><span class="mini green"></span></div><div class="card"><div class="icon">❌</div><div class="val" id="sErr">—</div><div class="lbl">Errors</div><span class="mini red"></span></div><div class="card"><div class="icon">🔄</div><div class="val" id="sRun">—</div><div class="lbl">Running</div><span class="mini amber"></span></div><div class="card"><div class="icon">📋</div><div class="val" id="sQue">—</div><div class="lbl">Queued</div><span class="mini amber"></span></div><div class="card"><div class="icon">🧠</div><div class="val" id="sMemory">—</div><div class="lbl">Memory</div><span class="mini"></span></div><div class="card"><div class="icon">📚</div><div class="val" id="sKnowledge">—</div><div class="lbl">Knowledge</div><span class="mini"></span></div></div>
+<div class="panel" id="warnPanel" style="display:none;margin-bottom:8px"><h2>⚠️ Alerts</h2><div class="body" id="warnBody"></div></div>
 <div class="grid"><div class="panel"><h2>📋 Recent Actions (last 2h)</h2><div class="body" id="actBody"><div style="text-align:center;padding:20px;color:var(--muted);font-size:.8rem">Loading...</div></div></div>
 <div class="panel"><div class="chat-area"><h2>💬 Ask</h2><div class="chat-msgs" id="chatMsgs"><div style="padding:10px;color:var(--muted);font-size:.75rem;text-align:center">Ask about activity<br><span style="font-size:.68rem">"what happened today?" "show errors"</span></div></div><div class="chat-input"><input id="chatInput" placeholder="Ask Skytron..." onkeydown="if(event.key==='Enter')send()"><button id="chatBtn" onclick="send()">Ask</button></div></div></div></div></div>
 <div class="refresh-indicator"><span class="r-dot" id="rDot"></span><span id="refreshLabel">updating...</span></div>
 <script>
 function $(id){return document.getElementById(id)}
 let lastData=null;
-async function fetchData(){try{const r=await fetch('/brain/introspect');if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();lastData=d;renderStats(d);renderActions(d.recent_activity||[]);$('rDot').style.background='var(--green)';$('refreshLabel').textContent='Live'}catch(e){$('rDot').style.background='var(--red)';$('refreshLabel').textContent='offline'}}
+async function fetchData(){try{const r=await fetch('/brain/introspect');if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();lastData=d;renderStats(d);renderActions(d.recent_activity||[]);renderWarnings(d.warnings||{});$('rDot').style.background='var(--green)';$('refreshLabel').textContent='Live'}catch(e){$('rDot').style.background='var(--red)';$('refreshLabel').textContent='offline'}}
 function renderStats(d){const s=d.summary||{};$('sActions').textContent=fmt(s.total_actions||0);$('sMemory').textContent=fmt(s.memory||s.total_memories||0);$('sKnowledge').textContent=fmt(s.knowledge||s.total_knowledge||0);$('sDone').textContent=fmt(s.total_actions-(s.error_actions||0)-(s.running_actions||0)-(s.queued_actions||0));$('sErr').textContent=fmt(s.error_actions||0);$('sRun').textContent=fmt(s.running_actions||0);$('sQue').textContent=fmt(s.queued_actions||0);$('lastUpd').textContent=new Date().toLocaleTimeString()}
 function renderActions(acts){const b=$('actBody');if(!acts||!acts.length){b.innerHTML='<div style="text-align:center;padding:20px;color:var(--muted);font-size:.8rem">No recent activity</div>';return}
 b.innerHTML=acts.map(a=>{
@@ -441,6 +445,7 @@ const detail=a.error?esc(a.error):a.result?esc(a.result):''
 const time=a.time?timefmt(a.time):''
 return '<div class="act-item" onclick="toggleDetail(this)"><div class="top"><span class="dot '+dc+'"></span><span class="aid">#'+a.id+'</span><span class="atype">'+esc(a.type||'?')+'</span><span class="atask">'+esc(a.task||'?')+'</span><span class="stat '+dc+'">'+a.status+'</span><span style="color:var(--muted);font-size:.65rem">'+time+'</span></div>'+(detail?'<div class="detail"><span class="'+(a.error?'err-text':'ok-text')+'">'+detail+'</span></div>':'')+'</div>'
 }).join('')}
+function renderWarnings(w){const p=$('warnPanel'),b=$('warnBody');if(!w||(!w.stale_queued&&!w.system_messages?.length)){p.style.display='none';return}p.style.display='block';let html='';if(w.stale_queued>0){const c=w.stale_queued;html+='<div class="act-item"><div class="top"><span style="color:var(--amber);font-size:.8rem">'+c+' stale queued >30m</span></div></div>'}if(w.last_action_time){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.7rem">Last action: '+timefmt(w.last_action_time)+'</span></div></div>'}if(w.system_messages?.length){for(const m of w.system_messages){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.68rem">'+timefmt(m.time)+'</span></div><div class="detail show" style="font-size:.72rem;color:var(--text)">'+esc(m.content)+'</div></div>'}}b.innerHTML=html}
 function toggleDetail(el){const d=el.querySelector('.detail');if(d)d.classList.toggle('show')}
 function timefmt(t){if(!t)return'';const d=new Date(t);if(isNaN(d))return String(t).slice(11,19);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
 function fmt(n){if(typeof n!=='number')n=parseInt(n)||0;if(n>=1000000)return(n/1000000).toFixed(1)+'M';if(n>=1000)return(n/1000).toFixed(1)+'K';return n.toString()}
@@ -1113,7 +1118,7 @@ async function send(){
   }
 
   if (url.pathname === "/think/latest" && req.method === "GET") {
-    const r = await env.DB.prepare("SELECT id FROM actions WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1").all();
+    const r = await env.DB.prepare("SELECT id FROM actions WHERE status IN ('queued','running') AND task NOT IN ('sensorium','self_explore','idle_explore') ORDER BY id DESC LIMIT 1").all();
     return json(r.results?.[0] ? { action_id: r.results[0].id, status: "running" } : { action_id: null });
   }
 

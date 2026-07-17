@@ -157,6 +157,28 @@ async function runNonLLMTasks(settings, env, db) {
     }
   } catch (e) { console.error("stuck_recovery error:", e); }
 
+  // --- Stale queued cron actions cleanup ---
+  if (settings.stuck_recovery) try {
+    const sq = await env.DB.prepare("SELECT id, task, created_at FROM actions WHERE status='queued' AND task IN ('sensorium','self_explore','idle_explore') AND created_at < datetime('now', '-5 minutes') ORDER BY created_at ASC LIMIT 5").all();
+    if (sq.results?.length) {
+      for (const a of sq.results) {
+        await env.DB.prepare("UPDATE actions SET status='error', result='Stale cron action — killed by stuck_recovery', error='Queued >5 min without processing', completed_at=datetime('now'), updated_at=datetime('now') WHERE id=?1 AND status='queued'").bind(a.id).run();
+      }
+      logActivity(db, "stale_queued_killed", { summary: "Killed " + sq.results.length + " stale queued cron actions: " + sq.results.map(a => "#" + a.id + "(" + a.task + ")").join(", ") });
+      try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('system', ?1, '_system')").bind("Stuck recovery killed " + sq.results.length + " stale queued cron actions that were blocking the pipeline. Task types: " + [...new Set(sq.results.map(a => a.task))].join(", ")).run(); } catch {}
+    }
+  } catch (e) { console.error("stale_queued error:", e); }
+
+  // --- No-activity stall detection ---
+  if (settings.stuck_recovery) try {
+    const recentCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE created_at > datetime('now', '-1 hour')").all()).results?.[0]?.c || 0;
+    if (recentCount === 0) {
+      const queuedCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status='queued'").all()).results?.[0]?.c || 0;
+      logActivity(db, "activity_stall", { summary: "No new actions in 1 hour — " + queuedCount + " queued actions may be blocking the pipeline" });
+      try { await env.DB.prepare("INSERT INTO brain_memory (role, content, conversation_id) VALUES ('system', ?1, '_system')").bind("Stalled: No new actions created in the last hour. " + queuedCount + " actions are still queued. Check stuck_recovery and cron settings.").run(); } catch {}
+    }
+  } catch (e) { console.error("activity_stall error:", e); }
+
   // --- Step 3.5: Loop detection — detect repeated failure patterns ---
   if (settings.loop_detection) try {
     const recentFails = (await env.DB.prepare("SELECT id, task, result, error, created_at FROM actions WHERE status='error' AND created_at > datetime('now', '-1 hour') ORDER BY created_at DESC LIMIT 10").all()).results || [];
