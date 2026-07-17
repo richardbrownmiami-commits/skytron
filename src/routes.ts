@@ -379,7 +379,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
         env.DB.prepare(`SELECT COUNT(*) as c FROM brain_knowledge`).all(),
         env.DB.prepare(`SELECT COUNT(*) as c FROM brain_memory`).all(),
         env.DB.prepare(`SELECT COUNT(*) as c FROM brain_agents ${tf}`).all(),
-        env.DB.prepare(`SELECT id, type, task, status, substr(error,1,200) error, substr(result,1,200) result, created_at FROM actions ${tf} ORDER BY created_at DESC LIMIT 15`).all(),
+        env.DB.prepare(`SELECT id, type, task, status, substr(input,1,200) input, substr(error,1,200) error, substr(result,1,200) result, created_at FROM actions ${tf} ORDER BY created_at DESC LIMIT 15`).all(),
         env.DB.prepare(`SELECT task, COUNT(*) as count FROM actions ${tf} AND task IS NOT NULL GROUP BY task ORDER BY count DESC`).all(),
         env.DB.prepare(`SELECT id, task, result, created_at FROM actions WHERE status='error' AND created_at > datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 10`).all(),
         env.DB.prepare(`SELECT category, COUNT(*) as c FROM brain_knowledge GROUP BY category ORDER BY c DESC`).all(),
@@ -394,7 +394,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       else if (isAgents) { const aDoneCount = (await env.DB.prepare(`SELECT COUNT(*) as c FROM brain_agents WHERE status='done' ${ta}`).all()).results[0]?.c || 0; reply = `${aCount} agent(s) in the ${range}. ${aDoneCount} completed.`; }
       else if (isMemory) { reply = `${mCount} memory entries total. ${aDone} actions processed in the ${range}.`; }
       else { reply = `In the ${range}: ${aTot} actions (${aDone} done, ${aErr} errors, ${aRun} running, ${aQue} queued), ${cCount} conversations, ${aCount} agents. ${aErr > 0 ? `${aErr} error(s) need attention.` : `No issues detected.`}`; }
-      return json({ reply, query: q, range, stats: { total_actions: aTot, done: aDone, errors: aErr, running: aRun, queued: aQue, conversations: cCount, knowledge: kCount, memory: mCount, agents: aCount }, recent_activity: (recentAct.results||[]).slice(0, 10).map(a => ({ id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, error: a.error || null, result: a.result || null })), tool_distribution: (toolDist.results||[]).map(t => ({ task: t.task, count: t.count })) });
+      return json({ reply, query: q, range, stats: { total_actions: aTot, done: aDone, errors: aErr, running: aRun, queued: aQue, conversations: cCount, knowledge: kCount, memory: mCount, agents: aCount }, recent_activity: (recentAct.results||[]).slice(0, 10).map(a => ({ id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, input: a.input || null, error: a.error || null, result: a.result || null })), tool_distribution: (toolDist.results||[]).map(t => ({ task: t.task, count: t.count })) });
     }
 
     // Stats-only mode (no ?q)
@@ -409,15 +409,32 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     const lastAct = (await env.DB.prepare("SELECT MAX(created_at) as t FROM actions").all()).results[0]?.t || null;
     const newActCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE created_at > datetime('now', '-1 hour')").all()).results[0]?.c || 0;
     const sysWarnings = (await env.DB.prepare("SELECT id, content, created_at FROM brain_memory WHERE role='system' AND conversation_id='_system' AND created_at > datetime('now', '-2 hours') ORDER BY created_at DESC LIMIT 5").all()).results || [];
+    const warnActIds = [];
+    for (const w of sysWarnings) {
+      const m = w.content.match(/#(\d+)/g);
+      if (m) for (const id of m) warnActIds.push(parseInt(id.replace("#","")));
+    }
+    const uniqueWarnIds = [...new Set(warnActIds)].filter(Boolean);
+    let warnActions = {};
+    if (uniqueWarnIds.length) {
+      const wr = await env.DB.prepare("SELECT id, type, task, status, substr(input,1,200) input, substr(error,1,100) error FROM actions WHERE id IN (" + uniqueWarnIds.join(",") + ")").all();
+      if (wr.results?.length) for (const a of wr.results) warnActions[a.id] = { type: a.type, task: a.task, status: a.status, input: a.input, error: a.error };
+    }
     let stallMsg = null;
     if (newActCount === 0 && actQue > 0) stallMsg = "No new actions in last hour — " + actQue + " queued actions may be blocking the pipeline";
     else if (newActCount === 0) stallMsg = "No activity in last hour";
     const agentCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM brain_agents").all()).results[0]?.c || 0;
-    const recentAct = (await env.DB.prepare("SELECT id, type, task, status, substr(error,1,200) error, substr(result,1,200) result, created_at FROM actions WHERE created_at > datetime('now', '-2 hours') ORDER BY created_at DESC LIMIT 20").all()).results || [];
+    const recentAct = (await env.DB.prepare("SELECT id, type, task, status, substr(input,1,300) input, substr(error,1,200) error, substr(result,1,200) result, created_at FROM actions WHERE created_at > datetime('now', '-2 hours') ORDER BY created_at DESC LIMIT 20").all()).results || [];
+    const actIds = recentAct.map(a => a.id).filter(Boolean);
+    let stepCounts = {};
+    if (actIds.length) {
+      const sr = await env.DB.prepare("SELECT action_id, COUNT(*) as c FROM brain_logs WHERE action_id IN (" + actIds.join(",") + ") GROUP BY action_id").all();
+      if (sr.results?.length) for (const s of sr.results) stepCounts[s.action_id] = s.c;
+    }
     const topConvs = (await env.DB.prepare("SELECT conversation_id, COUNT(*) as msg_count, MIN(created_at) as start, MAX(created_at) as end FROM brain_memory GROUP BY conversation_id ORDER BY msg_count DESC LIMIT 10").all()).results || [];
     const recent = (await env.DB.prepare("SELECT DATE(created_at) as day, COUNT(*) as count FROM brain_memory WHERE created_at > datetime('now', '-30 days') GROUP BY day ORDER BY day DESC").all()).results || [];
     const cats = (await env.DB.prepare("SELECT category, COUNT(*) as count FROM brain_knowledge GROUP BY category ORDER BY count DESC").all()).results || [];
-    return json({ summary: { total_memories: totalMem, total_knowledge: totalKn, total_actions: totalActions, conversations: convCount, running_actions: actRun, error_actions: actErr, queued_actions: actQue, agents: agentCount }, recent_activity: recentAct.map(a => ({ id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, error: a.error || null, result: a.result || null })), top_conversations: topConvs, activity_30d: recent, knowledge_categories: cats, warnings: { stale_queued: staleQue, last_action_time: lastAct, activity_stall: stallMsg, system_messages: sysWarnings.map(function(w) { return { id: w.id, content: w.content, time: w.created_at }; }) } });
+    return json({ summary: { total_memories: totalMem, total_knowledge: totalKn, total_actions: totalActions, conversations: convCount, running_actions: actRun, error_actions: actErr, queued_actions: actQue, agents: agentCount }, recent_activity: recentAct.map(a => ({ id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, input: a.input || null, steps: stepCounts[a.id] || 0, error: a.error || null, result: a.result || null })), top_conversations: topConvs, activity_30d: recent, knowledge_categories: cats, warnings: { stale_queued: staleQue, last_action_time: lastAct, activity_stall: stallMsg, system_messages: sysWarnings.map(function(w) { return { id: w.id, content: w.content, time: w.created_at }; }), affected_actions: warnActions } });
   }
 
   if (url.pathname === "/brain/insight") {
@@ -442,14 +459,14 @@ function $(id){return document.getElementById(id)}
 let lastData=null;
 async function fetchData(){try{const r=await fetch('/brain/introspect');if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();lastData=d;renderStats(d);renderActions(d.recent_activity||[]);renderWarnings(d.warnings||{});$('rDot').style.background='var(--green)';$('refreshLabel').textContent='Live'}catch(e){$('rDot').style.background='var(--red)';$('refreshLabel').textContent='offline'}}
 function renderStats(d){const s=d.summary||{};$('sActions').textContent=fmt(s.total_actions||0);$('sMemory').textContent=fmt(s.memory||s.total_memories||0);$('sKnowledge').textContent=fmt(s.knowledge||s.total_knowledge||0);$('sDone').textContent=fmt(s.total_actions-(s.error_actions||0)-(s.running_actions||0)-(s.queued_actions||0));$('sErr').textContent=fmt(s.error_actions||0);$('sRun').textContent=fmt(s.running_actions||0);$('sQue').textContent=fmt(s.queued_actions||0);$('lastUpd').textContent=new Date().toLocaleTimeString()}
-function renderActions(acts){const b=$('actBody');if(!acts||!acts.length){b.innerHTML='<div style="text-align:center;padding:20px;color:var(--muted);font-size:.8rem">No recent activity</div>';return}
+function renderActions(acts){const b=$('actBody');acts=acts.filter(function(a){return a.status!=='done'});if(!acts||!acts.length){b.innerHTML='<div style="text-align:center;padding:20px;color:var(--green);font-size:.8rem">No issues — all done</div>';return}
 b.innerHTML=acts.map(a=>{
-const dc=a.status==='done'?'done':a.status==='error'?'error':a.status==='running'?'running':'queued'
-const detail=a.error?esc(a.error):a.result?esc(a.result):''
+const dc=a.status==='error'?'error':a.status==='running'?'running':'queued'
+const parts=[];if(a.error)parts.push(a.error);if(a.result)parts.push(a.result);if(a.input)parts.push(a.type==='chat'?'User: '+a.input.slice(0,150):'Context: '+a.input.slice(0,150));const detail=parts.join(' | ')
 const time=a.time?timefmt(a.time):''
-return '<div class="act-item" onclick="toggleDetail(this)"><div class="top"><span class="dot '+dc+'"></span><span class="aid">#'+a.id+'</span><span class="atype">'+esc(a.type||'?')+'</span><span class="atask">'+esc(a.task||'?')+'</span><span class="stat '+dc+'">'+a.status+'</span><span style="color:var(--muted);font-size:.65rem">'+time+'</span></div>'+(detail?'<div class="detail"><span class="'+(a.error?'err-text':'ok-text')+'">'+detail+'</span></div>':'')+'</div>'
+return '<div class="act-item" onclick="toggleDetail(this)"><div class="top"><span class="dot '+dc+'"></span><span class="aid">#'+a.id+'</span><span class="atype">'+esc(a.type||'?')+'</span><span class="atask">'+esc(a.task||'?')+'</span><span class="stat '+dc+'">'+a.status+'</span>'+(a.steps>0?'<span style="color:var(--muted);font-size:.6rem">'+a.steps+' steps</span>':'')+'<span style="color:var(--muted);font-size:.65rem">'+time+'</span></div>'+(detail?'<div class="detail">'+esc(detail)+'</div>':'')+'</div>'
 }).join('')}
-function renderWarnings(w){const p=$('warnPanel'),b=$('warnBody');if(!w||(!w.stale_queued&&!w.activity_stall&&!w.system_messages?.length)){p.style.display='none';return}p.style.display='block';let html='';if(w.stale_queued>0){const c=w.stale_queued;html+='<div class="act-item"><div class="top"><span style="color:var(--amber);font-size:.8rem">'+c+' stale queued >30m</span></div></div>'}if(w.activity_stall){html+='<div class="act-item"><div class="top"><span style="color:var(--red);font-size:.76rem">'+esc(w.activity_stall)+'</span></div></div>'}if(w.last_action_time){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.7rem">Last action: '+timefmt(w.last_action_time)+'</span></div></div>'}if(w.system_messages?.length){for(const m of w.system_messages){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.68rem">'+timefmt(m.time)+'</span></div><div class="detail show" style="font-size:.72rem;color:var(--text)">'+esc(m.content)+'</div></div>'}}b.innerHTML=html}
+function renderWarnings(w){const p=$('warnPanel'),b=$('warnBody');if(!w||(!w.stale_queued&&!w.activity_stall&&!w.system_messages?.length)){p.style.display='none';return}p.style.display='block';let html='';if(w.stale_queued>0){const c=w.stale_queued;html+='<div class="act-item"><div class="top"><span style="color:var(--amber);font-size:.8rem">'+c+' stale queued >30m</span></div></div>'}if(w.activity_stall){html+='<div class="act-item"><div class="top"><span style="color:var(--red);font-size:.76rem">'+esc(w.activity_stall)+'</span></div></div>'}if(w.last_action_time){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.7rem">Last action: '+timefmt(w.last_action_time)+'</span></div></div>'}if(w.system_messages?.length){for(const m of w.system_messages){var extra='';if(w.affected_actions){var ids=m.content.match(/#(\d+)/g);if(ids){for(var i=0;i<ids.length;i++){var aid=parseInt(ids[i].replace('#',''));var aa=w.affected_actions[aid];if(aa&&aa.input){extra+='<div style="font-size:.68rem;color:var(--muted);padding:2px 0 2px 12px">#'+aid+' '+esc(aa.type||'?')+'/'+esc(aa.task||'?')+': '+esc(aa.input.slice(0,120))+'</div>'}}}}html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.68rem">'+timefmt(m.time)+'</span></div><div class="detail show" style="font-size:.72rem;color:var(--text)">'+esc(m.content)+extra+'</div></div>'}}b.innerHTML=html}
 function toggleDetail(el){const d=el.querySelector('.detail');if(d)d.classList.toggle('show')}
 function timefmt(t){if(!t)return'';var d=new Date(t.replace(' ','T')+'Z');if(isNaN(d.getTime()))return String(t).slice(11,19);d=new Date(d.getTime()+5.5*3600000);return String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0')}
 function fmt(n){if(typeof n!=='number')n=parseInt(n)||0;if(n>=1000000)return(n/1000000).toFixed(1)+'M';if(n>=1000)return(n/1000).toFixed(1)+'K';return n.toString()}
