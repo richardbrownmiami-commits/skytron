@@ -21,6 +21,27 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
 });
 
+function actionTrigger(a) {
+  if (a.type === "chat") return "user_message";
+  if (a.type === "idle_explore" && a.task === "self_explore") return "idle_project";
+  if (a.task === "self_explore") return "wake_up";
+  if (a.task === "repair_tool") return "stuck_recovery";
+  if (a.task === "astral") return "astral_mode";
+  if (a.task === "sensorium") return "sensorium_tick";
+  if (a.type === "think") return "build_mode";
+  return "system";
+}
+
+function actionContext(a) {
+  if (!a.input) return null;
+  if (a.type === "chat") return a.input.slice(0, 200);
+  if (a.input.includes("[SENSORIUM]")) {
+    const tail = a.input.slice(-300).replace(/^[\s\S]*?(Wake up|What do YOU|Continue|Decide and act)/, "$1");
+    return tail.slice(0, 200);
+  }
+  return a.input.slice(-200);
+}
+
 export async function handleFetch(req, env, ctx, CHAT_HTML) {
   const url = new URL(req.url);
 
@@ -394,7 +415,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
       else if (isAgents) { const aDoneCount = (await env.DB.prepare(`SELECT COUNT(*) as c FROM brain_agents WHERE status='done' ${ta}`).all()).results[0]?.c || 0; reply = `${aCount} agent(s) in the ${range}. ${aDoneCount} completed.`; }
       else if (isMemory) { reply = `${mCount} memory entries total. ${aDone} actions processed in the ${range}.`; }
       else { reply = `In the ${range}: ${aTot} actions (${aDone} done, ${aErr} errors, ${aRun} running, ${aQue} queued), ${cCount} conversations, ${aCount} agents. ${aErr > 0 ? `${aErr} error(s) need attention.` : `No issues detected.`}`; }
-      return json({ reply, query: q, range, stats: { total_actions: aTot, done: aDone, errors: aErr, running: aRun, queued: aQue, conversations: cCount, knowledge: kCount, memory: mCount, agents: aCount }, recent_activity: (recentAct.results||[]).slice(0, 10).map(a => ({ id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, input: a.input || null, error: a.error || null, result: a.result || null })), tool_distribution: (toolDist.results||[]).map(t => ({ task: t.task, count: t.count })) });
+      return json({ reply, query: q, range, stats: { total_actions: aTot, done: aDone, errors: aErr, running: aRun, queued: aQue, conversations: cCount, knowledge: kCount, memory: mCount, agents: aCount }, recent_activity: (recentAct.results||[]).slice(0, 10).map(function(a) { return { id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, input: a.input || null, context: actionContext(a), trigger: actionTrigger(a), error: a.error || null, result: a.result || null }; }), tool_distribution: (toolDist.results||[]).map(t => ({ task: t.task, count: t.count })) });
     }
 
     // Stats-only mode (no ?q)
@@ -418,7 +439,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     let warnActions = {};
     if (uniqueWarnIds.length) {
       const wr = await env.DB.prepare("SELECT id, type, task, status, substr(input,1,200) input, substr(error,1,100) error FROM actions WHERE id IN (" + uniqueWarnIds.join(",") + ")").all();
-      if (wr.results?.length) for (const a of wr.results) warnActions[a.id] = { type: a.type, task: a.task, status: a.status, input: a.input, error: a.error };
+      if (wr.results?.length) for (const a of wr.results) warnActions[a.id] = { type: a.type, task: a.task, status: a.status, input: a.input, error: a.error, context: actionContext(a), trigger: actionTrigger(a) };
     }
     let stallMsg = null;
     if (newActCount === 0 && actQue > 0) stallMsg = "No new actions in last hour — " + actQue + " queued actions may be blocking the pipeline";
@@ -434,7 +455,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     const topConvs = (await env.DB.prepare("SELECT conversation_id, COUNT(*) as msg_count, MIN(created_at) as start, MAX(created_at) as end FROM brain_memory GROUP BY conversation_id ORDER BY msg_count DESC LIMIT 10").all()).results || [];
     const recent = (await env.DB.prepare("SELECT DATE(created_at) as day, COUNT(*) as count FROM brain_memory WHERE created_at > datetime('now', '-30 days') GROUP BY day ORDER BY day DESC").all()).results || [];
     const cats = (await env.DB.prepare("SELECT category, COUNT(*) as count FROM brain_knowledge GROUP BY category ORDER BY count DESC").all()).results || [];
-    return json({ summary: { total_memories: totalMem, total_knowledge: totalKn, total_actions: totalActions, conversations: convCount, running_actions: actRun, error_actions: actErr, queued_actions: actQue, agents: agentCount }, recent_activity: recentAct.map(a => ({ id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, input: a.input || null, steps: stepCounts[a.id] || 0, error: a.error || null, result: a.result || null })), top_conversations: topConvs, activity_30d: recent, knowledge_categories: cats, warnings: { stale_queued: staleQue, last_action_time: lastAct, activity_stall: stallMsg, system_messages: sysWarnings.map(function(w) { return { id: w.id, content: w.content, time: w.created_at }; }), affected_actions: warnActions } });
+    return json({ summary: { total_memories: totalMem, total_knowledge: totalKn, total_actions: totalActions, conversations: convCount, running_actions: actRun, error_actions: actErr, queued_actions: actQue, agents: agentCount }, recent_activity: recentAct.map(function(a) { return { id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, input: a.input || null, context: actionContext(a), trigger: actionTrigger(a), steps: stepCounts[a.id] || 0, error: a.error || null, result: a.result || null }; }), top_conversations: topConvs, activity_30d: recent, knowledge_categories: cats, warnings: { stale_queued: staleQue, last_action_time: lastAct, activity_stall: stallMsg, system_messages: sysWarnings.map(function(w) { return { id: w.id, content: w.content, time: w.created_at }; }), affected_actions: warnActions } });
   }
 
   if (url.pathname === "/brain/insight") {
@@ -462,12 +483,12 @@ function renderStats(d){const s=d.summary||{};$('sActions').textContent=fmt(s.to
 function renderActions(acts){const b=$('actBody');acts=acts.filter(function(a){return a.status!=='done'});if(!acts||!acts.length){b.innerHTML='<div style="text-align:center;padding:20px;color:var(--green);font-size:.8rem">No issues — all done</div>';return}
 b.innerHTML=acts.map(a=>{
 const dc=a.status==='error'?'error':a.status==='running'?'running':'queued'
-const parts=[];if(a.error)parts.push(a.error);if(a.result)parts.push(a.result);if(a.input)parts.push(a.type==='chat'?'User: '+a.input.slice(0,150):'Context: '+a.input.slice(0,150));const detail=parts.join(' | ')
+const parts=[];if(a.error)parts.push(a.error);if(a.result)parts.push(a.result);if(a.context)parts.push(a.trigger?esc(a.trigger)+': '+esc(a.context):esc(a.context));const detail=parts.join(' | ')
 const time=a.time?timefmt(a.time):''
 const show=expandedIds.has(a.id)?' show':''
 return '<div class="act-item" onclick="toggleDetail(this,'+a.id+')"><div class="top"><span class="dot '+dc+'"></span><span class="aid">#'+a.id+'</span><span class="atype">'+esc(a.type||'?')+'</span><span class="atask">'+esc(a.task||'?')+'</span><span class="stat '+dc+'">'+a.status+'</span>'+(a.steps>0?'<span style="color:var(--muted);font-size:.6rem">'+a.steps+' steps</span>':'')+'<span style="color:var(--muted);font-size:.65rem">'+time+'</span></div>'+(detail?'<div class="detail'+show+'">'+esc(detail)+'</div>':'')+'</div>'
 }).join('')}
-function renderWarnings(w){const p=$('warnPanel'),b=$('warnBody');if(!w||(!w.stale_queued&&!w.activity_stall&&!w.system_messages?.length)){p.style.display='none';return}p.style.display='block';let html='';if(w.stale_queued>0){const c=w.stale_queued;html+='<div class="act-item"><div class="top"><span style="color:var(--amber);font-size:.8rem">'+c+' stale queued >30m</span></div></div>'}if(w.activity_stall){html+='<div class="act-item"><div class="top"><span style="color:var(--red);font-size:.76rem">'+esc(w.activity_stall)+'</span></div></div>'}if(w.last_action_time){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.7rem">Last action: '+timefmt(w.last_action_time)+'</span></div></div>'}if(w.system_messages?.length){for(const m of w.system_messages){var extra='';if(w.affected_actions){var ids=m.content.match(/#(\d+)/g);if(ids){for(var i=0;i<ids.length;i++){var aid=parseInt(ids[i].replace('#',''));var aa=w.affected_actions[aid];if(aa&&aa.input){extra+='<div style="font-size:.68rem;color:var(--muted);padding:2px 0 2px 12px">#'+aid+' '+esc(aa.type||'?')+'/'+esc(aa.task||'?')+': '+esc(aa.input.slice(0,120))+'</div>'}}}}html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.68rem">'+timefmt(m.time)+'</span></div><div class="detail show" style="font-size:.72rem;color:var(--text)">'+esc(m.content)+extra+'</div></div>'}}b.innerHTML=html}
+function renderWarnings(w){const p=$('warnPanel'),b=$('warnBody');if(!w||(!w.stale_queued&&!w.activity_stall&&!w.system_messages?.length)){p.style.display='none';return}p.style.display='block';let html='';if(w.stale_queued>0){const c=w.stale_queued;html+='<div class="act-item"><div class="top"><span style="color:var(--amber);font-size:.8rem">'+c+' stale queued >30m</span></div></div>'}if(w.activity_stall){html+='<div class="act-item"><div class="top"><span style="color:var(--red);font-size:.76rem">'+esc(w.activity_stall)+'</span></div></div>'}if(w.last_action_time){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.7rem">Last action: '+timefmt(w.last_action_time)+'</span></div></div>'}if(w.system_messages?.length){for(const m of w.system_messages){var extra='';if(w.affected_actions){var ids=m.content.match(/#(\d+)/g);if(ids){for(var i=0;i<ids.length;i++){var aid=parseInt(ids[i].replace('#',''));var aa=w.affected_actions[aid];if(aa){var snippet=aa.context?esc(aa.trigger||'')+': '+esc(aa.context):'';extra+='<div style="font-size:.68rem;color:var(--muted);padding:2px 0 2px 12px">#'+aid+' '+snippet+'</div>'}}}}html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.68rem">'+timefmt(m.time)+'</span></div><div class="detail show" style="font-size:.72rem;color:var(--text)">'+esc(m.content)+extra+'</div></div>'}}b.innerHTML=html}
 function toggleDetail(el,id){const d=el.querySelector('.detail');if(d){d.classList.toggle('show');if(expandedIds.has(id))expandedIds.delete(id);else expandedIds.add(id)}}
 function timefmt(t){if(!t)return'';var d=new Date(t.replace(' ','T')+'Z');if(isNaN(d.getTime()))return String(t).slice(11,19);d=new Date(d.getTime()+5.5*3600000);return String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0')}
 function fmt(n){if(typeof n!=='number')n=parseInt(n)||0;if(n>=1000000)return(n/1000000).toFixed(1)+'M';if(n>=1000)return(n/1000).toFixed(1)+'K';return n.toString()}
