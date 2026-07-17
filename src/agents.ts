@@ -133,6 +133,31 @@ export async function processOneStep(env, action) {
     if (!resp || typeof content !== "string") {
       const errorSummary = lastErrors.length ? lastErrors.join("; ") : "all providers unreachable";
       logActivity(db, "provider_fail", { actionId: action.id, summary: "Provider fail: " + errorSummary.slice(0, 100), details: errorSummary });
+      try {
+        if (errorSummary.includes("BD:") || errorSummary.includes("BUDDHI_DWAR") || errorSummary.includes("502") || errorSummary.includes("buddhi")) {
+          const cur = await db.prepare("SELECT value FROM identity WHERE key='bd_failures'").first();
+          const n = (cur?.value ? parseInt(cur.value) : 0) + 1;
+          await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_failures',?1,datetime('now'))").bind(String(n)).run();
+          let type = "unknown";
+          if (errorSummary.includes("timeout") || errorSummary.includes("aborted")) type = "timeout";
+          else if (errorSummary.includes("502")) type = "502";
+          else if (errorSummary.includes("401") || errorSummary.includes("Unauthorized") || errorSummary.includes("key")) type = "key_invalid";
+          else if (errorSummary.includes("422")) type = "bad_request";
+          else if (errorSummary.includes("429")) type = "rate_limited";
+          else if (errorSummary.includes("fetch failed") || errorSummary.includes("DNS") || errorSummary.includes("ENOTFOUND")) type = "unreachable";
+          else if (errorSummary.includes("200 empty")) type = "empty_response";
+          await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_error_type',?1,datetime('now'))").bind(type).run();
+        }
+        if (errorSummary.includes("Workers AI") || errorSummary.includes("workers-ai")) {
+          let waType = "unknown";
+          if (errorSummary.includes("4006") || errorSummary.includes("allocation")) waType = "quota_exhausted";
+          else if (errorSummary.includes("timeout") || errorSummary.includes("aborted")) waType = "timeout";
+          else if (errorSummary.includes("model") && (errorSummary.includes("not found") || errorSummary.includes("unavailable"))) waType = "model_unavailable";
+          else if (errorSummary.includes("503") || errorSummary.includes("502") || errorSummary.includes("fetch failed")) waType = "service_unavailable";
+          else if (errorSummary.includes("200 empty")) waType = "empty_response";
+          await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_error_type',?1,datetime('now'))").bind(waType).run();
+        }
+      } catch {}
       state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;
       break;
     }

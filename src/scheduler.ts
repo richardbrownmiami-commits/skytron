@@ -50,46 +50,6 @@ async function runLLMTasks(settings, env, db) {
     }
   } catch (e) { console.error("process_agents error:", e); }
 
-  // --- Emergency self-repair (LLM-dependent part only) ---
-  if (settings.emergency_repair) try {
-    const bdFails = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first();
-    const bdDown = bdFails?.value && parseInt(bdFails.value) >= 3;
-    const waLimited = await env.DB.prepare("SELECT value FROM identity WHERE key='wa_limited'").first();
-    const waDown = waLimited?.value && waLimited.value.startsWith(new Date().toISOString().split("T")[0]);
-    if (bdDown && waDown) {
-      const lastRepair = await env.DB.prepare("SELECT value FROM identity WHERE key='last_emergency_repair'").first();
-      const minsSince = lastRepair?.value ? (Date.now() - new Date(lastRepair.value).getTime()) / 60000 : 999;
-      if (minsSince > 30) {
-        await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('last_emergency_repair',datetime('now'),datetime('now'))").run();
-        logActivity(db, "emergency_repair", { summary: "WA + BD both down — running self-repair via OpenRouter" });
-        const diag = await callOpenRouter(env, [
-          { role: "system", content: "You are Skytron's emergency repair routine. WA (Workers AI) and BD (BUDDHI_DWAR gateway) are both down. Available actions: (a) retry WA by clearing wa_limited flag, (b) retry BD by clearing bd_failures flag, (c) test BD connectivity by fetching /v1/status, (d) wait. Respond with one word: 'retry_wa', 'retry_bd', 'test_bd', or 'wait'." },
-          { role: "user", content: "Both LLM providers failed. Fix it." }
-        ], 500);
-        if (diag?.content) {
-          const action = diag.content.trim().toLowerCase();
-          if (action.includes("retry_wa")) {
-            await env.DB.prepare("DELETE FROM identity WHERE key='wa_limited'").run();
-            logActivity(db, "emergency_repair", { summary: "Cleared wa_limited — will retry WA next tick" });
-          } else if (action.includes("retry_bd")) {
-            await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
-            await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
-            logActivity(db, "emergency_repair", { summary: "Cleared bd_failures + health_flags — will retry BD next tick" });
-          } else if (action.includes("test_bd")) {
-            try {
-              const testResp = env.BRAIN_KEY ? await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/status", { signal: AbortSignal.timeout(5000) }).catch(() => null) : null;
-              const reachable = testResp?.ok ? "yes" : "no";
-              await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES ('emergency_bd_test', ?1, 'lesson', 'auto')").bind("BD connectivity test at " + new Date().toISOString() + ": reachable=" + reachable + (testResp ? " status=" + testResp.status : "")).run();
-              logActivity(db, "emergency_repair", { summary: "Tested BD — reachable=" + reachable });
-            } catch {}
-          } else {
-            logActivity(db, "emergency_repair", { summary: "OpenRouter suggests waiting — " + diag.content.slice(0, 100) });
-          }
-        }
-      }
-    }
-  } catch (e) { console.error("emergency_repair error:", e); }
-
 }
 
 // ── NON-LLM CRON (every 1 min) ──────────────────────────────────────

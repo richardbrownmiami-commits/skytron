@@ -429,6 +429,9 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     const staleQue = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE status='queued' AND created_at < datetime('now', '-30 minutes')").all()).results[0]?.c || 0;
     const lastAct = (await env.DB.prepare("SELECT MAX(created_at) as t FROM actions").all()).results[0]?.t || null;
     const newActCount = (await env.DB.prepare("SELECT COUNT(*) as c FROM actions WHERE created_at > datetime('now', '-1 hour')").all()).results[0]?.c || 0;
+    const bdHealthRow = (await env.DB.prepare("SELECT value FROM identity WHERE key='bd_error_type'").first())?.value;
+    const bdFailRow = (await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first())?.value;
+    const waHealthRow = (await env.DB.prepare("SELECT value FROM identity WHERE key='wa_error_type'").first())?.value;
     const sysWarnings = (await env.DB.prepare("SELECT id, content, created_at FROM brain_memory WHERE role='system' AND conversation_id='_system' AND created_at > datetime('now', '-2 hours') ORDER BY created_at DESC LIMIT 5").all()).results || [];
     const warnActIds = [];
     for (const w of sysWarnings) {
@@ -455,7 +458,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
     const topConvs = (await env.DB.prepare("SELECT conversation_id, COUNT(*) as msg_count, MIN(created_at) as start, MAX(created_at) as end FROM brain_memory GROUP BY conversation_id ORDER BY msg_count DESC LIMIT 10").all()).results || [];
     const recent = (await env.DB.prepare("SELECT DATE(created_at) as day, COUNT(*) as count FROM brain_memory WHERE created_at > datetime('now', '-30 days') GROUP BY day ORDER BY day DESC").all()).results || [];
     const cats = (await env.DB.prepare("SELECT category, COUNT(*) as count FROM brain_knowledge GROUP BY category ORDER BY count DESC").all()).results || [];
-    return json({ summary: { total_memories: totalMem, total_knowledge: totalKn, total_actions: totalActions, conversations: convCount, running_actions: actRun, error_actions: actErr, queued_actions: actQue, agents: agentCount }, recent_activity: recentAct.map(function(a) { return { id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, input: a.input || null, context: actionContext(a), trigger: actionTrigger(a), steps: stepCounts[a.id] || 0, error: a.error || null, result: a.result || null }; }), top_conversations: topConvs, activity_30d: recent, knowledge_categories: cats, warnings: { stale_queued: staleQue, last_action_time: lastAct, activity_stall: stallMsg, system_messages: sysWarnings.map(function(w) { return { id: w.id, content: w.content, time: w.created_at }; }), affected_actions: warnActions } });
+    return json({ summary: { total_memories: totalMem, total_knowledge: totalKn, total_actions: totalActions, conversations: convCount, running_actions: actRun, error_actions: actErr, queued_actions: actQue, agents: agentCount }, recent_activity: recentAct.map(function(a) { return { id: a.id, type: a.type || "?", task: a.task || "?", status: a.status, time: a.created_at, input: a.input || null, context: actionContext(a), trigger: actionTrigger(a), steps: stepCounts[a.id] || 0, error: a.error || null, result: a.result || null }; }), top_conversations: topConvs, activity_30d: recent, knowledge_categories: cats, warnings: { stale_queued: staleQue, last_action_time: lastAct, activity_stall: stallMsg, bd_health: bdHealthRow ? { error_type: bdHealthRow, failures: bdFailRow ? parseInt(bdFailRow) : 0 } : null, wa_health: waHealthRow ? { error_type: waHealthRow } : null, system_messages: sysWarnings.map(function(w) { return { id: w.id, content: w.content, time: w.created_at }; }), affected_actions: warnActions } });
   }
 
   if (url.pathname === "/brain/insight") {
@@ -488,7 +491,7 @@ const time=a.time?timefmt(a.time):''
 const show=expandedIds.has(a.id)?' show':''
 return '<div class="act-item" onclick="toggleDetail(this,'+a.id+')"><div class="top"><span class="dot '+dc+'"></span><span class="aid">#'+a.id+'</span><span class="atype">'+esc(a.type||'?')+'</span><span class="atask">'+esc(a.task||'?')+'</span><span class="stat '+dc+'">'+a.status+'</span>'+(a.steps>0?'<span style="color:var(--muted);font-size:.6rem">'+a.steps+' steps</span>':'')+'<span style="color:var(--muted);font-size:.65rem">'+time+'</span></div>'+(detail?'<div class="detail'+show+'">'+esc(detail)+'</div>':'')+'</div>'
 }).join('')}
-function renderWarnings(w){const p=$('warnPanel'),b=$('warnBody');if(!w||(!w.stale_queued&&!w.activity_stall&&!w.system_messages?.length)){p.style.display='none';return}p.style.display='block';let html='';if(w.stale_queued>0){const c=w.stale_queued;html+='<div class="act-item"><div class="top"><span style="color:var(--amber);font-size:.8rem">'+c+' stale queued >30m</span></div></div>'}if(w.activity_stall){html+='<div class="act-item"><div class="top"><span style="color:var(--red);font-size:.76rem">'+esc(w.activity_stall)+'</span></div></div>'}if(w.last_action_time){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.7rem">Last action: '+timefmt(w.last_action_time)+'</span></div></div>'}if(w.system_messages?.length){for(const m of w.system_messages){var extra='';if(w.affected_actions){var ids=m.content.match(/#(\d+)/g);if(ids){for(var i=0;i<ids.length;i++){var aid=parseInt(ids[i].replace('#',''));var aa=w.affected_actions[aid];if(aa){var snippet=aa.context?esc(aa.trigger||'')+': '+esc(aa.context):'';extra+='<div style="font-size:.68rem;color:var(--muted);padding:2px 0 2px 12px">#'+aid+' '+snippet+'</div>'}}}}html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.68rem">'+timefmt(m.time)+'</span></div><div class="detail show" style="font-size:.72rem;color:var(--text)">'+esc(m.content)+extra+'</div></div>'}}b.innerHTML=html}
+function renderWarnings(w){const p=$('warnPanel'),b=$('warnBody');if(!w||(!w.stale_queued&&!w.activity_stall&&!w.system_messages?.length&&!w.bd_health&&!w.wa_health)){p.style.display='none';return}p.style.display='block';let html='';if(w.bd_health){const c=w.bd_health.failures||0,hc=w.bd_health.error_type;html+='<div class="act-item"><div class="top"><span style="color:var(--red);font-size:.76rem">BD: '+esc(hc)+(c>0?' ('+c+' failures)':'')+'</span></div></div>'}if(w.wa_health){const hc=w.wa_health.error_type;html+='<div class="act-item"><div class="top"><span style="color:var(--amber);font-size:.76rem">WA: '+esc(hc)+'</span></div></div>'}if(w.stale_queued>0){const c=w.stale_queued;html+='<div class="act-item"><div class="top"><span style="color:var(--amber);font-size:.8rem">'+c+' stale queued >30m</span></div></div>'}if(w.activity_stall){html+='<div class="act-item"><div class="top"><span style="color:var(--red);font-size:.76rem">'+esc(w.activity_stall)+'</span></div></div>'}if(w.last_action_time){html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.7rem">Last action: '+timefmt(w.last_action_time)+'</span></div></div>'}if(w.system_messages?.length){for(const m of w.system_messages){var extra='';if(w.affected_actions){var ids=m.content.match(/#(\d+)/g);if(ids){for(var i=0;i<ids.length;i++){var aid=parseInt(ids[i].replace('#',''));var aa=w.affected_actions[aid];if(aa){var snippet=aa.context?esc(aa.trigger||'')+': '+esc(aa.context):'';extra+='<div style="font-size:.68rem;color:var(--muted);padding:2px 0 2px 12px">#'+aid+' '+snippet+'</div>'}}}}html+='<div class="act-item"><div class="top"><span style="color:var(--muted);font-size:.68rem">'+timefmt(m.time)+'</span></div><div class="detail show" style="font-size:.72rem;color:var(--text)">'+esc(m.content)+extra+'</div></div>'}}b.innerHTML=html}
 function toggleDetail(el,id){const d=el.querySelector('.detail');if(d){d.classList.toggle('show');if(expandedIds.has(id))expandedIds.delete(id);else expandedIds.add(id)}}
 function timefmt(t){if(!t)return'';var d=new Date(t.replace(' ','T')+'Z');if(isNaN(d.getTime()))return String(t).slice(11,19);d=new Date(d.getTime()+5.5*3600000);return String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0')}
 function fmt(n){if(typeof n!=='number')n=parseInt(n)||0;if(n>=1000000)return(n/1000000).toFixed(1)+'M';if(n>=1000)return(n/1000).toFixed(1)+'K';return n.toString()}
@@ -618,6 +621,45 @@ async function send(){
     const staleQueued = (await env.DB.prepare("SELECT id, task, created_at, CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) as duration_seconds FROM actions WHERE status='queued' AND created_at < datetime('now', '-30 minutes') ORDER BY created_at").all()).results || [];
     const recentErrors = (await env.DB.prepare("SELECT id, task, result, created_at FROM actions WHERE status='error' AND created_at > datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 10").all()).results || [];
     const oldestAction = (await env.DB.prepare("SELECT MIN(created_at) as oldest FROM actions").all()).results[0]?.oldest || "";
+    // Test BD directly
+    let bdHealth = { status: "unknown", error_type: null, detail: null };
+    if (llmSettings.buddhidwar?.enabled && llmSettings.buddhidwar?.api_key) {
+      try {
+        const bdTest = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + llmSettings.buddhidwar.api_key },
+          body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
+          signal: AbortSignal.timeout(8000)
+        });
+        if (bdTest.ok) { bdHealth = { status: "ok", error_type: null, detail: "BD responded" }; }
+        else {
+          const errText = await bdTest.text().catch(() => "");
+          bdHealth = { status: "error", error_type: bdTest.status === 401 ? "key_invalid" : bdTest.status === 429 ? "rate_limited" : bdTest.status === 502 ? "502" : bdTest.status === 422 ? "bad_request" : "http_" + bdTest.status, detail: "HTTP " + bdTest.status + ": " + errText.slice(0, 80) };
+        }
+      } catch (e) {
+        bdHealth = { status: "error", error_type: (e.message || "").includes("timeout") || (e.message || "").includes("aborted") ? "timeout" : "unreachable", detail: e.message };
+      }
+    } else { bdHealth = { status: "off", error_type: null, detail: "BD not configured" }; }
+    // Test WA directly
+    let waHealth = { status: "unknown", error_type: null, detail: null };
+    if (env.CF_API_TOKEN) {
+      try {
+        const waTest = await fetch("https://api.cloudflare.com/client/v4/accounts/" + "913f3a2576a358054eba9a58a9573949" + "/ai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN },
+          body: JSON.stringify({ model: "@cf/meta/llama-3.2-3b-instruct", messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
+          signal: AbortSignal.timeout(10000)
+        });
+        if (waTest.ok) { waHealth = { status: "ok", error_type: null, detail: "WA responded" }; }
+        else {
+          const errText = await waTest.text().catch(() => "");
+          if (errText.includes("4006") || errText.includes("allocation")) waHealth = { status: "error", error_type: "quota_exhausted", detail: "Daily quota used up" };
+          else waHealth = { status: "error", error_type: "service_unavailable", detail: "HTTP " + waTest.status + ": " + errText.slice(0, 80) };
+        }
+      } catch (e) {
+        waHealth = { status: "error", error_type: (e.message || "").includes("timeout") ? "timeout" : "service_unavailable", detail: e.message };
+      }
+    } else { waHealth = { status: "off", error_type: null, detail: "CF_API_TOKEN not set" }; }
     const issues = [];
     const now = new Date().toISOString();
     if (memCount > 200) {
@@ -643,6 +685,14 @@ async function send(){
     }
     if (recentErrors.length > 0) {
       issues.push({ code: "ERR-001", severity: "error", title: recentErrors.length + " action errors in last 24 hours", description: recentErrors.length + " actions errored out in the past day.", when: "last 24 hours", duration: "varies", effect: "Repeated errors suggest a provider outage or bug. The scheduler will keep retrying the same failing pattern unless loop detection catches it.", source_file: "src/scheduler.ts" });
+    }
+    if (bdHealth.status === "error") {
+      const fixable = bdHealth.error_type === "key_invalid" ? " (needs user action)" : " (fixable)";
+      issues.push({ code: "BD-" + (bdHealth.error_type || "ERR").toUpperCase(), severity: "error", title: "BD: " + (bdHealth.error_type || "error") + fixable, description: "BD gateway error: " + (bdHealth.detail || "unknown"), when: now, duration: "ongoing", effect: "Actions that route to BD will fail until this is resolved.", source_file: "src/llm.ts:133" });
+    }
+    if (waHealth.status === "error" && waHealth.error_type !== "off") {
+      const fixable = waHealth.error_type === "quota_exhausted" ? " (resets at midnight)" : " (fixable)";
+      issues.push({ code: "WA-" + (waHealth.error_type || "ERR").toUpperCase(), severity: "error", title: "WA: " + (waHealth.error_type || "error") + fixable, description: "Workers AI error: " + (waHealth.detail || "unknown"), when: now, duration: "ongoing", effect: "Tool-mode actions may fail or fallback to BD.", source_file: "src/llm.ts:79" });
     }
     let llmSettings = {};
     try { const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first(); if (row?.content) llmSettings = JSON.parse(row.content); } catch {}
@@ -748,7 +798,7 @@ async function send(){
         }
       }
     } catch {}
-    return json({ issues, llm: { providers: llmProviders, primary: primaryName, fallback: fallbackName, working: anyWorking }, endpoints, stats: { memory: memCount, actions: actCount, knowledge: knCount, agents: agentCount, logs: logCount, oldest_action: oldestAction }, heartbeat, auto_resolved: autoResolved, skytron_fixes: skytronFixes, autofix_history: autoFixHistory, provider_failures: providerFailures });
+    return json({ issues, llm: { providers: llmProviders, primary: primaryName, fallback: fallbackName, working: anyWorking }, endpoints, stats: { memory: memCount, actions: actCount, knowledge: knCount, agents: agentCount, logs: logCount, oldest_action: oldestAction }, bd_health: bdHealth, wa_health: waHealth, heartbeat, auto_resolved: autoResolved, skytron_fixes: skytronFixes, autofix_history: autoFixHistory, provider_failures: providerFailures });
   }
 
   if (url.pathname === "/brain/repair" && (req.method === "GET" || req.method === "POST")) {
@@ -766,6 +816,29 @@ async function send(){
     if (memTrim.meta?.changes > 0) fixes.push({ code: "FIX-MEM", description: "Trimmed " + memTrim.meta.changes + " old memory entries beyond last 200", source_file: "src/scheduler.ts:343", when: now });
     const actTrim = await env.DB.prepare("DELETE FROM actions WHERE status='done' AND id NOT IN (SELECT id FROM actions WHERE status='done' ORDER BY id DESC LIMIT 500)").run();
     if (actTrim.meta?.changes > 0) fixes.push({ code: "FIX-ACT", description: "Cleaned " + actTrim.meta.changes + " old completed actions beyond last 500", source_file: "src/scheduler.ts:345", when: now });
+    // BD health fix
+    try {
+      const bdType = (await env.DB.prepare("SELECT value FROM identity WHERE key='bd_error_type'").first())?.value;
+      const bdFails = (await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first())?.value;
+      if (bdType && bdType !== "key_invalid") {
+        await env.DB.prepare("DELETE FROM identity WHERE key='bd_error_type'").run();
+        await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
+        await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
+        fixes.push({ code: "FIX-BD", description: "Cleared BD error flags (" + bdType + (bdFails ? ", " + bdFails + " failures" : "") + ") — system will retry BD", source_file: "src/routes.ts:754", when: now });
+      } else if (bdType === "key_invalid") {
+        fixes.push({ code: "FIX-BD-SKIP", description: "BD API key invalid — update in /brain/settings, cannot auto-fix", source_file: "src/routes.ts:754", when: now });
+      }
+    } catch {}
+    // WA health fix
+    try {
+      const waType = (await env.DB.prepare("SELECT value FROM identity WHERE key='wa_error_type'").first())?.value;
+      if (waType && waType !== "quota_exhausted") {
+        await env.DB.prepare("DELETE FROM identity WHERE key='wa_error_type'").run();
+        fixes.push({ code: "FIX-WA", description: "Cleared WA error flags (" + waType + ") — system will retry WA", source_file: "src/routes.ts:754", when: now });
+      } else if (waType === "quota_exhausted") {
+        fixes.push({ code: "FIX-WA-SKIP", description: "WA daily quota exhausted — resets at midnight UTC, cannot auto-fix", source_file: "src/routes.ts:754", when: now });
+      }
+    } catch {}
     return json({ fixes });
   }
 
@@ -779,7 +852,8 @@ async function send(){
       let llmSettings = {};
       try { const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first(); if (row?.content) llmSettings = JSON.parse(row.content); } catch {}
 
-      // Attempt 1: Test BD gateway with actual chat completion (not just health endpoint)
+      // Attempt 1: Test BD → classify → fix → retest
+      let bdBefore = "unknown", bdAfter = "unknown";
       try {
         const bdResp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
           method: "POST",
@@ -787,9 +861,40 @@ async function send(){
           body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], model: "openrouter/free", max_tokens: 1 }),
           signal: AbortSignal.timeout(10000)
         });
-        if (bdResp.ok) { fixed = true; attempts.push({ action: "BD chat completion test", result: "ok", detail: "BD responded to chat completion" }); }
-        else { const err = await bdResp.text().catch(() => ""); attempts.push({ action: "BD chat completion test", result: "failed", detail: "HTTP " + bdResp.status + ": " + err.slice(0, 200) }); }
-      } catch (e) { attempts.push({ action: "BD chat completion test", result: "failed", detail: e.message }); }
+        if (bdResp.ok) { fixed = true; bdBefore = "ok"; attempts.push({ action: "BD test", result: "ok", detail: "BD responded" }); }
+        else {
+          const errText = await bdResp.text().catch(() => "");
+          bdBefore = "HTTP " + bdResp.status;
+          const bdType = bdResp.status === 401 ? "key_invalid" : bdResp.status === 429 ? "rate_limited" : bdResp.status === 502 || bdResp.status === 422 ? "retryable" : "http_" + bdResp.status;
+          if (bdType === "retryable" || bdType === "rate_limited") {
+            await env.DB.prepare("DELETE FROM identity WHERE key='bd_error_type'").run();
+            await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
+            await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
+            const bdRetry = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
+              method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + (llmSettings.buddhidwar?.api_key || env.BRAIN_KEY || "") },
+              body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
+              signal: AbortSignal.timeout(10000)
+            });
+            if (bdRetry.ok) { fixed = true; bdAfter = "ok"; attempts.push({ action: "BD fix", result: "ok", detail: "Cleared flags + retry → ok" }); }
+            else { const e2 = await bdRetry.text().catch(() => ""); bdAfter = "HTTP " + bdRetry.status; attempts.push({ action: "BD fix", result: "failed", detail: "Retry still failed: " + e2.slice(0, 100) }); }
+          } else {
+            attempts.push({ action: "BD test", result: "failed", detail: "HTTP " + bdResp.status + ": " + errText.slice(0, 150) + " — not auto-fixable" });
+          }
+        }
+      } catch (e) {
+        bdBefore = "timeout/unreachable";
+        await env.DB.prepare("DELETE FROM identity WHERE key='bd_error_type'").run();
+        await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
+        await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
+        const bdRetry = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
+          method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + (llmSettings.buddhidwar?.api_key || env.BRAIN_KEY || "") },
+          body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
+          signal: AbortSignal.timeout(8000)
+        }).catch(() => null);
+        if (bdRetry?.ok) { fixed = true; bdAfter = "ok"; attempts.push({ action: "BD fix", result: "ok", detail: "Cleared flags + retry → ok after timeout" }); }
+        else { bdAfter = "still failing"; attempts.push({ action: "BD fix", result: "failed", detail: "Retry after timeout still failed" }); }
+      }
+      if (bdBefore !== "ok") attempts.unshift({ action: "BD before", result: "failed", detail: bdBefore });
 
       // Attempt 2: Test OpenRouter directly
     if (llmSettings.openrouter?.enabled !== false && env.OPENROUTER_API_KEY) {
