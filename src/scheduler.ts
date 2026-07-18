@@ -4,7 +4,6 @@
 //   */5 * * * * → LLM tasks (every 5 min): process actions, sub-agents, emergency repair
 import { initSchema, indexKnowledgeForSearch, logActivity, buildSensorium, saveAgentState } from './db';
 import { processOneStep, processOneAgentStep } from './agents';
-import { callOpenRouter } from './llm';
 import { collectToScratchpad } from './consolidate';
 
 export async function handleScheduled(controller, env, cronPattern = "* * * * *") {

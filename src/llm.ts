@@ -1,8 +1,7 @@
 // === Skytron LLM Gateway (AI PROVIDER) ===
 // Two modes:
 //   TOOL MODE (hasTools): Workers AI REST → Universal
-//   CHAT MODE (no tools): BD → OpenRouter → Universal (skip WA to preserve quota)
-// No hardcoded model names — providers route based on tools presence.
+//   CHAT MODE (no tools): BD → Workers AI REST → Universal
 
 import { CF_AI } from './constants';
 
@@ -33,8 +32,7 @@ async function fetchWithRetry(url, opts, maxRetries = 3) {
 }
 
 const DEFAULT_SETTINGS = {
-  workers_ai: { enabled: true },
-  openrouter: { enabled: true },
+  workers_ai: { enabled: true, api_key: "" },
   buddhidwar: { enabled: false, api_key: "" },
   universal: { enabled: false, endpoint: "", api_key: "", model: "" }
 };
@@ -65,7 +63,6 @@ export async function callLLM(env, body, sessionId) {
       if (row?.content) {
         const parsed = JSON.parse(row.content);
         if (parsed.workers_ai) settings.workers_ai = { ...settings.workers_ai, ...parsed.workers_ai };
-        if (parsed.openrouter) settings.openrouter = { ...settings.openrouter, ...parsed.openrouter };
         if (parsed.buddhidwar) settings.buddhidwar = { ...settings.buddhidwar, ...parsed.buddhidwar };
         if (parsed.universal) settings.universal = { ...settings.universal, ...parsed.universal };
       }
@@ -127,7 +124,7 @@ export async function callLLM(env, body, sessionId) {
     }
 
   } else {
-    // === CHAT MODE: BD → OpenRouter → Universal (skip WA to preserve daily quota) ===
+    // === CHAT MODE: BD → Workers AI REST → Universal ===
 
     // Priority 1: BUDDHI_DWAR (auto-selects fastest model)
     if (settings.buddhidwar?.enabled && settings.buddhidwar?.api_key) {
@@ -154,19 +151,31 @@ export async function callLLM(env, body, sessionId) {
       } catch (e) { errors.push("BD: " + (e.message || "timeout")); }
     }
 
-    // Priority 2: OpenRouter (free models)
-    if (settings.openrouter?.enabled !== false && env.OPENROUTER_API_KEY) {
+    // Priority 2: Workers AI (REST API with user's API key)
+    if (settings.workers_ai?.enabled !== false && settings.workers_ai?.api_key) {
       try {
-        const orMessages = body.messages.map(function(m) {
-          var c = m.content;
-          if (typeof c !== "string") return m;
-          if (c.length > 10000) c = c.slice(0, 4000) + "\n...[truncated]...\n" + c.slice(c.length - 6000);
-          return { role: m.role, content: c };
+        const resp = await fetch("https://api.cloudflare.com/client/v4/accounts/" + CF_AI.account + "/ai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.workers_ai.api_key },
+          body: JSON.stringify({
+            model: "@cf/meta/llama-3-8b-instruct",
+            messages: body.messages,
+            max_tokens: maxTokens
+          }),
+          signal: AbortSignal.timeout(30000)
         });
-        const orResult = await callOpenRouter(env, orMessages, maxTokens);
-        if (orResult?.content) return orResult;
-        if (orResult?.error) errors.push("OpenRouter: " + orResult.error);
-      } catch (e) { errors.push("OpenRouter: " + (e.message || "error")); }
+        if (resp.ok) {
+          const data = await resp.json();
+          const msgContent = data.choices?.[0]?.message?.content;
+          if (typeof msgContent === "string" && msgContent.length > 0) {
+            return { content: msgContent, model: data.model || "workers-ai", tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
+          }
+          errors.push("Workers AI: HTTP 200 empty");
+        } else {
+          const errBody = await resp.text().catch(() => "");
+          errors.push("Workers AI: HTTP " + resp.status + " " + errBody.slice(0, 80));
+        }
+      } catch (e) { errors.push("Workers AI: " + (e.message || "timeout")); }
     }
 
     // Priority 3: Universal AI (chat mode, no tools)
@@ -203,36 +212,6 @@ export async function callLLM(env, body, sessionId) {
     } catch {}
   }
   return { content: null, errors, model: "none", tokens: { total: 0 } };
-}
-
-// callOpenRouter: standalone — bypasses settings entirely, calls OpenRouter directly.
-// Used by scheduler for emergency self-repair.
-export async function callOpenRouter(env, messages, maxTokens = 2000, model = "openrouter/free") {
-  if (!env.OPENROUTER_API_KEY) return { content: null, error: "OPENROUTER_API_KEY not set" };
-  try {
-    const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + env.OPENROUTER_API_KEY,
-        "HTTP-Referer": "https://github.com/richardbrownmiami-commits/skytron",
-        "X-Title": "Skytron"
-      },
-      body: JSON.stringify({ messages, model, max_tokens: maxTokens }),
-      signal: AbortSignal.timeout(15000)
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      const msgContent = data.choices?.[0]?.message?.content;
-      if (typeof msgContent === "string" && msgContent.length > 0) {
-        return { content: msgContent, model: data.model || model, tokens: data.usage || { total: 0 }, finish_reason: data.choices?.[0]?.finish_reason || "" };
-      }
-      return { content: null, error: "OpenRouter: HTTP 200 empty: " + (data.error?.message || JSON.stringify(data).slice(0, 100)) };
-    } else {
-      const errBody = await resp.text().catch(() => "");
-      return { content: null, error: "OpenRouter: HTTP " + resp.status + " " + errBody.slice(0, 100) };
-    }
-  } catch (e) { return { content: null, error: "OpenRouter: " + (e.message || "timeout") }; }
 }
 
 // Chat Agent: simple one-shot Workers AI call (no tools). Kept for backward compat.

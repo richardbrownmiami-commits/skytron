@@ -313,7 +313,7 @@ export async function handleFetch(req, env, ctx, CHAT_HTML) {
 <div class="section"><h2><span class="sec-icon">🤖</span> LLM Cron — calls AI providers</h2>
 <div class="row"><div class="label"><div class="name">Process Actions</div><div class="desc">Pick and execute queued actions — the main AI processing pipeline</div></div><label class="switch"><input type="checkbox" id="process_actions" `+c("process_actions")+` onchange="save()"><span class="slider"></span></label></div>
 <div class="row"><div class="label"><div class="name">Process Agents</div><div class="desc">Process sub-agent steps (brain_agents) — spawns LLM calls for each step</div></div><label class="switch"><input type="checkbox" id="process_agents" `+c("process_agents")+` onchange="save()"><span class="slider"></span></label></div>
-<div class="row"><div class="label"><div class="name">Emergency Self-Repair</div><div class="desc">When WA + BD both down, calls OpenRouter to decide retry or wait — uses LLM tokens</div></div><label class="switch"><input type="checkbox" id="emergency_repair" `+c("emergency_repair")+` onchange="save()"><span class="slider"></span></label></div>
+<div class="row"><div class="label"><div class="name">Emergency Self-Repair</div><div class="desc">When WA + BD both down, uses Workers AI to decide retry or wait — uses LLM tokens</div></div><label class="switch"><input type="checkbox" id="emergency_repair" `+c("emergency_repair")+` onchange="save()"><span class="slider"></span></label></div>
 </div>
 
 <div class="section"><h2><span class="sec-icon">🔧</span> Non-LLM Cron — no AI calls</h2>
@@ -715,16 +715,10 @@ async function send(){
     }
     const llmProviders = [];
     let primaryName = "none", fallbackName = "none", anyWorking = false;
-    // Matches callLLM priority order: Workers AI → OpenRouter → BUDDHI_DWAR → Universal
+    // Matches callLLM priority order: Workers AI → BUDDHI_DWAR → Universal
     if (env.AI && llmSettings.workers_ai?.enabled !== false) {
       primaryName = "Workers AI";
       llmProviders.push({ name: "Workers AI", role: "primary", status: "error", error: "Daily free limit exhausted (10k neurons used). Resets at midnight UTC.", source_file: "src/llm.ts:60" });
-    }
-    if (env.OPENROUTER_API_KEY) {
-      const orRole = primaryName === "none" ? "primary" : "fallback";
-      if (orRole === "primary") primaryName = "OpenRouter";
-      else fallbackName = "OpenRouter";
-      llmProviders.push({ name: "OpenRouter", role: orRole, status: "limited", error: "Free models rate-limited (429). Add credits or use a paid tier.", source_file: "src/llm.ts:93" });
     }
     if (llmSettings.buddhidwar?.enabled && llmSettings.buddhidwar?.api_key) {
       const bdRole = primaryName === "none" ? "primary" : (fallbackName === "none" ? "fallback" : "tertiary");
@@ -748,7 +742,7 @@ async function send(){
     try {
       const statusRows = await env.DB.prepare("SELECT key, value FROM identity WHERE key LIKE 'llm_status_%'").all();
       if (statusRows.results?.length) {
-        const nameMap = { workers_ai: "Workers AI", openrouter: "OpenRouter", buddhidwar: "BUDDHI_DWAR", universal: "Universal AI" };
+        const nameMap = { workers_ai: "Workers AI", buddhidwar: "BUDDHI_DWAR", universal: "Universal AI" };
         for (const r of statusRows.results) {
           const short = r.key.replace("llm_status_", "");
           const name = nameMap[short];
@@ -1368,10 +1362,10 @@ async function send(){
 
   // === Settings page (LLM API config) ===
   if (url.pathname === "/brain/settings" && req.method === "GET") {
-    let settings = { workers_ai: { enabled: true }, openrouter: { enabled: true }, buddhidwar: { enabled: false, api_key: "" }, universal: { enabled: false, endpoint: "", api_key: "", model: "" } };
+    let settings = { workers_ai: { enabled: true, api_key: "" }, buddhidwar: { enabled: false, api_key: "" }, universal: { enabled: false, endpoint: "", api_key: "", model: "" } };
     try {
       const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first();
-      if (row?.content) { const p = JSON.parse(row.content); if (p.workers_ai) settings.workers_ai = p.workers_ai; if (p.openrouter) settings.openrouter = p.openrouter; if (p.buddhidwar) settings.buddhidwar = p.buddhidwar; if (p.universal) settings.universal = p.universal; }
+      if (row?.content) { const p = JSON.parse(row.content); if (p.workers_ai) settings.workers_ai = { ...settings.workers_ai, ...p.workers_ai }; if (p.buddhidwar) settings.buddhidwar = { ...settings.buddhidwar, ...p.buddhidwar }; if (p.universal) settings.universal = { ...settings.universal, ...p.universal }; }
     } catch {}
     const s = JSON.stringify(settings).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
     return new Response(`<!DOCTYPE html>
@@ -1420,31 +1414,24 @@ h1{color:var(--primary);font-size:1.5rem;margin-bottom:0.25rem}
 <div id="app"><p style="color:#8b949e">Loading settings...</p></div>
 
 <script>
-const DEFAULT={workers_ai:{enabled:true},openrouter:{enabled:true},buddhidwar:{enabled:false,api_key:""},universal:{enabled:false,endpoint:"",api_key:"",model:""}};
+const DEFAULT={workers_ai:{enabled:true,api_key:""},buddhidwar:{enabled:false,api_key:""},universal:{enabled:false,endpoint:"",api_key:"",model:""}};
 const SETTINGS=${s};
 function render(s){
   const wa=s.workers_ai||DEFAULT.workers_ai;
-  const or=s.openrouter||DEFAULT.openrouter;
   const bd=s.buddhidwar||DEFAULT.buddhidwar;
   const univ=s.universal||DEFAULT.universal;
   return \`
-    <div class="card">
-      <h2>Workers AI <span class="badge">Cloudflare built-in</span></h2>
-      <div class="toggle">
-        <label class="switch"><input type="checkbox" id="wa_enabled" \${wa.enabled!==false?'checked':''}><span class="slider"></span></label>
-        <label for="wa_enabled">Enabled</label>
+      <div class="card">
+        <h2>Workers AI <span class="badge">API key</span></h2>
+        <div class="toggle">
+          <label class="switch"><input type="checkbox" id="wa_enabled" \${wa.enabled!==false?'checked':''}><span class="slider"></span></label>
+          <label for="wa_enabled">Enabled</label>
+        </div>
+        <div class="field">
+          <label for="wa_api_key">API Key</label>
+          <input type="password" id="wa_api_key" value="\${wa.api_key||''}" placeholder="Enter your Cloudflare Workers AI API key">
+        </div>
       </div>
-      <p style="color:#8b949e;font-size:0.8rem">Uses Cloudflare Workers AI binding (\${wa.enabled!==false?'@cf/zai-org/glm-4.7-flash':'disabled'}). No config needed — set up in wrangler.toml.</p>
-    </div>
-
-    <div class="card">
-      <h2>OpenRouter <span class="badge">Cloudflare secret</span></h2>
-      <div class="toggle">
-        <label class="switch"><input type="checkbox" id="or_enabled" \${or.enabled!==false?'checked':''}><span class="slider"></span></label>
-        <label for="or_enabled">Enabled</label>
-      </div>
-      <p style="color:#8b949e;font-size:0.8rem">Enabled/disabled via \${or.enabled!==false?'settings toggle':'settings toggle'}. API key is set as Cloudflare secret OPENROUTER_API_KEY. Toggle off to disable fallback to OpenRouter free models.</p>
-    </div>
 
     <div class="card">
       <h2>BUDDHI_DWAR <span class="badge">Gateway API</span></h2>
@@ -1525,8 +1512,7 @@ async function save(){
   const btn=document.querySelector('.btn');btn.disabled=true;btn.textContent='Saving...';
   const msg=document.getElementById('msg');msg.style.display='none';
   const settings={
-    workers_ai:{enabled:document.getElementById('wa_enabled').checked},
-    openrouter:{enabled:document.getElementById('or_enabled').checked},
+    workers_ai:{enabled:document.getElementById('wa_enabled').checked,api_key:document.getElementById('wa_api_key').value.trim()},
     buddhidwar:{enabled:document.getElementById('bd_enabled').checked,api_key:document.getElementById('bd_api_key').value.trim()},
     universal:{enabled:document.getElementById('univ_enabled').checked,endpoint:document.getElementById('univ_endpoint').value.trim(),api_key:document.getElementById('univ_api_key').value.trim(),model:document.getElementById('univ_model').value.trim()}
   };
@@ -1548,8 +1534,7 @@ async function save(){
       const body = await req.json();
       if (typeof body !== "object") return json({ error: "invalid JSON body" }, 400);
       const sanitized = {
-        workers_ai: { enabled: body.workers_ai?.enabled !== false },
-        openrouter: { enabled: body.openrouter?.enabled !== false },
+        workers_ai: { enabled: body.workers_ai?.enabled !== false, api_key: (body.workers_ai?.api_key || "").slice(0, 500) },
         buddhidwar: { enabled: !!body.buddhidwar?.enabled, api_key: (body.buddhidwar?.api_key || "").slice(0, 500) },
         universal: { enabled: !!body.universal?.enabled, endpoint: (body.universal?.endpoint || "").slice(0, 500), api_key: (body.universal?.api_key || "").slice(0, 500), model: (body.universal?.model || "").slice(0, 200) }
       };

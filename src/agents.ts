@@ -111,12 +111,12 @@ export async function processOneStep(env, action) {
       // Track per-provider status in identity table
       try {
         if (resp?.model && !resp.model?.includes("none")) {
-          const pk = resp.model.startsWith("workers-ai") ? "llm_status_workers_ai" : resp.model.startsWith("openrouter") ? "llm_status_openrouter" : "llm_status_other";
+          const pk = resp.model.startsWith("workers-ai") ? "llm_status_workers_ai" : "llm_status_other";
           await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES (?1,'ok',datetime('now'))").bind(pk).run();
         }
         if (resp?.errors) {
           for (const e of resp.errors) {
-            const pk = e.includes("Workers AI") ? "llm_status_workers_ai" : e.includes("OpenRouter") ? "llm_status_openrouter" : e.includes("BUDDHI_DWAR") ? "llm_status_buddhidwar" : e.includes("Universal") ? "llm_status_universal" : null;
+            const pk = e.includes("Workers AI") ? "llm_status_workers_ai" : e.includes("BUDDHI_DWAR") ? "llm_status_buddhidwar" : e.includes("Universal") ? "llm_status_universal" : null;
             if (pk) await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES (?1,?2,datetime('now'))").bind(pk, "error:" + e.slice(0, 200)).run();
           }
         }
