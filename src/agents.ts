@@ -147,6 +147,7 @@ export async function processOneStep(env, action) {
           else if (errorSummary.includes("fetch failed") || errorSummary.includes("DNS") || errorSummary.includes("ENOTFOUND")) type = "unreachable";
           else if (errorSummary.includes("200 empty")) type = "empty_response";
           await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_error_type',?1,datetime('now'))").bind(type).run();
+          await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_flag',?1,datetime('now'))").bind(type).run();
         }
         if (errorSummary.includes("Workers AI") || errorSummary.includes("workers-ai")) {
           let waType = "unknown";
@@ -156,6 +157,7 @@ export async function processOneStep(env, action) {
           else if (errorSummary.includes("503") || errorSummary.includes("502") || errorSummary.includes("fetch failed")) waType = "service_unavailable";
           else if (errorSummary.includes("200 empty")) waType = "empty_response";
           await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_error_type',?1,datetime('now'))").bind(waType).run();
+          await db.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_flag',?1,datetime('now'))").bind(waType).run();
         }
       } catch {}
       state.finalContent = "I'm having trouble connecting (" + errorSummary.slice(0, 100) + "). Please try again later."; state.done = true;

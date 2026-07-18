@@ -662,6 +662,15 @@ async function send(){
         waHealth = { status: "error", error_type: (e.message || "").includes("timeout") ? "timeout" : "service_unavailable", detail: e.message };
       }
     } else { waHealth = { status: "off", error_type: null, detail: "CF_API_TOKEN not set" }; }
+    // Persist bd_flag/wa_flag to identity so Fix Issues can read them
+    try {
+      const bdFlagVal = bdHealth.status === "ok" || bdHealth.status === "off" ? "ok" : (bdHealth.error_type || "unknown");
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_flag',?1,datetime('now'))").bind(bdFlagVal).run();
+    } catch {}
+    try {
+      const waFlagVal = waHealth.status === "ok" || waHealth.status === "off" ? "ok" : (waHealth.error_type || "unknown");
+      await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_flag',?1,datetime('now'))").bind(waFlagVal).run();
+    } catch {}
     const issues = [];
     const now = new Date().toISOString();
     if (memCount > 200) {
