@@ -658,24 +658,18 @@ async function send(){
     } else { bdHealth = { status: "off", error_type: null, detail: "BD not configured" }; }
     // Test WA directly
     let waHealth = { status: "unknown", error_type: null, detail: null };
-    if (env.CF_API_TOKEN) {
+    if (env.AI) {
       try {
-        const waTest = await fetch("https://api.cloudflare.com/client/v4/accounts/" + "913f3a2576a358054eba9a58a9573949" + "/ai/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN },
-          body: JSON.stringify({ model: "@cf/meta/llama-3.2-3b-instruct", messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
-          signal: AbortSignal.timeout(10000)
-        });
-        if (waTest.ok) { waHealth = { status: "ok", error_type: null, detail: "WA responded" }; }
-        else {
-          const errText = await waTest.text().catch(() => "");
-          if (errText.includes("4006") || errText.includes("allocation")) waHealth = { status: "error", error_type: "quota_exhausted", detail: "Daily quota used up" };
-          else waHealth = { status: "error", error_type: "service_unavailable", detail: "HTTP " + waTest.status + ": " + errText.slice(0, 80) };
-        }
+        const waResult = await env.AI.run("@cf/meta/llama-3.2-3b-instruct", { messages: [{ role: "user", content: "ping" }], max_tokens: 1 });
+        if (waResult && waResult.response) waHealth = { status: "ok", error_type: null, detail: "WA responded" };
+        else waHealth = { status: "error", error_type: "empty_response", detail: "WA returned empty response" };
       } catch (e) {
-        waHealth = { status: "error", error_type: (e.message || "").includes("timeout") ? "timeout" : "service_unavailable", detail: e.message };
+        const msg = (e.message || e + "").toLowerCase();
+        if (msg.includes("4006") || msg.includes("allocation") || msg.includes("neuron")) waHealth = { status: "error", error_type: "quota_exhausted", detail: "Daily quota used up" };
+        else if (msg.includes("timeout") || msg.includes("aborted")) waHealth = { status: "error", error_type: "timeout", detail: e.message };
+        else waHealth = { status: "error", error_type: "service_unavailable", detail: e.message };
       }
-    } else { waHealth = { status: "off", error_type: null, detail: "CF_API_TOKEN not set" }; }
+    } else { waHealth = { status: "off", error_type: null, detail: "AI binding not configured" }; }
     // Persist bd_flag/wa_flag to identity so Fix Issues can read them
     try {
       const bdFlagVal = bdHealth.status === "ok" || bdHealth.status === "off" ? "ok" : (bdHealth.error_type || "unknown");
@@ -872,24 +866,28 @@ async function send(){
       }
     } catch {}
     // WA fix — retest only if wa_flag is not ok
-    try {
-      const waFlag = (await env.DB.prepare("SELECT value FROM identity WHERE key='wa_flag'").first())?.value;
-      if (waFlag && waFlag !== "ok" && waFlag !== "quota_exhausted") {
-        const waTest = await fetch("https://api.cloudflare.com/client/v4/accounts/913f3a2576a358054eba9a58a9573949/ai/v1/chat/completions", {
-          method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN },
-          body: JSON.stringify({ model: "@cf/meta/llama-3.2-3b-instruct", messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
-          signal: AbortSignal.timeout(10000)
-        });
-        if (waTest.ok) {
+    const waFlag = (await env.DB.prepare("SELECT value FROM identity WHERE key='wa_flag'").first())?.value;
+    if (waFlag && waFlag !== "ok" && waFlag !== "quota_exhausted" && env.AI) {
+      try {
+        const waResult = await env.AI.run("@cf/meta/llama-3.2-3b-instruct", { messages: [{ role: "user", content: "ping" }], max_tokens: 1 });
+        if (waResult && waResult.response) {
           await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_flag','ok',datetime('now'))").run();
           fixes.push({ code: "FIX-WA", description: "WA retested — ok now, flag cleared", source_file: "src/routes.ts:832", when: now });
         } else {
-          fixes.push({ code: "FIX-WA-FAIL", description: "WA retested — still " + waFlag, source_file: "src/routes.ts:832", when: now });
+          fixes.push({ code: "FIX-WA-FAIL", description: "WA retested — empty response, still " + waFlag, source_file: "src/routes.ts:832", when: now });
         }
-      } else if (waFlag === "quota_exhausted") {
-        fixes.push({ code: "FIX-WA-SKIP", description: "WA daily quota exhausted — resets at 05:30 IST, cannot auto-fix", source_file: "src/routes.ts:832", when: now });
+      } catch (e) {
+        const msg = (e.message || e + "").toLowerCase();
+        if (msg.includes("4006") || msg.includes("allocation") || msg.includes("neuron")) {
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_flag','quota_exhausted',datetime('now'))").run();
+          fixes.push({ code: "FIX-WA-SKIP", description: "WA quota exhausted — resets at 05:30 IST, cannot auto-fix", source_file: "src/routes.ts:832", when: now });
+        } else {
+          fixes.push({ code: "FIX-WA-FAIL", description: "WA retested — " + (e.message || "error") + ", still " + waFlag, source_file: "src/routes.ts:832", when: now });
+        }
       }
-    } catch {}
+    } else if (waFlag === "quota_exhausted") {
+      fixes.push({ code: "FIX-WA-SKIP", description: "WA daily quota exhausted — resets at 05:30 IST, cannot auto-fix", source_file: "src/routes.ts:832", when: now });
+    }
     return json({ fixes });
   }
 
