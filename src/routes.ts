@@ -798,7 +798,7 @@ async function send(){
         }
       }
     } catch {}
-    return json({ issues, llm: { providers: llmProviders, primary: primaryName, fallback: fallbackName, working: anyWorking }, endpoints, stats: { memory: memCount, actions: actCount, knowledge: knCount, agents: agentCount, logs: logCount, oldest_action: oldestAction }, bd_health: bdHealth, wa_health: waHealth, heartbeat, auto_resolved: autoResolved, skytron_fixes: skytronFixes, autofix_history: autoFixHistory, provider_failures: providerFailures });
+    return json({ issues, llm: { providers: llmProviders, primary: primaryName, fallback: fallbackName, working: anyWorking }, endpoints, stats: { memory: memCount, actions: actCount, knowledge: knCount, agents: agentCount, logs: logCount, oldest_action: oldestAction }, bd_health: bdHealth, wa_health: waHealth, bd_flag: bdHealth.status === "ok" ? "ok" : (bdHealth.error_type || "unknown"), wa_flag: waHealth.status === "ok" ? "ok" : (waHealth.error_type || "unknown"), heartbeat, auto_resolved: autoResolved, skytron_fixes: skytronFixes, autofix_history: autoFixHistory, provider_failures: providerFailures });
   }
 
   if (url.pathname === "/brain/repair" && (req.method === "GET" || req.method === "POST")) {
@@ -816,27 +816,55 @@ async function send(){
     if (memTrim.meta?.changes > 0) fixes.push({ code: "FIX-MEM", description: "Trimmed " + memTrim.meta.changes + " old memory entries beyond last 200", source_file: "src/scheduler.ts:343", when: now });
     const actTrim = await env.DB.prepare("DELETE FROM actions WHERE status='done' AND id NOT IN (SELECT id FROM actions WHERE status='done' ORDER BY id DESC LIMIT 500)").run();
     if (actTrim.meta?.changes > 0) fixes.push({ code: "FIX-ACT", description: "Cleaned " + actTrim.meta.changes + " old completed actions beyond last 500", source_file: "src/scheduler.ts:345", when: now });
-    // BD health fix
+    // BD fix — retest only if bd_flag is not ok
     try {
-      const bdType = (await env.DB.prepare("SELECT value FROM identity WHERE key='bd_error_type'").first())?.value;
-      const bdFails = (await env.DB.prepare("SELECT value FROM identity WHERE key='bd_failures'").first())?.value;
-      if (bdType && bdType !== "key_invalid") {
-        await env.DB.prepare("DELETE FROM identity WHERE key='bd_error_type'").run();
-        await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
-        await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
-        fixes.push({ code: "FIX-BD", description: "Cleared BD error flags (" + bdType + (bdFails ? ", " + bdFails + " failures" : "") + ") — system will retry BD", source_file: "src/routes.ts:754", when: now });
-      } else if (bdType === "key_invalid") {
-        fixes.push({ code: "FIX-BD-SKIP", description: "BD API key invalid — update in /brain/settings, cannot auto-fix", source_file: "src/routes.ts:754", when: now });
+      const bdFlag = (await env.DB.prepare("SELECT value FROM identity WHERE key='bd_flag'").first())?.value;
+      if (bdFlag && bdFlag !== "ok" && bdFlag !== "key_invalid") {
+        let llm = {};
+        try { const r = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first(); if (r?.content) llm = JSON.parse(r.content); } catch {}
+        const bdTest = await pingBDModel(env, llm, llm.buddhidwar?.model || "openrouter/free", 10000);
+        if (bdTest.ok) {
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_flag','ok',datetime('now'))").run();
+          fixes.push({ code: "FIX-BD", description: "BD retested — ok now, flag cleared", source_file: "src/routes.ts:820", when: now });
+        } else {
+          let working = [];
+          try { const c = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_working_models'").first(); if (c?.value) working = JSON.parse(c.value); } catch {}
+          let switched = false;
+          for (const wm of working) {
+            if (wm === llm.buddhidwar?.model) continue;
+            const pm = await pingBDModel(env, llm, wm, 8000);
+            if (pm.ok) {
+              llm.buddhidwar = llm.buddhidwar || {};
+              llm.buddhidwar.model = wm;
+              try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key,content,category,source) VALUES ('settings_llm',?1,'config','auto')").bind(JSON.stringify(llm)).run(); } catch {}
+              await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_flag','ok',datetime('now'))").run();
+              fixes.push({ code: "FIX-BD", description: "BD retested — still " + bdFlag + ". Switched to model " + wm + " → ok", source_file: "src/routes.ts:820", when: now });
+              switched = true; break;
+            }
+          }
+          if (!switched) fixes.push({ code: "FIX-BD-FAIL", description: "BD retested — still " + bdFlag + ". No working model from " + working.length + " candidates", source_file: "src/routes.ts:820", when: now });
+        }
+      } else if (bdFlag === "key_invalid") {
+        fixes.push({ code: "FIX-BD-SKIP", description: "BD API key invalid — update in /brain/settings, cannot auto-fix", source_file: "src/routes.ts:820", when: now });
       }
     } catch {}
-    // WA health fix
+    // WA fix — retest only if wa_flag is not ok
     try {
-      const waType = (await env.DB.prepare("SELECT value FROM identity WHERE key='wa_error_type'").first())?.value;
-      if (waType && waType !== "quota_exhausted") {
-        await env.DB.prepare("DELETE FROM identity WHERE key='wa_error_type'").run();
-        fixes.push({ code: "FIX-WA", description: "Cleared WA error flags (" + waType + ") — system will retry WA", source_file: "src/routes.ts:754", when: now });
-      } else if (waType === "quota_exhausted") {
-        fixes.push({ code: "FIX-WA-SKIP", description: "WA daily quota exhausted — resets at midnight UTC, cannot auto-fix", source_file: "src/routes.ts:754", when: now });
+      const waFlag = (await env.DB.prepare("SELECT value FROM identity WHERE key='wa_flag'").first())?.value;
+      if (waFlag && waFlag !== "ok" && waFlag !== "quota_exhausted") {
+        const waTest = await fetch("https://api.cloudflare.com/client/v4/accounts/913f3a2576a358054eba9a58a9573949/ai/v1/chat/completions", {
+          method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.CF_API_TOKEN },
+          body: JSON.stringify({ model: "@cf/meta/llama-3.2-3b-instruct", messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
+          signal: AbortSignal.timeout(10000)
+        });
+        if (waTest.ok) {
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('wa_flag','ok',datetime('now'))").run();
+          fixes.push({ code: "FIX-WA", description: "WA retested — ok now, flag cleared", source_file: "src/routes.ts:832", when: now });
+        } else {
+          fixes.push({ code: "FIX-WA-FAIL", description: "WA retested — still " + waFlag, source_file: "src/routes.ts:832", when: now });
+        }
+      } else if (waFlag === "quota_exhausted") {
+        fixes.push({ code: "FIX-WA-SKIP", description: "WA daily quota exhausted — resets at 05:30 IST, cannot auto-fix", source_file: "src/routes.ts:832", when: now });
       }
     } catch {}
     return json({ fixes });
@@ -847,92 +875,68 @@ async function send(){
       const now = new Date().toISOString().replace("T", " ").slice(0, 19);
       const attempts = [];
       let fixed = false;
-      
-      // Read current LLM settings
+
       let llmSettings = {};
       try { const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first(); if (row?.content) llmSettings = JSON.parse(row.content); } catch {}
 
-      // Attempt 1: Test BD → classify → fix → retest
       let bdBefore = "unknown", bdAfter = "unknown";
       try {
         const bdResp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: "Bearer " + (llmSettings.buddhidwar?.api_key || env.BRAIN_KEY || "") },
-          body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], model: "openrouter/free", max_tokens: 1 }),
+          body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], model: llmSettings.buddhidwar?.model || "openrouter/free", max_tokens: 1 }),
           signal: AbortSignal.timeout(10000)
         });
-        if (bdResp.ok) { fixed = true; bdBefore = "ok"; attempts.push({ action: "BD test", result: "ok", detail: "BD responded" }); }
-        else {
-          const errText = await bdResp.text().catch(() => "");
-          bdBefore = "HTTP " + bdResp.status;
-          const bdType = bdResp.status === 401 ? "key_invalid" : bdResp.status === 429 ? "rate_limited" : bdResp.status === 502 || bdResp.status === 422 ? "retryable" : "http_" + bdResp.status;
-          if (bdType === "retryable" || bdType === "rate_limited") {
-            await env.DB.prepare("DELETE FROM identity WHERE key='bd_error_type'").run();
-            await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
-            await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
-            const bdRetry = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
-              method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + (llmSettings.buddhidwar?.api_key || env.BRAIN_KEY || "") },
-              body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
-              signal: AbortSignal.timeout(10000)
-            });
-            if (bdRetry.ok) { fixed = true; bdAfter = "ok"; attempts.push({ action: "BD fix", result: "ok", detail: "Cleared flags + retry → ok" }); }
-            else { const e2 = await bdRetry.text().catch(() => ""); bdAfter = "HTTP " + bdRetry.status; attempts.push({ action: "BD fix", result: "failed", detail: "Retry still failed: " + e2.slice(0, 100) }); }
+        if (bdResp.ok) {
+          fixed = true; bdBefore = "ok";
+          await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_flag','ok',datetime('now'))").run();
+          attempts.push({ action: "BD test", result: "ok", detail: "BD responded" });
+        } else {
+          bdBefore = "HTTP " + bdResp.status + ": " + (await bdResp.text().catch(() => "")).slice(0, 100);
+          const bdFlag = bdResp.status === 401 ? "key_invalid" : bdResp.status === 429 ? "rate_limited" : bdResp.status === 502 || bdResp.status === 422 ? "retryable" : "http_" + bdResp.status;
+          if (bdFlag !== "key_invalid") {
+            let working = [];
+            try { const c = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_working_models'").first(); if (c?.value) working = JSON.parse(c.value); } catch {}
+            let modelFixed = false;
+            for (const wm of working) {
+              if (wm === llmSettings.buddhidwar?.model) continue;
+              const pm = await pingBDModel(env, llmSettings, wm, 8000);
+              if (pm.ok) {
+                llmSettings.buddhidwar = llmSettings.buddhidwar || {};
+                llmSettings.buddhidwar.model = wm;
+                try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key,content,category,source) VALUES ('settings_llm',?1,'config','auto')").bind(JSON.stringify(llmSettings)).run(); } catch {}
+                await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_flag','ok',datetime('now'))").run();
+                bdAfter = "ok (switched to " + wm + ")";
+                attempts.push({ action: "BD auto-fix", result: "ok", detail: "Switched to model " + wm + " → ok" });
+                modelFixed = true; fixed = true; break;
+              }
+            }
+            if (!modelFixed) { bdAfter = "still failing"; attempts.push({ action: "BD auto-fix", result: "failed", detail: "No working model among " + working.length + " candidates" }); }
           } else {
-            attempts.push({ action: "BD test", result: "failed", detail: "HTTP " + bdResp.status + ": " + errText.slice(0, 150) + " — not auto-fixable" });
+            attempts.push({ action: "BD test", result: "failed", detail: bdBefore + " — key_invalid, cannot auto-fix" });
           }
         }
       } catch (e) {
         bdBefore = "timeout/unreachable";
-        await env.DB.prepare("DELETE FROM identity WHERE key='bd_error_type'").run();
-        await env.DB.prepare("DELETE FROM identity WHERE key='bd_failures'").run();
-        await env.DB.prepare("DELETE FROM identity WHERE key='health_flags'").run();
-        const bdRetry = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
-          method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + (llmSettings.buddhidwar?.api_key || env.BRAIN_KEY || "") },
-          body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
-          signal: AbortSignal.timeout(8000)
-        }).catch(() => null);
-        if (bdRetry?.ok) { fixed = true; bdAfter = "ok"; attempts.push({ action: "BD fix", result: "ok", detail: "Cleared flags + retry → ok after timeout" }); }
-        else { bdAfter = "still failing"; attempts.push({ action: "BD fix", result: "failed", detail: "Retry after timeout still failed" }); }
-      }
-      if (bdBefore !== "ok") attempts.unshift({ action: "BD before", result: "failed", detail: bdBefore });
-
-      // Attempt 2: Test OpenRouter directly
-    if (llmSettings.openrouter?.enabled !== false && env.OPENROUTER_API_KEY) {
-        try {
-          const orResp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-            method: "POST",
-            headers: { "Authorization": "Bearer " + env.OPENROUTER_API_KEY, "Content-Type": "application/json" },
-            body: JSON.stringify({ model: "meta-llama/llama-3.2-3b-instruct:free", messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
-            signal: AbortSignal.timeout(10000)
-          });
-          if (orResp.ok) { fixed = true; attempts.push({ action: "OpenRouter direct test", result: "ok", detail: "OpenRouter responded" }); }
-          else { const err = await orResp.text(); attempts.push({ action: "OpenRouter direct test", result: "failed", detail: "HTTP " + orResp.status + ": " + err.slice(0, 200) }); }
-        } catch (e) { attempts.push({ action: "OpenRouter direct test", result: "failed", detail: e.message }); }
-
-        // Attempt 3: Try different OpenRouter model
-        if (!fixed) {
-          try {
-            const altModels = ["nousresearch/hermes-3-llama-3.1-405b:free", "google/gemma-2-27b-it:free", "microsoft/phi-3.5-mini-4k-instruct:free"];
-            for (const m of altModels) {
-              const or2 = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                method: "POST",
-                headers: { "Authorization": "Bearer " + env.OPENROUTER_API_KEY, "Content-Type": "application/json" },
-                body: JSON.stringify({ model: m, messages: [{ role: "user", content: "ping" }], max_tokens: 1 }),
-                signal: AbortSignal.timeout(8000)
-              });
-              if (or2.ok) {
-                attempts.push({ action: "OpenRouter alternate model", result: "ok", detail: "Model " + m + " worked" });
-                fixed = true;
-                break;
-              } else {
-                attempts.push({ action: "OpenRouter alternate model", result: "failed", detail: "Model " + m + " returned HTTP " + or2.status });
-              }
-            }
-          } catch (e) { attempts.push({ action: "OpenRouter alternate model", result: "failed", detail: e.message }); }
+        let working = [];
+        try { const c = await env.DB.prepare("SELECT value FROM identity WHERE key='bd_working_models'").first(); if (c?.value) working = JSON.parse(c.value); } catch {}
+        for (const wm of working) {
+          if (wm === llmSettings.buddhidwar?.model) continue;
+          const pm = await pingBDModel(env, llmSettings, wm, 8000).catch(() => ({ ok: false }));
+          if (pm.ok) {
+            llmSettings.buddhidwar = llmSettings.buddhidwar || {};
+            llmSettings.buddhidwar.model = wm;
+            try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key,content,category,source) VALUES ('settings_llm',?1,'config','auto')").bind(JSON.stringify(llmSettings)).run(); } catch {}
+            await env.DB.prepare("INSERT OR REPLACE INTO identity (key,value,updated_at) VALUES ('bd_flag','ok',datetime('now'))").run();
+            bdAfter = "ok (switched to " + wm + ")";
+            attempts.push({ action: "BD auto-fix after timeout", result: "ok", detail: "Switched to model " + wm + " → ok" });
+            fixed = true; break;
+          }
         }
+        if (!fixed) { bdAfter = "still failing"; attempts.push({ action: "BD auto-fix after timeout", result: "failed", detail: "No working model among " + working.length + " candidates" }); }
       }
+      if (bdBefore !== "ok") attempts.unshift({ action: "BD status before fix", result: "failed", detail: bdBefore });
 
-      // Attempt 4: Health-check all endpoints
       try {
         const hcResp = await fetch(url.origin + "/brain/health", {
           headers: { Authorization: "Bearer " + env.BRAIN_KEY },
@@ -942,11 +946,9 @@ async function send(){
         else { attempts.push({ action: "Self health-check", result: "failed", detail: "HTTP " + hcResp.status }); }
       } catch (e) { attempts.push({ action: "Self health-check", result: "failed", detail: e.message }); }
 
-      // Record attempt in brain_knowledge
       const key = "autofix_llm_" + now.replace(/[ :]/g, "_");
       const record = JSON.stringify({ timestamp: now, fixed, attempts, summary: fixed ? "Fixed" : "Still failing" });
       try { await env.DB.prepare("INSERT OR REPLACE INTO brain_knowledge (key, content, category, source) VALUES (?1, ?2, 'autofix', 'auto')").bind(key, record).run(); } catch {}
-
       return json({ ok: true, fixed, attempts, key });
     } catch (e) { return json({ error: e.message }, 500); }
   }
