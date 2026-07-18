@@ -621,6 +621,8 @@ async function send(){
     const staleQueued = (await env.DB.prepare("SELECT id, task, created_at, CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) as duration_seconds FROM actions WHERE status='queued' AND created_at < datetime('now', '-30 minutes') ORDER BY created_at").all()).results || [];
     const recentErrors = (await env.DB.prepare("SELECT id, task, result, created_at FROM actions WHERE status='error' AND created_at > datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 10").all()).results || [];
     const oldestAction = (await env.DB.prepare("SELECT MIN(created_at) as oldest FROM actions").all()).results[0]?.oldest || "";
+    let llmSettings = {};
+    try { const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first(); if (row?.content) llmSettings = JSON.parse(row.content); } catch {}
     // Test BD directly
     let bdHealth = { status: "unknown", error_type: null, detail: null };
     if (llmSettings.buddhidwar?.enabled && llmSettings.buddhidwar?.api_key) {
@@ -694,8 +696,6 @@ async function send(){
       const fixable = waHealth.error_type === "quota_exhausted" ? " (resets at midnight)" : " (fixable)";
       issues.push({ code: "WA-" + (waHealth.error_type || "ERR").toUpperCase(), severity: "error", title: "WA: " + (waHealth.error_type || "error") + fixable, description: "Workers AI error: " + (waHealth.detail || "unknown"), when: now, duration: "ongoing", effect: "Tool-mode actions may fail or fallback to BD.", source_file: "src/llm.ts:79" });
     }
-    let llmSettings = {};
-    try { const row = await env.DB.prepare("SELECT content FROM brain_knowledge WHERE key='settings_llm'").first(); if (row?.content) llmSettings = JSON.parse(row.content); } catch {}
     const llmProviders = [];
     let primaryName = "none", fallbackName = "none", anyWorking = false;
     // Matches callLLM priority order: Workers AI → OpenRouter → BUDDHI_DWAR → Universal
