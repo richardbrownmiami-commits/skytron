@@ -42,6 +42,20 @@ function actionContext(a) {
   return a.input.slice(-200);
 }
 
+async function pingBDModel(env, llmSettings, model, timeoutMs) {
+  try {
+    const resp = await fetch("https://buddhi-dwar.richard-brown-miami.workers.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + (llmSettings?.buddhidwar?.api_key || env.BRAIN_KEY || "") },
+      body: JSON.stringify({ messages: [{ role: "user", content: "ping" }], model: model || "openrouter/free", max_tokens: 1 }),
+      signal: AbortSignal.timeout(timeoutMs || 8000)
+    });
+    return { ok: resp.ok, status: resp.status };
+  } catch (e) {
+    return { ok: false, status: 0, error: e.message };
+  }
+}
+
 export async function handleFetch(req, env, ctx, CHAT_HTML) {
   const url = new URL(req.url);
 
